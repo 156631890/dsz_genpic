@@ -7,6 +7,8 @@ import type {
 const DEFAULT_ADMIN_BASE_URL =
   "https://services.dropshipzone.com.au/admin/api/supplier/v1";
 const MINIMUM_IMAGE_COUNT = 4;
+const DEFAULT_UPLOAD_MAX_ATTEMPTS = 3;
+const DEFAULT_UPLOAD_RETRY_DELAY_MS = 500;
 
 export interface AdminConfig {
   baseUrl: string;
@@ -20,6 +22,11 @@ export interface AdminConfig {
     email: string;
     password: string;
   };
+}
+
+interface UploadRetryOptions {
+  maxAttempts: number;
+  delayMs: number;
 }
 
 export function resolveAdminConfig(
@@ -130,6 +137,7 @@ export async function uploadProduct(input: {
   const config = resolveAdminConfig(input.env || process.env);
   const requestBody = buildAdminRequestBody(input.payload);
   const fetcher = input.fetchImpl || fetch;
+  const retryOptions = resolveUploadRetryOptions(input.env || process.env);
 
   if (config.mockMode) {
     return {
@@ -144,20 +152,22 @@ export async function uploadProduct(input: {
 
   const token =
     config.token || (await authenticateWithCredentials(config, fetcher));
-  let response = await postProducts({
+  let response = await postProductsWithRetry({
     config,
     fetcher,
     requestBody,
-    token
+    token,
+    retryOptions
   });
 
   if (response.status === 401 && config.authCredentials) {
     const refreshedToken = await authenticateWithCredentials(config, fetcher);
-    response = await postProducts({
+    response = await postProductsWithRetry({
       config,
       fetcher,
       requestBody,
-      token: refreshedToken
+      token: refreshedToken,
+      retryOptions
     });
   }
 
@@ -219,6 +229,36 @@ async function postProducts(input: {
   });
 }
 
+async function postProductsWithRetry(input: {
+  config: AdminConfig;
+  fetcher: typeof fetch;
+  requestBody: { products: AdminProductPayload[] };
+  token: string;
+  retryOptions: UploadRetryOptions;
+}): Promise<Response> {
+  let lastResponse: Response | undefined;
+
+  for (let attempt = 1; attempt <= input.retryOptions.maxAttempts; attempt += 1) {
+    try {
+      const response = await postProducts(input);
+
+      if (!isTransientUploadStatus(response.status) || attempt === input.retryOptions.maxAttempts) {
+        return response;
+      }
+
+      lastResponse = response;
+    } catch (error) {
+      if (attempt === input.retryOptions.maxAttempts) {
+        throw error;
+      }
+    }
+
+    await delay(input.retryOptions.delayMs);
+  }
+
+  return lastResponse || postProducts(input);
+}
+
 function authHeaders(config: AdminConfig): Record<string, string> {
   const headers = { ...config.headers };
   delete headers.Authorization;
@@ -241,6 +281,37 @@ function extractToken(responseBody: unknown): string | undefined {
   return undefined;
 }
 
+function resolveUploadRetryOptions(
+  env: Record<string, string | undefined>
+): UploadRetryOptions {
+  return {
+    maxAttempts: positiveInteger(
+      env.ADMIN_UPLOAD_MAX_ATTEMPTS,
+      DEFAULT_UPLOAD_MAX_ATTEMPTS
+    ),
+    delayMs: nonNegativeInteger(
+      env.ADMIN_UPLOAD_RETRY_DELAY_MS,
+      DEFAULT_UPLOAD_RETRY_DELAY_MS
+    )
+  };
+}
+
+function isTransientUploadStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+function positiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
 async function readJsonSafely(response: Response): Promise<unknown> {
   const text = await response.text();
 
@@ -251,6 +322,14 @@ async function readJsonSafely(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return ms > 0
+    ? new Promise((resolve) => {
+        setTimeout(resolve, ms);
+      })
+    : Promise.resolve();
 }
 
 function trimTrailingSlash(value: string): string {

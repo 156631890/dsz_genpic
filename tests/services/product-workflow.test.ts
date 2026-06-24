@@ -705,4 +705,28 @@ describe("admin upload helpers", () => {
     expect(result.response).toEqual({ success: true });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
+
+  test("retries transient Dropshipzone product upload failures before returning an error", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ temporary: true }), { status: 503 })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ success: true }), { status: 200 })
+      ) as unknown as typeof fetch;
+
+    const result = await uploadProduct({
+      payload: fields,
+      env: {
+        ADMIN_API_TOKEN: "live-token",
+        ADMIN_UPLOAD_RETRY_DELAY_MS: "0"
+      },
+      fetchImpl
+    });
+
+    expect(result.mode).toBe("live");
+    expect(result.response).toEqual({ success: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
 });
