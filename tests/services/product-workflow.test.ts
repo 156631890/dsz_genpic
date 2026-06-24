@@ -616,6 +616,42 @@ describe("admin upload helpers", () => {
     expect(body).toEqual({ products: [payload] });
   });
 
+  test("builds only Dropshipzone API fields for live product upload", () => {
+    const payload = buildAdminProductPayload({
+      ...fields,
+      sku: "Elosung_10001"
+    });
+
+    expect(Object.keys(payload).sort()).toEqual(
+      [
+        "brand_name",
+        "categories",
+        "category",
+        "colour",
+        "description",
+        "ean_code",
+        "height",
+        "images",
+        "length",
+        "product_name",
+        "rrp",
+        "sku",
+        "status",
+        "stock",
+        "vendor_price",
+        "weight",
+        "width",
+        "zone_rates"
+      ].sort()
+    );
+    expect(payload).not.toHaveProperty("categoryName");
+    expect(payload).not.toHaveProperty("enabled");
+    expect(payload).not.toHaveProperty("cbm");
+    expect(payload).not.toHaveProperty("risk_flags");
+    expect(payload).not.toHaveProperty("review_notes");
+    expect(payload.sku).toBe("Elosung10001");
+  });
+
   test("pads existing HTTPS image URLs to the minimum DSZ image count before upload validation", () => {
     const payload = buildAdminProductPayload({
       ...fields,
@@ -704,6 +740,30 @@ describe("admin upload helpers", () => {
     expect(result.mode).toBe("live");
     expect(result.response).toEqual({ success: true });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  test("includes Dropshipzone 400 response body in live upload errors", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          message: "Category is invalid",
+          errors: {
+            category: ["The selected category is not available."]
+          }
+        }),
+        { status: 400 }
+      )
+    ) as unknown as typeof fetch;
+
+    await expect(
+      uploadProduct({
+        payload: buildAdminProductPayload(fields),
+        env: {
+          ADMIN_API_TOKEN: "live-token"
+        },
+        fetchImpl
+      })
+    ).rejects.toThrow(/Category is invalid/);
   });
 
   test("retries transient Dropshipzone product upload failures before returning an error", async () => {

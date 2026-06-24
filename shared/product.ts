@@ -56,7 +56,27 @@ export interface DszProductFields {
   review_notes: string[];
 }
 
-export type AdminProductPayload = DszProductFields;
+export type AdminProductPayload = Pick<
+  DszProductFields,
+  | "category"
+  | "categories"
+  | "product_name"
+  | "sku"
+  | "status"
+  | "ean_code"
+  | "stock"
+  | "weight"
+  | "length"
+  | "width"
+  | "height"
+  | "brand_name"
+  | "colour"
+  | "description"
+  | "vendor_price"
+  | "rrp"
+  | "zone_rates"
+  | "images"
+>;
 
 export interface ProductGenerationResult {
   fields: DszProductFields;

@@ -76,7 +76,10 @@ export function resolveAdminConfig(
 }
 
 export function validateDszProductFields(
-  fields: DszProductFields
+  fields: Pick<
+    DszProductFields,
+    "product_name" | "sku" | "categories" | "description" | "images"
+  >
 ): ValidationResult {
   const errors: string[] = [];
 
@@ -99,13 +102,17 @@ export function buildAdminProductPayload(
   fields: DszProductFields
 ): AdminProductPayload {
   return {
-    ...fields,
     category: Number(fields.category),
     categories: String(fields.categories),
+    product_name: fields.product_name,
     ean_code: String(fields.ean_code),
     sku: fields.sku.replace(/[^A-Za-z0-9]/g, ""),
     brand_name: fields.brand_name || "Elosung",
+    colour: fields.colour,
+    description: fields.description,
+    vendor_price: Number(fields.vendor_price),
     rrp: Number(fields.rrp),
+    zone_rates: fields.zone_rates,
     weight: Number(fields.weight),
     length: Number(fields.length),
     width: Number(fields.width),
@@ -174,7 +181,9 @@ export async function uploadProduct(input: {
   const responseBody = await readJsonSafely(response);
 
   if (!response.ok) {
-    throw new Error(`Dropshipzone upload failed: ${response.status}`);
+    throw new Error(
+      formatAdminApiError("Dropshipzone upload failed", response.status, responseBody)
+    );
   }
 
   return {
@@ -201,7 +210,9 @@ async function authenticateWithCredentials(
   const responseBody = await readJsonSafely(response);
 
   if (!response.ok) {
-    throw new Error(`Dropshipzone auth failed: ${response.status}`);
+    throw new Error(
+      formatAdminApiError("Dropshipzone auth failed", response.status, responseBody)
+    );
   }
 
   const token = extractToken(responseBody);
@@ -298,6 +309,51 @@ function resolveUploadRetryOptions(
 
 function isTransientUploadStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
+}
+
+function formatAdminApiError(
+  prefix: string,
+  status: number,
+  responseBody: unknown
+): string {
+  const details = summarizeResponseBody(responseBody);
+
+  return details ? `${prefix}: ${status} - ${details}` : `${prefix}: ${status}`;
+}
+
+function summarizeResponseBody(responseBody: unknown): string {
+  if (responseBody === null || responseBody === undefined) return "";
+  if (typeof responseBody === "string") return truncate(responseBody.trim());
+
+  if (typeof responseBody === "object") {
+    const body = responseBody as {
+      message?: unknown;
+      error?: unknown;
+      errors?: unknown;
+    };
+    const parts = [body.message, body.error, body.errors]
+      .filter((part) => part !== undefined && part !== null)
+      .map((part) =>
+        typeof part === "string" ? part : safeStringify(part)
+      )
+      .filter((part) => part.trim().length > 0);
+
+    if (parts.length > 0) return truncate(parts.join(" | "));
+  }
+
+  return truncate(safeStringify(responseBody));
+}
+
+function safeStringify(value: unknown): string {
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function truncate(value: string): string {
+  return value.length > 500 ? `${value.slice(0, 497)}...` : value;
 }
 
 function positiveInteger(value: string | undefined, fallback: number): number {
