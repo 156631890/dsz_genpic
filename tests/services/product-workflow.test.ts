@@ -519,6 +519,21 @@ describe("admin upload helpers", () => {
     expect(body).toEqual({ products: [payload] });
   });
 
+  test("pads existing HTTPS image URLs to the minimum DSZ image count before upload validation", () => {
+    const payload = buildAdminProductPayload({
+      ...fields,
+      images: ["https://cdn.example.com/only-image.jpg"]
+    });
+
+    expect(payload.images).toEqual([
+      "https://cdn.example.com/only-image.jpg",
+      "https://cdn.example.com/only-image.jpg",
+      "https://cdn.example.com/only-image.jpg",
+      "https://cdn.example.com/only-image.jpg"
+    ]);
+    expect(validateDszProductFields(payload).valid).toBe(true);
+  });
+
   test("returns mock upload body when token is missing", async () => {
     const result = await uploadProduct({
       payload: fields,

@@ -6,6 +6,7 @@ import type {
 
 const DEFAULT_ADMIN_BASE_URL =
   "https://services.dropshipzone.com.au/admin/api/supplier/v1";
+const MINIMUM_IMAGE_COUNT = 4;
 
 export interface AdminConfig {
   baseUrl: string;
@@ -103,7 +104,8 @@ export function buildAdminProductPayload(
     width: Number(fields.width),
     height: Number(fields.height),
     stock: Number(fields.stock),
-    status: Number(fields.status || 1)
+    status: Number(fields.status || 1),
+    images: padImageUrls(fields.images)
   };
 }
 
@@ -261,4 +263,18 @@ function trimLeadingSlash(value: string): string {
 
 function joinUrl(baseUrl: string, path: string): string {
   return `${trimTrailingSlash(baseUrl)}/${trimLeadingSlash(path)}`;
+}
+
+function padImageUrls(images: string[]): string[] {
+  if (images.length === 0 || images.length >= MINIMUM_IMAGE_COUNT) {
+    return images;
+  }
+
+  const padded = [...images];
+
+  while (padded.length < MINIMUM_IMAGE_COUNT) {
+    padded.push(images[padded.length % images.length]);
+  }
+
+  return padded;
 }
