@@ -22,8 +22,8 @@ const productInput: ProductInput = {
 };
 
 const fields: DszProductFields = {
-  category: 7032,
-  categories: "7032",
+  category: 947,
+  categories: "947",
   categoryName: "Fashion / Women's Fashion / Women's Intimates",
   product_name: "Women Cotton Thong Underwear - Stretch Cotton Blend",
   sku: "Elosung10001",
@@ -108,7 +108,7 @@ describe("API app", () => {
       .expect(200);
 
     expect(response.body.result.fields.sku).toBe("Elosung10001");
-    expect(response.body.result.fields.categories).toBe("7032");
+    expect(response.body.result.fields.categories).toBe("947");
     expect(response.body.result.fields.review_notes).toEqual([
       productInput.sellingPoints
     ]);
@@ -153,6 +153,6 @@ describe("API app", () => {
 
     expect(response.body.mode).toBe("mock");
     expect(response.body.requestBody.products[0].sku).toBe("Elosung10001");
-    expect(response.body.requestBody.products[0].categories).toBe("7032");
+    expect(response.body.requestBody.products[0].categories).toBe("947");
   });
 });

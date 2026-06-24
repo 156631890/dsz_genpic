@@ -43,8 +43,8 @@ describe("App", () => {
             result: {
               source: "ai",
               fields: {
-                category: 7032,
-                categories: "7032",
+                category: 947,
+                categories: "947",
                 categoryName: "Fashion / Women's Fashion / Women's Intimates",
                 product_name: "Women Cotton Thong Underwear - Stretch Cotton Blend",
                 sku: "Elosung10001",
@@ -110,7 +110,7 @@ describe("App", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("Elosung10001")).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue("7032")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("947")).toBeInTheDocument();
     expect(screen.getByText("https://cdn.example.com/1.jpg")).toBeInTheDocument();
     expect(screen.getByText("https://cdn.example.com/main-1.png")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(

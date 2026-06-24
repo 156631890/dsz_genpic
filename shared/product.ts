@@ -59,7 +59,6 @@ export interface DszProductFields {
 export interface AdminProductPayload
   extends Pick<
     DszProductFields,
-    | "category"
     | "categories"
     | "sku"
     | "status"
@@ -69,6 +68,7 @@ export interface AdminProductPayload
     | "length"
     | "width"
     | "height"
+    | "cbm"
     | "brand_name"
     | "colour"
     | "description"

@@ -9,6 +9,54 @@ const DEFAULT_ADMIN_BASE_URL =
 const MINIMUM_IMAGE_COUNT = 4;
 const DEFAULT_UPLOAD_MAX_ATTEMPTS = 3;
 const DEFAULT_UPLOAD_RETRY_DELAY_MS = 500;
+const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
+  "7000": "916",
+  "7001": "917",
+  "7002": "918",
+  "7003": "919",
+  "7004": "920",
+  "7005": "921",
+  "7006": "922",
+  "7007": "923",
+  "7008": "924",
+  "7009": "925",
+  "7010": "926",
+  "7011": "927",
+  "7012": "928",
+  "7013": "929",
+  "7014": "930",
+  "7015": "931",
+  "7016": "932",
+  "7017": "933",
+  "7018": "934",
+  "7019": "935",
+  "7020": "936",
+  "7021": "937",
+  "7022": "961",
+  "7023": "938",
+  "7024": "939",
+  "7025": "940",
+  "7026": "941",
+  "7027": "942",
+  "7028": "943",
+  "7029": "944",
+  "7030": "945",
+  "7031": "946",
+  "7032": "947",
+  "7033": "948",
+  "7034": "949",
+  "7035": "950",
+  "7036": "951",
+  "7037": "952",
+  "7038": "953",
+  "7039": "954",
+  "7040": "955",
+  "7041": "956",
+  "7042": "957",
+  "7043": "958",
+  "7044": "959",
+  "7045": "960"
+};
 const REQUIRED_ZONE_RATES = {
   act: 0,
   nsw_m: 0,
@@ -99,14 +147,16 @@ export function validateDszProductFields(
 ): ValidationResult {
   const errors: string[] = [];
 
-  if (!Number.isInteger(fields.category) || fields.category <= 0) {
-    errors.push("Category must be a positive integer");
-  }
   if (!fields.name.trim()) errors.push("Product name is required");
   if (fields.name.length > 200) errors.push("Product name must be 200 characters or less");
   if (!fields.sku.trim()) errors.push("SKU is required");
   if (!/^Elosung\d{5}$/.test(fields.sku)) errors.push("SKU must use the Elosung numeric format");
-  if (!fields.categories.trim()) errors.push("Categories must be a string");
+  if (
+    !/^\d+$/.test(fields.categories.trim()) ||
+    Number(fields.categories) <= 0
+  ) {
+    errors.push("Categories must be one sub-subcategory ID string");
+  }
   if (!/^\d{10}$/.test(fields.ean_code)) {
     errors.push("EAN code must be a 10 digit string");
   }
@@ -150,6 +200,9 @@ export function validateDszProductFields(
   ) {
     errors.push("Length, width and height must be greater than 0");
   }
+  if (!Number.isFinite(fields.cbm) || fields.cbm <= 0) {
+    errors.push("CBM must be greater than 0");
+  }
   if (!hasRequiredZoneRates(fields.zone_rates)) {
     errors.push("zone_rates must include all required shipping zones");
   }
@@ -168,8 +221,7 @@ export function buildAdminProductPayload(
   fields: DszProductFields
 ): AdminProductPayload {
   return {
-    category: Number(fields.category),
-    categories: String(fields.categories),
+    categories: normalizeCategoryId(fields.categories || fields.category),
     name: fields.product_name,
     ean_code: String(fields.ean_code),
     sku: fields.sku.replace(/[^A-Za-z0-9]/g, ""),
@@ -183,6 +235,7 @@ export function buildAdminProductPayload(
     length: Number(fields.length),
     width: Number(fields.width),
     height: Number(fields.height),
+    cbm: Number(fields.cbm),
     stock: Number(fields.stock),
     status: Number(fields.status || 1),
     images: padImageUrls(fields.images)
@@ -379,6 +432,11 @@ function isTransientUploadStatus(status: number): boolean {
 
 function normalizeZoneRates(): Record<string, number> {
   return { ...REQUIRED_ZONE_RATES };
+}
+
+function normalizeCategoryId(value: string | number): string {
+  const id = String(value).trim();
+  return LEGACY_CATEGORY_ID_MAP[id] || id;
 }
 
 function hasRequiredZoneRates(zoneRates: Record<string, number>): boolean {

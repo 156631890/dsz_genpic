@@ -201,55 +201,56 @@
 | Electronics / Printer Accessories & Supplies | 6031 |
 | Electronics / Printers | 6032 |
 
-### 【Fashion / 时尚服饰】ID: 7000-7099
+### 【Fashion / 时尚服饰】ID: 916-961（Dropshipzone /new_categories）
 
 | 类目路径 | ID |
 |---------|----|
-| Fashion / Men's Fashion | 7001 |
-| Fashion / Men's Fashion / Men's Accessories | 7002 |
-| Fashion / Men's Fashion / Men's Casual Shoes | 7003 |
-| Fashion / Men's Fashion / Men's Coats & Jackets | 7004 |
-| Fashion / Men's Fashion / Men's Dress Shoes & Boots | 7005 |
-| Fashion / Men's Fashion / Men's Hats & Caps | 7006 |
-| Fashion / Men's Fashion / Men's Jeans | 7007 |
-| Fashion / Men's Fashion / Men's Jewellery | 7008 |
-| Fashion / Men's Fashion / Men's Knitwear & Sweaters | 7009 |
-| Fashion / Men's Fashion / Men's Pants & Chinos | 7010 |
-| Fashion / Men's Fashion / Men's Shirts | 7011 |
-| Fashion / Men's Fashion / Men's Shorts | 7012 |
-| Fashion / Men's Fashion / Men's Sleepwear | 7013 |
-| Fashion / Men's Fashion / Men's Sneakers & Sports Shoes | 7014 |
-| Fashion / Men's Fashion / Men's Suits & Tuxedos | 7015 |
-| Fashion / Men's Fashion / Men's Sweats & Trackpants | 7016 |
-| Fashion / Men's Fashion / Men's Thongs & Sandals | 7017 |
-| Fashion / Men's Fashion / Men's Tops & T-shirts | 7018 |
-| Fashion / Men's Fashion / Men's Uggs & Slippers | 7019 |
-| Fashion / Men's Fashion / Men's Underwear & Socks | 7020 |
-| Fashion / Men's Fashion / Men's Watches | 7021 |
-| Fashion / Men's Fashion / Men's Swimwear | 7022 |
-| Fashion / Women's Fashion | 7023 |
-| Fashion / Women's Fashion / Women's Accessories | 7024 |
-| Fashion / Women's Fashion / Women's Activewear | 7025 |
-| Fashion / Women's Fashion / Women's Boots | 7026 |
-| Fashion / Women's Fashion / Women's Bottoms | 7027 |
-| Fashion / Women's Fashion / Women's Casual Shoes | 7028 |
-| Fashion / Women's Fashion / Women's Dresses & Playsuits | 7029 |
-| Fashion / Women's Fashion / Women's Handbags | 7030 |
-| Fashion / Women's Fashion / Women's Heels | 7031 |
-| Fashion / Women's Fashion / Women's Intimates | 7032 |
-| Fashion / Women's Fashion / Women's Jackets & Coats | 7033 |
-| Fashion / Women's Fashion / Women's Jeans | 7034 |
-| Fashion / Women's Fashion / Women's Jewellery | 7035 |
-| Fashion / Women's Fashion / Women's Knitwear & Sweaters | 7036 |
-| Fashion / Women's Fashion / Women's Lingerie | 7037 |
-| Fashion / Women's Fashion / Women's Sleepwear | 7038 |
-| Fashion / Women's Fashion / Women's Sneakers & Sports Shoes | 7039 |
-| Fashion / Women's Fashion / Women's Socks & Hosiery | 7040 |
-| Fashion / Women's Fashion / Women's Swimwear | 7041 |
-| Fashion / Women's Fashion / Women's Thongs & Sandals | 7042 |
-| Fashion / Women's Fashion / Women's Tops & T-shirts | 7043 |
-| Fashion / Women's Fashion / Women's Uggs & Slippers | 7044 |
-| Fashion / Women's Fashion / Women's Watches | 7045 |
+| Fashion | 916 |
+| Fashion / Men's Fashion | 917 |
+| Fashion / Men's Fashion / Men's Accessories | 918 |
+| Fashion / Men's Fashion / Men's Casual Shoes | 919 |
+| Fashion / Men's Fashion / Men's Coats & Jackets | 920 |
+| Fashion / Men's Fashion / Men's Dress Shoes & Boots | 921 |
+| Fashion / Men's Fashion / Men's Hats & Caps | 922 |
+| Fashion / Men's Fashion / Men's Jeans | 923 |
+| Fashion / Men's Fashion / Men's Jewellery | 924 |
+| Fashion / Men's Fashion / Men's Knitwear & Sweaters | 925 |
+| Fashion / Men's Fashion / Men's Pants & Chinos | 926 |
+| Fashion / Men's Fashion / Men's Shirts | 927 |
+| Fashion / Men's Fashion / Men's Shorts | 928 |
+| Fashion / Men's Fashion / Men's Sleepwear | 929 |
+| Fashion / Men's Fashion / Men's Sneakers & Sports Shoes | 930 |
+| Fashion / Men's Fashion / Men's Suits & Tuxedos | 931 |
+| Fashion / Men's Fashion / Men's Sweats & Trackpants | 932 |
+| Fashion / Men's Fashion / Men's Thongs & Sandals | 933 |
+| Fashion / Men's Fashion / Men's Tops & T-shirts | 934 |
+| Fashion / Men's Fashion / Men's Uggs & Slippers | 935 |
+| Fashion / Men's Fashion / Men's Underwear & Socks | 936 |
+| Fashion / Men's Fashion / Men's Watches | 937 |
+| Fashion / Men's Fashion / Men's Swimwear | 961 |
+| Fashion / Women's Fashion | 938 |
+| Fashion / Women's Fashion / Women's Accessories | 939 |
+| Fashion / Women's Fashion / Women's Activewear | 940 |
+| Fashion / Women's Fashion / Women's Boots | 941 |
+| Fashion / Women's Fashion / Women's Bottoms | 942 |
+| Fashion / Women's Fashion / Women's Casual Shoes | 943 |
+| Fashion / Women's Fashion / Women's Dresses & Playsuits | 944 |
+| Fashion / Women's Fashion / Women's Handbags | 945 |
+| Fashion / Women's Fashion / Women's Heels | 946 |
+| Fashion / Women's Fashion / Women's Intimates | 947 |
+| Fashion / Women's Fashion / Women's Jackets & Coats | 948 |
+| Fashion / Women's Fashion / Women's Jeans | 949 |
+| Fashion / Women's Fashion / Women's Jewellery | 950 |
+| Fashion / Women's Fashion / Women's Knitwear & Sweaters | 951 |
+| Fashion / Women's Fashion / Women's Lingerie | 952 |
+| Fashion / Women's Fashion / Women's Sleepwear | 953 |
+| Fashion / Women's Fashion / Women's Sneakers & Sports Shoes | 954 |
+| Fashion / Women's Fashion / Women's Socks & Hosiery | 955 |
+| Fashion / Women's Fashion / Women's Swimwear | 956 |
+| Fashion / Women's Fashion / Women's Thongs & Sandals | 957 |
+| Fashion / Women's Fashion / Women's Tops & T-shirts | 958 |
+| Fashion / Women's Fashion / Women's Uggs & Slippers | 959 |
+| Fashion / Women's Fashion / Women's Watches | 960 |
 
 ### 【Food & Beverage / 食品饮料】ID: 8000-8099
 

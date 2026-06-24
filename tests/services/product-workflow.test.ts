@@ -46,8 +46,8 @@ const input: ProductInput = {
 };
 
 const fields: DszProductFields = {
-  category: 7032,
-  categories: "7032",
+  category: 947,
+  categories: "947",
   categoryName: "Fashion / Women's Fashion / Women's Intimates",
   product_name:
     "Women Cotton Thong Underwear - Stretch Cotton Blend - Black White Beige, Breathable Everyday Comfort",
@@ -80,7 +80,7 @@ describe("DSZ field rules", () => {
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 7032",
+        categoryMapping: "Women's Intimates | 947",
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       }
@@ -102,7 +102,7 @@ ${JSON.stringify(fields)}
 `);
 
     expect(parsed.sku).toBe("Elosung10001");
-    expect(parsed.categories).toBe("7032");
+    expect(parsed.categories).toBe("947");
     expect(parsed.description).toContain("Product Overview");
   });
 
@@ -150,7 +150,7 @@ ${JSON.stringify(fields)}
         ),
         writeFile(
           join(rulesDir, "Category_Mapping.md"),
-          "Fashion / Women's Fashion / Women's Intimates | 7032",
+          "Fashion / Women's Fashion / Women's Intimates | 947",
           "utf8"
         ),
         writeFile(
@@ -169,7 +169,7 @@ ${JSON.stringify(fields)}
 
       expect(rules.fieldRules).toContain("name and price are required");
       expect(rules.productPrompt).toContain("固定页脚规则");
-      expect(rules.categoryMapping).toContain("Women's Intimates | 7032");
+      expect(rules.categoryMapping).toContain("Women's Intimates | 947");
       expect(rules.uploadSop).toContain("Dropshipzone 16 字段");
       expect(rules.productUploadAu).toContain("澳洲独立站");
     } finally {
@@ -201,7 +201,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 7032",
+        categoryMapping: "Women's Intimates | 947",
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       },
@@ -241,7 +241,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 7032",
+        categoryMapping: "Women's Intimates | 947",
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       },
@@ -684,12 +684,23 @@ describe("admin upload helpers", () => {
     const payload = buildAdminProductPayload(fields);
     const body = buildAdminRequestBody(payload);
 
-    expect(payload.categories).toBe("7032");
+    expect(payload.categories).toBe("947");
     expect(payload.name).toBe(fields.product_name);
     expect(payload.price).toBe(fields.vendor_price);
     expect(payload.brand_name).toBe("Elosung");
     expect(payload.zone_rates.nz).toBe(10);
     expect(body).toEqual({ products: [payload] });
+  });
+
+  test("maps legacy local category IDs to real Dropshipzone new category IDs", () => {
+    const payload = buildAdminProductPayload({
+      ...fields,
+      category: 7032,
+      categories: "7032"
+    });
+
+    expect(payload).not.toHaveProperty("category");
+    expect(payload.categories).toBe("947");
   });
 
   test("normalizes shipping zones to DSZ AU free shipping and NZ paid shipping rules", () => {
@@ -713,7 +724,7 @@ describe("admin upload helpers", () => {
       [
         "brand_name",
         "categories",
-        "category",
+        "cbm",
         "colour",
         "description",
         "ean_code",
@@ -735,12 +746,12 @@ describe("admin upload helpers", () => {
     expect(payload).not.toHaveProperty("product_name");
     expect(payload).not.toHaveProperty("vendor_price");
     expect(payload).not.toHaveProperty("enabled");
-    expect(payload).not.toHaveProperty("cbm");
     expect(payload).not.toHaveProperty("risk_flags");
     expect(payload).not.toHaveProperty("review_notes");
     expect(payload.sku).toBe("Elosung10001");
     expect(payload.name).toBe(fields.product_name);
     expect(payload.price).toBe(fields.vendor_price);
+    expect(payload.cbm).toBe(fields.cbm);
   });
 
   test("pads existing HTTPS image URLs to the minimum DSZ image count before upload validation", () => {
@@ -770,6 +781,7 @@ describe("admin upload helpers", () => {
         length: 0,
         width: 0,
         height: 0,
+        cbm: 0,
         description: "<p>Missing required footer</p>\n<p>https://example.com</p>",
         vendor_price: 0,
         rrp: 0
@@ -784,13 +796,13 @@ describe("admin upload helpers", () => {
     expect(result.valid).toBe(false);
     expect(result.errors).toEqual(
       expect.arrayContaining([
-        "Category must be a positive integer",
         "Product name is required",
-        "Categories must be a string",
+        "Categories must be one sub-subcategory ID string",
         "EAN code must be a 10 digit string",
         "Price must be greater than 0",
         "Weight must be greater than 0",
         "Length, width and height must be greater than 0",
+        "CBM must be greater than 0",
         "Description must be a single line",
         "Description must not contain URLs",
         "Description must include the required ACL and delivery footer",

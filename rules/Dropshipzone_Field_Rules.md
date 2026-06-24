@@ -326,7 +326,7 @@ Step 7: 粘贴至 Dropshipzone 后台
 
 ---
 
-## API 字段格式（经验证，2026-03-19）
+## API 字段格式（经 Swagger 与 /new_categories 验证，2026-06-24）
 
 > ⚠️ 以下为 Dropshipzone Supplier API 的实际验证格式，与后台字段名可能不同！
 
@@ -339,12 +339,14 @@ Step 7: 粘贴至 Dropshipzone 后台
 
 | 字段名 | 类型 | 示例 | 注意 |
 |--------|------|------|------|
-| `category` | integer | `1364` | 内部类目ID（非公开列表） |
-| `categories` | **string** | `'1364'` | 必须为字符串，不是数组！ |
+| `name` | string | `'Women Cotton Thong Underwear - Stretch Cotton Blend'` | 必填，上传 API 字段名不是 `product_name` |
+| `price` | number | `19.74` | 必填，上传 API 字段名不是 `vendor_price` |
+| `categories` | **string** | `'947'` | 必须为单个 sub-subcategory ID 字符串，不是数组；不要上传 `category` |
 | `ean_code` | **string** | `'4748549810'` | 10位数字字符串，不是13位EAN-13 |
 | `sku` | string | `'Elosung60001'` | 仅字母+数字，无下划线 |
 | `brand_name` | string | `'Elosung'` | 非 `brand` |
 | `rrp` | number | `19.8` | 非 `vendor_rrp` |
+| `cbm` | number | `0.00051` | 长×宽×高/1,000,000 |
 | `zone_rates` | object | 见下方 | 各州缩写 |
 | `images` | string[] | `['https://...']` | URL数组 |
 | `weight` | number | `1.8` | kg |
@@ -364,8 +366,8 @@ zone_rates = {
 ```
 
 ### 类目 ID 重要说明
-- API 类目列表（306条）与实际可用类目可能不同
-- `GET /categories` 返回的 ID 可能无法直接用于产品创建
+- 上传产品应优先使用 `GET /new_categories` 返回的 ID
+- Fashion 旧本地 7000 段 ID 不可直接上传；例如 Women's Intimates 旧 `7032` 必须转换为 `947`
 - 现有产品使用的类目 ID（如 1364）可能不在公开列表中
 - **解决方案**：从现有产品获取类目ID，或测试不同类目
 
@@ -401,8 +403,8 @@ Vendor RRP = Vendor Price × 2
 | Baby & Kids | Baby & Kid's Toys | Baby & Kids / Baby & Kid's Toys | 4006 |
 | Sports & Fitness | Exercise, Gym & Fitness | Sports & Fitness / Exercise, Gym & Fitness | 15003 |
 | Pet Care | Cat Supplies | Pet Care / Cat Supplies | 14003 |
-| Fashion | Men's Fashion | Fashion / Men's Fashion / Men's Swimwear | 7022 |
-| Fashion | Women's Fashion | Fashion / Women's Fashion / Women's Swimwear | 7041 |
+| Fashion | Men's Fashion | Fashion / Men's Fashion / Men's Swimwear | 961 |
+| Fashion | Women's Fashion | Fashion / Women's Fashion / Women's Swimwear | 956 |
 | Commercial | Packaging | Commercial / Packaging / Packaging Tape | 5010 |
 | General Goods | — | — | 1 |
 

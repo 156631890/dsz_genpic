@@ -24,6 +24,54 @@ const DEFAULT_CATEGORY = {
   id: 1,
   name: "General Goods"
 };
+const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
+  "7000": "916",
+  "7001": "917",
+  "7002": "918",
+  "7003": "919",
+  "7004": "920",
+  "7005": "921",
+  "7006": "922",
+  "7007": "923",
+  "7008": "924",
+  "7009": "925",
+  "7010": "926",
+  "7011": "927",
+  "7012": "928",
+  "7013": "929",
+  "7014": "930",
+  "7015": "931",
+  "7016": "932",
+  "7017": "933",
+  "7018": "934",
+  "7019": "935",
+  "7020": "936",
+  "7021": "937",
+  "7022": "961",
+  "7023": "938",
+  "7024": "939",
+  "7025": "940",
+  "7026": "941",
+  "7027": "942",
+  "7028": "943",
+  "7029": "944",
+  "7030": "945",
+  "7031": "946",
+  "7032": "947",
+  "7033": "948",
+  "7034": "949",
+  "7035": "950",
+  "7036": "951",
+  "7037": "952",
+  "7038": "953",
+  "7039": "954",
+  "7040": "955",
+  "7041": "956",
+  "7042": "957",
+  "7043": "958",
+  "7044": "959",
+  "7045": "960"
+};
 
 const FOOTER =
   "<p><strong>Returns, Refunds and Replacements </strong><br />Products that are received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with the Australian Consumer Law (ACL). We are committed to ensuring all products meet the standards of quality and reliability expected by our customers. However, please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p><p><strong>Delivery Timeframe</strong></p><p>Please note that we cannot guarantee the exact date of arrival, and the delivery timeframes excluding weekends and public holidays are as follows:</p><ul><li>For customers in Victoria, approximately 7-10 working days;</li><li>For customers in NSW, SA, ACT, and QLD, approximately 9-12 working days;</li><li>For customers in WA, NT, and TAS, approximately 9-12 working days.</li></ul>";
@@ -38,7 +86,7 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
   fieldRules: [
     "Dropshipzone supplier product field rules for POST /products.",
     "Return one product object that can be wrapped as { products: [product] }.",
-    "Use category as an integer and categories as a string.",
+    "Use category as an internal integer mirror of categories. The DSZ upload API sends categories only.",
     "Use product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates and images.",
     "sku must use the Elosung prefix. ean_code must be a 10 digit string. brand_name must be Elosung. status must be 1. stock must be 1000.",
     "images must be HTTPS URL strings and should include at least 4 product images.",
@@ -57,7 +105,7 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
     FOOTER
   ].join("\n"),
   categoryMapping: [
-    "Women's Intimates | 7032",
+    "Women's Intimates | 947",
     "Default | 1 | General Goods"
   ].join("\n"),
   uploadSop: [
@@ -333,12 +381,14 @@ function completeGeneratedFields(
 }
 
 function normalizeGeneratedFields(fields: DszProductFields): DszProductFields {
+  const categoryId = normalizeCategoryId(fields.categories || fields.category);
+
   return {
     ...fields,
-    categories: String(fields.categories || fields.category),
+    categories: categoryId,
     status: Number(fields.status || 1),
     stock: Number(fields.stock || 1000),
-    category: Number(fields.category || DEFAULT_CATEGORY.id),
+    category: Number(categoryId),
     product_name: fields.product_name || "General Product - Everyday Use, Practical Product Listing",
     sku: String(fields.sku || ""),
     ean_code: String(fields.ean_code || ""),
@@ -377,7 +427,7 @@ function guessCategory(input: ProductInput) {
 
   if (text.includes("intimate") || text.includes("underwear") || text.includes("thong")) {
     return {
-      id: 7032,
+      id: 947,
       name: "Fashion / Women's Fashion / Women's Intimates"
     };
   }
@@ -497,6 +547,11 @@ function isMissingFileError(error: unknown): boolean {
 function round(value: number, decimals: number): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
+}
+
+function normalizeCategoryId(value: string | number): string {
+  const id = String(value || DEFAULT_CATEGORY.id).trim();
+  return LEGACY_CATEGORY_ID_MAP[id] || id;
 }
 
 function isValidSku(value: string): boolean {
