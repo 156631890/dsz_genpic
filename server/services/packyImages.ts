@@ -1,3 +1,5 @@
+import { uploadImagesToImgbb } from "./imageUploader.js";
+
 export interface PackyEditInput {
   baseUrl?: string;
   model?: string;
@@ -13,12 +15,17 @@ export interface PackyEditRequest {
   fields: Record<string, string>;
 }
 
+interface PackyImageResult {
+  url?: string;
+  b64_json?: string;
+}
+
 export function buildPackyEditRequest(input: PackyEditInput): PackyEditRequest {
   const baseUrl = trimTrailingSlash(input.baseUrl || "https://www.packyapi.com");
   const prompt = [
-    `产品类型：${input.productType}`,
+    `Product type: ${input.productType}`,
     input.prompt,
-    "生成适合独立站商品详情页使用的电商图片，主体清晰，卖点明确，不要出现水印。"
+    "Generate ecommerce product images for an independent store product page. Keep the product clear, accurate, and free of watermarks."
   ].join("\n");
 
   return {
@@ -44,7 +51,7 @@ export async function generateImageWithPacky(input: {
   const apiKey = env.PACKY_IMAGE_API_KEY || env.PACKY_API_KEY;
 
   if (!apiKey) {
-    throw new Error("缺少 PACKY_IMAGE_API_KEY 或 PACKY_API_KEY，无法生成图片");
+    throw new Error("Missing PACKY_IMAGE_API_KEY or PACKY_API_KEY. Cannot generate images.");
   }
 
   const request = buildPackyEditRequest({
@@ -59,11 +66,9 @@ export async function generateImageWithPacky(input: {
     form.append(key, value);
   }
 
-  const imageBytes = new Uint8Array(input.image.buffer);
-
   form.append(
     "image",
-    new Blob([imageBytes], {
+    new Blob([new Uint8Array(input.image.buffer)], {
       type: input.image.mimetype || "application/octet-stream"
     }),
     input.image.originalname || "source.png"
@@ -79,23 +84,20 @@ export async function generateImageWithPacky(input: {
   });
 
   if (!response.ok) {
-    throw new Error(`Packy 图生图接口失败：${response.status}`);
+    throw new Error(`Packy image edit API failed: ${response.status}`);
   }
 
   const data = (await response.json()) as {
-    data?: Array<{ url?: string; b64_json?: string }>;
+    data?: PackyImageResult[];
   };
-  const firstImage = data.data?.[0];
+  const imageUrls = await resolvePackyImageUrls(data.data || [], env, fetcher);
+  const imageUrl = imageUrls[0];
 
-  if (firstImage?.url) {
-    return { imageUrl: firstImage.url };
+  if (!imageUrl) {
+    throw new Error("Packy image edit API returned no image.");
   }
 
-  if (firstImage?.b64_json) {
-    return { imageUrl: `data:image/png;base64,${firstImage.b64_json}` };
-  }
-
-  throw new Error("Packy 图生图接口没有返回图片");
+  return { imageUrl };
 }
 
 export async function generateAmazonMainImagesWithPacky(input: {
@@ -107,14 +109,14 @@ export async function generateAmazonMainImagesWithPacky(input: {
   fetchImpl?: typeof fetch;
 }): Promise<{ imageUrls: string[] }> {
   if (input.images.length === 0) {
-    throw new Error("请至少上传一张原始产品图片");
+    throw new Error("At least one source product image is required.");
   }
 
   const env = input.env || process.env;
   const apiKey = env.PACKY_IMAGE_API_KEY || env.PACKY_API_KEY;
 
   if (!apiKey) {
-    throw new Error("缺少 PACKY_IMAGE_API_KEY 或 PACKY_API_KEY，无法生成图片");
+    throw new Error("Missing PACKY_IMAGE_API_KEY or PACKY_API_KEY. Cannot generate images.");
   }
 
   const count = clampAmazonImageCount(input.count);
@@ -153,18 +155,16 @@ export async function generateAmazonMainImagesWithPacky(input: {
   });
 
   if (!response.ok) {
-    throw new Error(`Packy 亚马逊主图接口失败：${response.status}`);
+    throw new Error(`Packy Amazon main image API failed: ${response.status}`);
   }
 
   const data = (await response.json()) as {
-    data?: Array<{ url?: string; b64_json?: string }>;
+    data?: PackyImageResult[];
   };
-  const imageUrls = (data.data || [])
-    .map((image) => image.url || imageDataUrl(image.b64_json))
-    .filter((url): url is string => Boolean(url));
+  const imageUrls = await resolvePackyImageUrls(data.data || [], env, fetcher);
 
   if (imageUrls.length === 0) {
-    throw new Error("Packy 亚马逊主图接口没有返回图片");
+    throw new Error("Packy Amazon main image API returned no images.");
   }
 
   return { imageUrls };
@@ -181,13 +181,74 @@ function buildAmazonMainImagePrompt(sellingPoints: string): string {
   ].join("\n");
 }
 
+async function resolvePackyImageUrls(
+  images: PackyImageResult[],
+  env: Record<string, string | undefined>,
+  fetcher: typeof fetch
+): Promise<string[]> {
+  const imageUrls: Array<string | undefined> = [];
+  const uploadFiles: Express.Multer.File[] = [];
+  const uploadIndexes: number[] = [];
+
+  images.forEach((image, index) => {
+    if (image.url) {
+      imageUrls[index] = image.url;
+      return;
+    }
+
+    if (image.b64_json) {
+      uploadIndexes.push(index);
+      uploadFiles.push(buildGeneratedImageFile(image.b64_json, index));
+    }
+  });
+
+  if (uploadFiles.length > 0) {
+    const uploaded = await uploadImagesToImgbb({
+      files: uploadFiles,
+      env,
+      fetchImpl: fetcher
+    });
+
+    uploaded.imageUrls.forEach((url, index) => {
+      imageUrls[uploadIndexes[index]] = url;
+    });
+  }
+
+  return imageUrls.filter((url): url is string => Boolean(url));
+}
+
+function buildGeneratedImageFile(
+  base64Value: string,
+  index: number
+): Express.Multer.File {
+  const parsed = parseBase64Image(base64Value);
+
+  return {
+    buffer: Buffer.from(parsed.base64, "base64"),
+    mimetype: parsed.mimetype,
+    originalname: `packy-generated-${index + 1}.png`
+  } as Express.Multer.File;
+}
+
+function parseBase64Image(value: string): { base64: string; mimetype: string } {
+  const dataUrlMatch = value.match(/^data:([^;]+);base64,(.*)$/);
+
+  if (dataUrlMatch) {
+    return {
+      mimetype: dataUrlMatch[1],
+      base64: dataUrlMatch[2]
+    };
+  }
+
+  return {
+    mimetype: "image/png",
+    base64: value
+  };
+}
+
 function clampAmazonImageCount(count = 6): number {
   if (!Number.isFinite(count)) return 6;
   return Math.min(6, Math.max(4, Math.round(count)));
-}
-
-function imageDataUrl(base64?: string): string | undefined {
-  return base64 ? `data:image/png;base64,${base64}` : undefined;
 }
 
 function normalizeQuality(value?: string): "low" | "medium" | "high" | "auto" {

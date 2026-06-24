@@ -244,6 +244,52 @@ describe("Packy image helpers", () => {
     expect(result.imageUrl).toBe("https://cdn.example.com/generated.png");
   });
 
+  test("uploads Packy base64 image edits to ImgBB before returning a URL", async () => {
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (String(url).includes("/v1/images/edits")) {
+        expect(init?.headers).toEqual({
+          Authorization: "Bearer image-key"
+        });
+
+        return new Response(
+          JSON.stringify({
+            data: [{ b64_json: Buffer.from("generated-image").toString("base64") }]
+          }),
+          { status: 200 }
+        );
+      }
+
+      expect(String(url)).toBe("https://api.imgbb.com/1/upload?key=imgbb-key");
+      expect((init?.body as FormData).get("image")).toBeTruthy();
+
+      return new Response(
+        JSON.stringify({
+          data: { display_url: "https://i.ibb.co/generated-image.png" }
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await generateImageWithPacky({
+      image: {
+        buffer: Buffer.from("image"),
+        mimetype: "image/png",
+        originalname: "source.png"
+      } as Express.Multer.File,
+      productType: "Women Cotton Thong Underwear",
+      prompt: "Create ecommerce detail image",
+      env: {
+        PACKY_IMAGE_API_KEY: "image-key",
+        IMGBB_API_KEY: "imgbb-key"
+      },
+      fetchImpl
+    });
+
+    expect(result.imageUrl).toBe("https://i.ibb.co/generated-image.png");
+    expect(result.imageUrl).not.toContain("data:image");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   test("generates 4 to 6 Amazon main images through Packy image API", async () => {
     const fetchImpl = vi.fn(async (_url, init) => {
       const form = init?.body as FormData;
@@ -302,6 +348,64 @@ describe("Packy image helpers", () => {
       "https://cdn.example.com/main-5.png",
       "https://cdn.example.com/main-6.png"
     ]);
+  });
+
+  test("uploads Packy base64 Amazon main images to ImgBB and keeps URL order", async () => {
+    const fetchMock = vi.fn(async (url, init) => {
+      if (String(url).includes("/v1/images/edits")) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              { b64_json: Buffer.from("main-1").toString("base64") },
+              { url: "https://cdn.example.com/main-2.png" },
+              { b64_json: Buffer.from("main-3").toString("base64") }
+            ]
+          }),
+          { status: 200 }
+        );
+      }
+
+      expect(String(url)).toBe("https://api.imgbb.com/1/upload?key=imgbb-key");
+      expect((init?.body as FormData).get("image")).toBeTruthy();
+
+      const uploadCall = fetchMock.mock.calls.filter(([callUrl]) =>
+        String(callUrl).includes("api.imgbb.com")
+      ).length;
+
+      return new Response(
+        JSON.stringify({
+          data: { display_url: `https://i.ibb.co/main-${uploadCall}.png` }
+        }),
+        { status: 200 }
+      );
+    });
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+
+    const result = await generateAmazonMainImagesWithPacky({
+      images: [
+        {
+          buffer: Buffer.from("front"),
+          mimetype: "image/png",
+          originalname: "front.png"
+        }
+      ] as Express.Multer.File[],
+      productType: "Women Cotton Thong Underwear",
+      sellingPoints: "Soft cotton breathable stretch everyday fit",
+      env: {
+        PACKY_IMAGE_API_KEY: "image-key",
+        IMGBB_API_KEY: "imgbb-key"
+      },
+      fetchImpl
+    });
+
+    expect(result.imageUrls).toEqual([
+      "https://i.ibb.co/main-1.png",
+      "https://cdn.example.com/main-2.png",
+      "https://i.ibb.co/main-2.png"
+    ]);
+    expect(result.imageUrls.every((url) => url.startsWith("https://"))).toBe(true);
+    expect(result.imageUrls.some((url) => url.startsWith("data:image"))).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
 
