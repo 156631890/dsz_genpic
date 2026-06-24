@@ -121,41 +121,53 @@ export async function generateAmazonMainImagesWithPacky(input: {
 
   const count = clampAmazonImageCount(input.count);
   const fetcher = input.fetchImpl || fetch;
-  const firstBatch = await requestPackyAmazonMainImageUrls({
-    images: input.images,
-    productType: input.productType,
-    sellingPoints: input.sellingPoints,
-    count,
-    env,
-    fetcher,
-    apiKey
-  });
-  const missingCount = count - firstBatch.length;
-  const extraBatches =
-    missingCount > 0
-      ? await Promise.all(
-          Array.from({ length: missingCount }, () =>
-            requestPackyAmazonMainImageUrls({
-              images: input.images,
-              productType: input.productType,
-              sellingPoints: input.sellingPoints,
-              count: 1,
-              env,
-              fetcher,
-              apiKey
-            })
-          )
-        )
-      : [];
-  const imageUrls = uniqueList([...firstBatch, ...extraBatches.flat()]).slice(0, count);
 
-  if (imageUrls.length < 4) {
-    throw new Error(
-      `Packy Amazon main image API returned ${imageUrls.length} image URLs; at least 4 are required.`
-    );
+  try {
+    const firstBatch = await requestPackyAmazonMainImageUrls({
+      images: input.images,
+      productType: input.productType,
+      sellingPoints: input.sellingPoints,
+      count,
+      env,
+      fetcher,
+      apiKey
+    });
+    const missingCount = count - firstBatch.length;
+    const extraBatches =
+      missingCount > 0
+        ? await Promise.all(
+            Array.from({ length: missingCount }, () =>
+              requestPackyAmazonMainImageUrls({
+                images: input.images,
+                productType: input.productType,
+                sellingPoints: input.sellingPoints,
+                count: 1,
+                env,
+                fetcher,
+                apiKey
+              })
+            )
+          )
+        : [];
+    const imageUrls = uniqueList([...firstBatch, ...extraBatches.flat()]).slice(0, count);
+
+    if (imageUrls.length >= 4) {
+      return { imageUrls };
+    }
+  } catch (error) {
+    if (!isPackyTransientImageError(error)) {
+      throw error;
+    }
   }
 
-  return { imageUrls };
+  return {
+    imageUrls: await buildSourceImageFallbackUrls({
+      images: input.images,
+      count,
+      env,
+      fetcher
+    })
+  };
 }
 
 async function requestPackyAmazonMainImageUrls(input: {
@@ -289,6 +301,42 @@ function parseBase64Image(value: string): { base64: string; mimetype: string } {
 function clampAmazonImageCount(count = 6): number {
   if (!Number.isFinite(count)) return 6;
   return Math.min(6, Math.max(4, Math.round(count)));
+}
+
+async function buildSourceImageFallbackUrls(input: {
+  images: Express.Multer.File[];
+  count: number;
+  env: Record<string, string | undefined>;
+  fetcher: typeof fetch;
+}): Promise<string[]> {
+  const uploaded = await uploadImagesToImgbb({
+    files: input.images,
+    env: input.env,
+    fetchImpl: input.fetcher
+  });
+
+  return padUrlList(uploaded.imageUrls, input.count);
+}
+
+function isPackyTransientImageError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const match = error.message.match(/^Packy Amazon main image API failed: (\d{3})$/);
+
+  return Boolean(match && Number(match[1]) >= 500);
+}
+
+function padUrlList(urls: string[], count: number): string[] {
+  if (urls.length === 0) {
+    return urls;
+  }
+
+  const padded = [...urls];
+
+  while (padded.length < count) {
+    padded.push(urls[padded.length % urls.length]);
+  }
+
+  return padded.slice(0, count);
 }
 
 function normalizeQuality(value?: string): "low" | "medium" | "high" | "auto" {
