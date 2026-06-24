@@ -600,7 +600,11 @@ describe("admin upload helpers", () => {
   });
 
   test("validates DSZ required fields before upload", () => {
-    const result = validateDszProductFields({ ...fields, images: fields.images.slice(0, 3) });
+    const payload = buildAdminProductPayload({
+      ...fields,
+      images: []
+    });
+    const result = validateDszProductFields(payload);
 
     expect(result.valid).toBe(false);
     expect(result.errors).toEqual(["Images must contain at least 4 URLs"]);
@@ -611,6 +615,8 @@ describe("admin upload helpers", () => {
     const body = buildAdminRequestBody(payload);
 
     expect(payload.categories).toBe("7032");
+    expect(payload.name).toBe(fields.product_name);
+    expect(payload.price).toBe(fields.vendor_price);
     expect(payload.brand_name).toBe("Elosung");
     expect(payload.zone_rates.nz).toBe(10);
     expect(body).toEqual({ products: [payload] });
@@ -633,23 +639,27 @@ describe("admin upload helpers", () => {
         "height",
         "images",
         "length",
-        "product_name",
+        "name",
+        "price",
         "rrp",
         "sku",
         "status",
         "stock",
-        "vendor_price",
         "weight",
         "width",
         "zone_rates"
       ].sort()
     );
     expect(payload).not.toHaveProperty("categoryName");
+    expect(payload).not.toHaveProperty("product_name");
+    expect(payload).not.toHaveProperty("vendor_price");
     expect(payload).not.toHaveProperty("enabled");
     expect(payload).not.toHaveProperty("cbm");
     expect(payload).not.toHaveProperty("risk_flags");
     expect(payload).not.toHaveProperty("review_notes");
     expect(payload.sku).toBe("Elosung10001");
+    expect(payload.name).toBe(fields.product_name);
+    expect(payload.price).toBe(fields.vendor_price);
   });
 
   test("pads existing HTTPS image URLs to the minimum DSZ image count before upload validation", () => {
@@ -668,14 +678,15 @@ describe("admin upload helpers", () => {
   });
 
   test("returns mock upload body when token is missing", async () => {
+    const payload = buildAdminProductPayload(fields);
     const result = await uploadProduct({
-      payload: fields,
+      payload,
       env: {},
       fetchImpl: vi.fn()
     });
 
     expect(result.mode).toBe("mock");
-    expect(result.requestBody).toEqual({ products: [fields] });
+    expect(result.requestBody).toEqual({ products: [payload] });
   });
 
   test("authenticates with Dropshipzone credentials before creating products", async () => {
@@ -703,7 +714,7 @@ describe("admin upload helpers", () => {
     }) as unknown as typeof fetch;
 
     const result = await uploadProduct({
-      payload: fields,
+      payload: buildAdminProductPayload(fields),
       env: {
         ADMIN_API_EMAIL: "supplier@example.com",
         ADMIN_API_PASSWORD: "supplier-password"
@@ -728,7 +739,7 @@ describe("admin upload helpers", () => {
       .mockResolvedValueOnce(new Response(JSON.stringify({ success: true }), { status: 200 })) as unknown as typeof fetch;
 
     const result = await uploadProduct({
-      payload: fields,
+      payload: buildAdminProductPayload(fields),
       env: {
         ADMIN_API_TOKEN: "expired-token",
         ADMIN_API_EMAIL: "supplier@example.com",
@@ -777,7 +788,7 @@ describe("admin upload helpers", () => {
       ) as unknown as typeof fetch;
 
     const result = await uploadProduct({
-      payload: fields,
+      payload: buildAdminProductPayload(fields),
       env: {
         ADMIN_API_TOKEN: "live-token",
         ADMIN_UPLOAD_RETRY_DELAY_MS: "0"

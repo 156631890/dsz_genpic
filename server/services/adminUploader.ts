@@ -77,16 +77,17 @@ export function resolveAdminConfig(
 
 export function validateDszProductFields(
   fields: Pick<
-    DszProductFields,
-    "product_name" | "sku" | "categories" | "description" | "images"
+    AdminProductPayload,
+    "name" | "sku" | "categories" | "description" | "images" | "price"
   >
 ): ValidationResult {
   const errors: string[] = [];
 
-  if (!fields.product_name.trim()) errors.push("Product name is required");
+  if (!fields.name.trim()) errors.push("Product name is required");
   if (!fields.sku.trim()) errors.push("SKU is required");
   if (!fields.categories.trim()) errors.push("Categories must be a string");
   if (!fields.description.trim()) errors.push("Description is required");
+  if (!Number.isFinite(fields.price)) errors.push("Price is required");
   if (fields.images.length < 4) errors.push("Images must contain at least 4 URLs");
   if (!fields.images.every((url) => /^https:\/\//.test(url))) {
     errors.push("Images must be HTTPS URLs");
@@ -104,13 +105,13 @@ export function buildAdminProductPayload(
   return {
     category: Number(fields.category),
     categories: String(fields.categories),
-    product_name: fields.product_name,
+    name: fields.product_name,
     ean_code: String(fields.ean_code),
     sku: fields.sku.replace(/[^A-Za-z0-9]/g, ""),
     brand_name: fields.brand_name || "Elosung",
     colour: fields.colour,
     description: fields.description,
-    vendor_price: Number(fields.vendor_price),
+    price: Number(fields.vendor_price),
     rrp: Number(fields.rrp),
     zone_rates: fields.zone_rates,
     weight: Number(fields.weight),
