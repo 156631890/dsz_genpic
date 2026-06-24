@@ -38,7 +38,8 @@ const fields: DszProductFields = {
   brand_name: "Elosung",
   colour: "Black / White / Beige",
   enabled: true,
-  description: "<p><strong>Product Overview</strong></p><p>Comfortable daily underwear.</p>",
+  description:
+    "<p><strong>Product Overview</strong></p><p>Comfortable daily underwear.</p><p><strong>Returns, Refunds and Replacements </strong><br />Products received faulty, damaged, or not as described are eligible for review under ACL.</p><p><strong>Delivery Timeframe</strong></p><p>Delivery timeframes exclude weekends and public holidays.</p>",
   vendor_price: 19.74,
   rrp: 39.48,
   zone_rates: standardZoneRates(),

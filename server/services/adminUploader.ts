@@ -9,6 +9,25 @@ const DEFAULT_ADMIN_BASE_URL =
 const MINIMUM_IMAGE_COUNT = 4;
 const DEFAULT_UPLOAD_MAX_ATTEMPTS = 3;
 const DEFAULT_UPLOAD_RETRY_DELAY_MS = 500;
+const REQUIRED_ZONE_RATES = {
+  act: 0,
+  nsw_m: 0,
+  nsw_r: 0,
+  nt_m: 0,
+  nt_r: 0,
+  qld_m: 0,
+  qld_r: 0,
+  remote: 0,
+  sa_m: 0,
+  sa_r: 0,
+  tas_m: 0,
+  tas_r: 0,
+  vic_m: 0,
+  vic_r: 0,
+  wa_m: 0,
+  wa_r: 0,
+  nz: 10
+} as const;
 
 export interface AdminConfig {
   baseUrl: string;
@@ -76,18 +95,64 @@ export function resolveAdminConfig(
 }
 
 export function validateDszProductFields(
-  fields: Pick<
-    AdminProductPayload,
-    "name" | "sku" | "categories" | "description" | "images" | "price"
-  >
+  fields: AdminProductPayload
 ): ValidationResult {
   const errors: string[] = [];
 
+  if (!Number.isInteger(fields.category) || fields.category <= 0) {
+    errors.push("Category must be a positive integer");
+  }
   if (!fields.name.trim()) errors.push("Product name is required");
+  if (fields.name.length > 200) errors.push("Product name must be 200 characters or less");
   if (!fields.sku.trim()) errors.push("SKU is required");
+  if (!/^Elosung\d{5}$/.test(fields.sku)) errors.push("SKU must use the Elosung numeric format");
   if (!fields.categories.trim()) errors.push("Categories must be a string");
+  if (!/^\d{10}$/.test(fields.ean_code)) {
+    errors.push("EAN code must be a 10 digit string");
+  }
+  if (!Number.isInteger(fields.stock) || fields.stock <= 0) {
+    errors.push("Stock must be a positive integer");
+  }
+  if (![0, 1].includes(fields.status)) {
+    errors.push("Status must be 0 or 1");
+  }
+  if (fields.brand_name !== "Elosung") errors.push("Brand name must be Elosung");
+  if (!fields.colour.trim()) errors.push("Colour is required");
   if (!fields.description.trim()) errors.push("Description is required");
-  if (!Number.isFinite(fields.price)) errors.push("Price is required");
+  if (/\r|\n/.test(fields.description)) {
+    errors.push("Description must be a single line");
+  }
+  if (/https?:\/\//i.test(fields.description)) {
+    errors.push("Description must not contain URLs");
+  }
+  if (
+    !fields.description.includes("Returns, Refunds and Replacements") ||
+    !fields.description.includes("Delivery Timeframe")
+  ) {
+    errors.push("Description must include the required ACL and delivery footer");
+  }
+  if (!Number.isFinite(fields.price) || fields.price <= 0) {
+    errors.push("Price must be greater than 0");
+  }
+  if (!Number.isFinite(fields.rrp) || fields.rrp < fields.price) {
+    errors.push("RRP must be greater than or equal to price");
+  }
+  if (!Number.isFinite(fields.weight) || fields.weight <= 0) {
+    errors.push("Weight must be greater than 0");
+  }
+  if (
+    !Number.isFinite(fields.length) ||
+    !Number.isFinite(fields.width) ||
+    !Number.isFinite(fields.height) ||
+    fields.length <= 0 ||
+    fields.width <= 0 ||
+    fields.height <= 0
+  ) {
+    errors.push("Length, width and height must be greater than 0");
+  }
+  if (!hasRequiredZoneRates(fields.zone_rates)) {
+    errors.push("zone_rates must include all required shipping zones");
+  }
   if (fields.images.length < 4) errors.push("Images must contain at least 4 URLs");
   if (!fields.images.every((url) => /^https:\/\//.test(url))) {
     errors.push("Images must be HTTPS URLs");
@@ -113,7 +178,7 @@ export function buildAdminProductPayload(
     description: fields.description,
     price: Number(fields.vendor_price),
     rrp: Number(fields.rrp),
-    zone_rates: fields.zone_rates,
+    zone_rates: normalizeZoneRates(),
     weight: Number(fields.weight),
     length: Number(fields.length),
     width: Number(fields.width),
@@ -310,6 +375,16 @@ function resolveUploadRetryOptions(
 
 function isTransientUploadStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
+}
+
+function normalizeZoneRates(): Record<string, number> {
+  return { ...REQUIRED_ZONE_RATES };
+}
+
+function hasRequiredZoneRates(zoneRates: Record<string, number>): boolean {
+  return Object.entries(REQUIRED_ZONE_RATES).every(
+    ([key, value]) => zoneRates[key] === value
+  );
 }
 
 function formatAdminApiError(

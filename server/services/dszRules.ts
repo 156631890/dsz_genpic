@@ -11,6 +11,8 @@ export interface RuleDocuments {
   fieldRules: string;
   productPrompt: string;
   categoryMapping: string;
+  uploadSop: string;
+  productUploadAu: string;
 }
 
 export interface ChatMessage {
@@ -57,6 +59,17 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
   categoryMapping: [
     "Women's Intimates | 7032",
     "Default | 1 | General Goods"
+  ].join("\n"),
+  uploadSop: [
+    "Full product upload SOP.",
+    "Dropshipzone has Details, Price, Shipping and Images tabs.",
+    "Vendor Price and Vendor RRP must be calculated from chargeable weight and purchase price.",
+    "Manual review should check SKU, EAN, category, price, shipping and images before submission."
+  ].join("\n"),
+  productUploadAu: [
+    "Australian independent store content rules.",
+    "Title and HTML description must be pure English, professional, compliant and suitable for ecommerce upload.",
+    "Do not include links, unsupported claims, unauthorized brands, Chinese punctuation or unsupported HTML tags."
   ].join("\n")
 };
 
@@ -78,15 +91,21 @@ export function buildDszGenerationMessages(input: {
         "Generate a complete Dropshipzone product JSON object from the uploaded image URLs and seller selling points.",
         "Follow these rule documents exactly.",
         "FIELD RULES:",
-        truncate(ruleDocuments.fieldRules, 6000),
+        truncate(ruleDocuments.fieldRules, 12000),
         "PRODUCT PROMPT:",
-        truncate(ruleDocuments.productPrompt, 6000),
+        truncate(ruleDocuments.productPrompt, 13000),
         "CATEGORY MAPPING:",
-        truncate(ruleDocuments.categoryMapping, 4000),
+        truncate(ruleDocuments.categoryMapping, 20000),
+        "FULL PRODUCT UPLOAD SOP:",
+        truncate(ruleDocuments.uploadSop, 9000),
+        "AU PRODUCT CONTENT RULES:",
+        truncate(ruleDocuments.productUploadAu, 6000),
         "INPUT:",
         JSON.stringify(input.input, null, 2),
         "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates, images, risk_flags, review_notes.",
-        "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer."
+        "Use internal JSON key product_name for the title and vendor_price for Vendor Price. The uploader maps product_name to DSZ API name and vendor_price to DSZ API price.",
+        "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer.",
+        "Use zone_rates with AU zones at 0 and nz at 10."
       ].join("\n")
     }
   ];
@@ -296,6 +315,19 @@ function completeGeneratedFields(
   if (!merged.description.includes("Returns, Refunds and Replacements")) {
     merged.description = `${merged.description}${FOOTER}`;
   }
+  if (!isValidSku(merged.sku)) {
+    merged.sku = fallback.sku;
+  }
+  if (!isValidApiEan(merged.ean_code)) {
+    merged.ean_code = fallback.ean_code;
+  }
+  if (!Number.isFinite(merged.vendor_price) || merged.vendor_price <= 0) {
+    merged.vendor_price = fallback.vendor_price;
+  }
+  if (!Number.isFinite(merged.rrp) || merged.rrp < merged.vendor_price) {
+    merged.rrp = round(merged.vendor_price * 2, 2);
+  }
+  merged.zone_rates = standardZoneRates();
 
   return merged;
 }
@@ -307,6 +339,10 @@ function normalizeGeneratedFields(fields: DszProductFields): DszProductFields {
     status: Number(fields.status || 1),
     stock: Number(fields.stock || 1000),
     category: Number(fields.category || DEFAULT_CATEGORY.id),
+    product_name: fields.product_name || "General Product - Everyday Use, Practical Product Listing",
+    sku: String(fields.sku || ""),
+    ean_code: String(fields.ean_code || ""),
+    description: String(fields.description || ""),
     weight: Number(fields.weight || 0),
     length: Number(fields.length || 0),
     width: Number(fields.width || 0),
@@ -315,8 +351,10 @@ function normalizeGeneratedFields(fields: DszProductFields): DszProductFields {
     vendor_price: Number(fields.vendor_price || 0),
     rrp: Number(fields.rrp || 0),
     brand_name: fields.brand_name || "Elosung",
+    colour: fields.colour || "N/A",
     enabled: fields.enabled !== false,
     zone_rates: fields.zone_rates || standardZoneRates(),
+    images: fields.images || [],
     risk_flags: fields.risk_flags || [],
     review_notes: fields.review_notes || []
   };
@@ -394,16 +432,24 @@ async function tryLoadRuleDocuments(
   rulesDir: string
 ): Promise<RuleDocuments | undefined> {
   try {
-    const [fieldRules, productPrompt, categoryMapping] = await Promise.all([
-      readText(join(rulesDir, RULE_FILE_NAMES.fieldRules)),
-      readText(join(rulesDir, RULE_FILE_NAMES.productPrompt)),
-      readText(join(rulesDir, RULE_FILE_NAMES.categoryMapping))
-    ]);
+    const [fieldRules, productPrompt, categoryMapping, uploadSop, productUploadAu] =
+      await Promise.all([
+        readFirstMatchingFile(rulesDir, [RULE_FILE_NAMES.fieldRules]),
+        readFirstMatchingFile(rulesDir, [
+          "DSZ系统prompt 4月20版本.txt",
+          RULE_FILE_NAMES.productPrompt
+        ]),
+        readFirstMatchingFile(rulesDir, [RULE_FILE_NAMES.categoryMapping]),
+        readFirstMatchingFile(rulesDir, ["Full_Product_Upload_SOP.md"]),
+        readFirstMatchingFile(rulesDir, ["Product_Upload_AU.md"])
+      ]);
 
     return {
       fieldRules,
       productPrompt,
-      categoryMapping
+      categoryMapping,
+      uploadSop,
+      productUploadAu
     };
   } catch (error) {
     if (isMissingFileError(error)) {
@@ -412,6 +458,27 @@ async function tryLoadRuleDocuments(
 
     throw error;
   }
+}
+
+async function readFirstMatchingFile(
+  rulesDir: string,
+  fileNames: readonly string[]
+): Promise<string> {
+  let missingError: unknown;
+
+  for (const fileName of fileNames) {
+    try {
+      return await readText(join(rulesDir, fileName));
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+
+      missingError = error;
+    }
+  }
+
+  throw missingError;
 }
 
 async function readText(path: string): Promise<string> {
@@ -430,4 +497,16 @@ function isMissingFileError(error: unknown): boolean {
 function round(value: number, decimals: number): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
+}
+
+function isValidSku(value: string): boolean {
+  const match = /^Elosung(\d{5})$/.exec(value);
+  if (!match) return false;
+
+  const number = Number(match[1]);
+  return number >= 10000 && number <= 19999;
+}
+
+function isValidApiEan(value: string): boolean {
+  return /^\d{10}$/.test(value);
 }

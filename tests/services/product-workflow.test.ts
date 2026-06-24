@@ -1,3 +1,6 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
   buildAdminProductPayload,
@@ -61,7 +64,7 @@ const fields: DszProductFields = {
   colour: "Black / White / Beige",
   enabled: true,
   description:
-    "<p><strong>Product Overview</strong></p><p>Women cotton thong underwear designed for everyday comfort.</p><p><strong>Key Features</strong></p><ul><li>Soft cotton blend supports comfortable daily wear.</li></ul><p><strong>Notes</strong></p><p>Wash before first use.</p>",
+    "<p><strong>Product Overview</strong></p><p>Women cotton thong underwear designed for everyday comfort.</p><p><strong>Key Features</strong></p><ul><li>Soft cotton blend supports comfortable daily wear.</li></ul><p><strong>Notes</strong></p><p>Wash before first use.</p><p><strong>Returns, Refunds and Replacements </strong><br />Products received faulty, damaged, or not as described are eligible for review under ACL.</p><p><strong>Delivery Timeframe</strong></p><p>Delivery timeframes exclude weekends and public holidays.</p>",
   vendor_price: 19.74,
   rrp: 39.48,
   zone_rates: standardZoneRates(),
@@ -77,7 +80,9 @@ describe("DSZ field rules", () => {
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 7032"
+        categoryMapping: "Women's Intimates | 7032",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
       }
     });
 
@@ -116,14 +121,75 @@ ${JSON.stringify(fields)}
     expect(formatSku(10001)).toBe("Elosung10001");
   });
 
-  test("loads built-in rule documents when deployed rule files are missing", async () => {
+  test("loads bundled rule documents when external rule files are missing", async () => {
     const rules = await loadRuleDocuments({
       RULES_DIR: "Z:\\missing-dsz-rule-files"
     });
 
     expect(rules.fieldRules).toContain("Dropshipzone");
-    expect(rules.productPrompt).toContain("single-line HTML");
-    expect(rules.categoryMapping).toContain("Women's Intimates | 7032");
+    expect(rules.productPrompt).toContain("固定页脚规则");
+    expect(rules.categoryMapping).toContain("Fashion / Women's Fashion / Women's Intimates");
+    expect(rules.uploadSop).toContain("Dropshipzone 16 字段");
+    expect(rules.productUploadAu).toContain("澳洲独立站");
+  });
+
+  test("loads all provided DSZ rule documents from the rules directory", async () => {
+    const rulesDir = await mkdtemp(join(tmpdir(), "dsz-rules-"));
+
+    try {
+      await Promise.all([
+        writeFile(
+          join(rulesDir, "Dropshipzone_Field_Rules.md"),
+          "Dropshipzone Supplier API actual format. name and price are required.",
+          "utf8"
+        ),
+        writeFile(
+          join(rulesDir, "DSZ系统prompt 4月20版本.txt"),
+          "固定页脚规则. 输出规则. 最终自检.",
+          "utf8"
+        ),
+        writeFile(
+          join(rulesDir, "Category_Mapping.md"),
+          "Fashion / Women's Fashion / Women's Intimates | 7032",
+          "utf8"
+        ),
+        writeFile(
+          join(rulesDir, "Full_Product_Upload_SOP.md"),
+          "Dropshipzone 16 字段上品规则. Vendor Price. Vendor RRP.",
+          "utf8"
+        ),
+        writeFile(
+          join(rulesDir, "Product_Upload_AU.md"),
+          "澳洲独立站. 标题生成规则. HTML 描述结构.",
+          "utf8"
+        )
+      ]);
+
+      const rules = await loadRuleDocuments({ RULES_DIR: rulesDir });
+
+      expect(rules.fieldRules).toContain("name and price are required");
+      expect(rules.productPrompt).toContain("固定页脚规则");
+      expect(rules.categoryMapping).toContain("Women's Intimates | 7032");
+      expect(rules.uploadSop).toContain("Dropshipzone 16 字段");
+      expect(rules.productUploadAu).toContain("澳洲独立站");
+    } finally {
+      await rm(rulesDir, { recursive: true, force: true });
+    }
+  });
+
+  test("includes bundled category mapping and upload SOP in Packy field prompts", async () => {
+    const rules = await loadRuleDocuments({
+      RULES_DIR: "Z:\\missing-dsz-rule-files"
+    });
+    const messages = buildDszGenerationMessages({
+      input,
+      ruleDocuments: rules
+    });
+    const userMessage = messages[1].content;
+
+    expect(userMessage).toContain("Fashion / Women's Fashion / Women's Intimates");
+    expect(userMessage).toContain("FULL PRODUCT UPLOAD SOP");
+    expect(userMessage).toContain("Use ean_code as a 10 digit string");
   });
 
   test("falls back to local rules when Packy field generation is temporarily unavailable", async () => {
@@ -135,7 +201,9 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 7032"
+        categoryMapping: "Women's Intimates | 7032",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
       },
       fetchImpl: vi.fn(async () => new Response("Service unavailable", { status: 503 })) as unknown as typeof fetch
     });
@@ -173,7 +241,9 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 7032"
+        categoryMapping: "Women's Intimates | 7032",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
       },
       fetchImpl
     });
@@ -622,6 +692,17 @@ describe("admin upload helpers", () => {
     expect(body).toEqual({ products: [payload] });
   });
 
+  test("normalizes shipping zones to DSZ AU free shipping and NZ paid shipping rules", () => {
+    const payload = buildAdminProductPayload({
+      ...fields,
+      zone_rates: {
+        nz: 5
+      } as Record<string, number>
+    });
+
+    expect(payload.zone_rates).toEqual(standardZoneRates());
+  });
+
   test("builds only Dropshipzone API fields for live product upload", () => {
     const payload = buildAdminProductPayload({
       ...fields,
@@ -675,6 +756,47 @@ describe("admin upload helpers", () => {
       "https://cdn.example.com/only-image.jpg"
     ]);
     expect(validateDszProductFields(payload).valid).toBe(true);
+  });
+
+  test("validates all DSZ upload rule fields before live upload", () => {
+    const payload = {
+      ...buildAdminProductPayload({
+        ...fields,
+        category: 0,
+        categories: "",
+        product_name: "",
+        ean_code: "5901234567890",
+        weight: 0,
+        length: 0,
+        width: 0,
+        height: 0,
+        description: "<p>Missing required footer</p>\n<p>https://example.com</p>",
+        vendor_price: 0,
+        rrp: 0
+      }),
+      zone_rates: {
+        nz: 10
+      } as Record<string, number>
+    };
+
+    const result = validateDszProductFields(payload);
+
+    expect(result.valid).toBe(false);
+    expect(result.errors).toEqual(
+      expect.arrayContaining([
+        "Category must be a positive integer",
+        "Product name is required",
+        "Categories must be a string",
+        "EAN code must be a 10 digit string",
+        "Price must be greater than 0",
+        "Weight must be greater than 0",
+        "Length, width and height must be greater than 0",
+        "Description must be a single line",
+        "Description must not contain URLs",
+        "Description must include the required ACL and delivery footer",
+        "zone_rates must include all required shipping zones"
+      ])
+    );
   });
 
   test("returns mock upload body when token is missing", async () => {
