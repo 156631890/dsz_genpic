@@ -2,7 +2,7 @@ import type {
   AdminProductPayload,
   DszProductFields,
   ValidationResult
-} from "../../shared/product";
+} from "../../shared/product.js";
 
 const DEFAULT_ADMIN_BASE_URL =
   "https://services.dropshipzone.com.au/admin/api/supplier/v1";

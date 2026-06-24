@@ -6,18 +6,18 @@ import {
   resolveAdminConfig,
   uploadProduct,
   validateDszProductFields
-} from "./services/adminUploader";
-import { generateDszFieldsWithPacky } from "./services/dszRules";
-import { uploadImagesToImgbb } from "./services/imageUploader";
+} from "./services/adminUploader.js";
+import { generateDszFieldsWithPacky } from "./services/dszRules.js";
+import { uploadImagesToImgbb } from "./services/imageUploader.js";
 import {
   generateAmazonMainImagesWithPacky,
   generateImageWithPacky
-} from "./services/packyImages";
+} from "./services/packyImages.js";
 import type {
   DszProductFields,
   ProductGenerationResult,
   ProductInput
-} from "../shared/product";
+} from "../shared/product.js";
 
 const upload = multer({ storage: multer.memoryStorage() });
 

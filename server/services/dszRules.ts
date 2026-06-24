@@ -5,7 +5,7 @@ import type {
   DszProductFields,
   ProductGenerationResult,
   ProductInput
-} from "../../shared/product";
+} from "../../shared/product.js";
 
 export interface RuleDocuments {
   fieldRules: string;

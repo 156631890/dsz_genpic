@@ -1,4 +1,4 @@
-import type { GeneratedCopy, ProductDraft } from "../../shared/product";
+import type { GeneratedCopy, ProductDraft } from "../../shared/product.js";
 
 export interface ChatMessage {
   role: "system" | "user";
