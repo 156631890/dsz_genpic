@@ -12,6 +12,7 @@ import {
   calculateVendorPrice,
   formatSku,
   generateDszFieldsWithPacky,
+  loadRuleDocuments,
   parseGeneratedFields,
   standardZoneRates
 } from "../../server/services/dszRules";
@@ -113,6 +114,16 @@ ${JSON.stringify(fields)}
 
   test("formats Elosung SKU from local counter value", () => {
     expect(formatSku(10001)).toBe("Elosung10001");
+  });
+
+  test("loads built-in rule documents when deployed rule files are missing", async () => {
+    const rules = await loadRuleDocuments({
+      RULES_DIR: "Z:\\missing-dsz-rule-files"
+    });
+
+    expect(rules.fieldRules).toContain("Dropshipzone");
+    expect(rules.productPrompt).toContain("single-line HTML");
+    expect(rules.categoryMapping).toContain("Women's Intimates | 7032");
   });
 
   test("falls back to local rules when Packy field generation is temporarily unavailable", async () => {

@@ -26,6 +26,40 @@ const DEFAULT_CATEGORY = {
 const FOOTER =
   "<p><strong>Returns, Refunds and Replacements </strong><br />Products that are received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with the Australian Consumer Law (ACL). We are committed to ensuring all products meet the standards of quality and reliability expected by our customers. However, please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p><p><strong>Delivery Timeframe</strong></p><p>Please note that we cannot guarantee the exact date of arrival, and the delivery timeframes excluding weekends and public holidays are as follows:</p><ul><li>For customers in Victoria, approximately 7-10 working days;</li><li>For customers in NSW, SA, ACT, and QLD, approximately 9-12 working days;</li><li>For customers in WA, NT, and TAS, approximately 9-12 working days.</li></ul>";
 
+const RULE_FILE_NAMES = {
+  fieldRules: "Dropshipzone_Field_Rules.md",
+  productPrompt: "DSZ系统prompt 4月20版本.txt",
+  categoryMapping: "Category_Mapping.md"
+} as const;
+
+const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
+  fieldRules: [
+    "Dropshipzone supplier product field rules for POST /products.",
+    "Return one product object that can be wrapped as { products: [product] }.",
+    "Use category as an integer and categories as a string.",
+    "Use product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates and images.",
+    "sku must use the Elosung prefix. ean_code must be a 10 digit string. brand_name must be Elosung. status must be 1. stock must be 1000.",
+    "images must be HTTPS URL strings and should include at least 4 product images.",
+    "weight is in kg. length, width and height are in cm. cbm is length * width * height / 1000000.",
+    "vendor_price formula: (MAX(weight, length * width * height / 8000) * 40 + 45 + purchasePriceCny) / 3.05. rrp is vendor_price * 2.",
+    "zone_rates must include Australian regions at 0 and nz at 10."
+  ].join("\n"),
+  productPrompt: [
+    "Generate a pure English ecommerce title and product description for an Australian independent store.",
+    "Do not invent unsupported specifications, certifications, links, logos, brand claims, materials or measurements.",
+    "The title should be concise, searchable and based on visible product features plus seller selling points.",
+    "The description must be single-line HTML.",
+    "Allowed HTML tags only: <p>, <strong>, <ul>, <li>, <br />.",
+    "Include Product Overview, Key Features and Notes sections when useful.",
+    "Always include this fixed ACL and Delivery Timeframe footer:",
+    FOOTER
+  ].join("\n"),
+  categoryMapping: [
+    "Women's Intimates | 7032",
+    "Default | 1 | General Goods"
+  ].join("\n")
+};
+
 export function buildDszGenerationMessages(input: {
   input: ProductInput;
   ruleDocuments: RuleDocuments;
@@ -184,20 +218,15 @@ export function standardZoneRates(): Record<string, number> {
 export async function loadRuleDocuments(
   env: Record<string, string | undefined> = process.env
 ): Promise<RuleDocuments> {
-  const rulesDir =
-    env.RULES_DIR ||
-    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  const [fieldRules, productPrompt, categoryMapping] = await Promise.all([
-    readText(join(rulesDir, "Dropshipzone_Field_Rules.md")),
-    readText(join(rulesDir, "DSZ系统prompt 4月20版本.txt")),
-    readText(join(rulesDir, "Category_Mapping.md"))
-  ]);
+  for (const rulesDir of getRuleDirectories(env)) {
+    const documents = await tryLoadRuleDocuments(rulesDir);
 
-  return {
-    fieldRules,
-    productPrompt,
-    categoryMapping
-  };
+    if (documents) {
+      return documents;
+    }
+  }
+
+  return BUILT_IN_RULE_DOCUMENTS;
 }
 
 function buildFallbackFields(
@@ -347,8 +376,55 @@ function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
 }
 
+function getRuleDirectories(env: Record<string, string | undefined>): string[] {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const candidates = [
+    env.RULES_DIR,
+    join(process.cwd(), "rules"),
+    join(moduleDir, "..", "..", "rules"),
+    env.RULES_DIR ? undefined : join(moduleDir, "..", "..", "..")
+  ];
+
+  return Array.from(
+    new Set(candidates.filter((candidate): candidate is string => Boolean(candidate)))
+  );
+}
+
+async function tryLoadRuleDocuments(
+  rulesDir: string
+): Promise<RuleDocuments | undefined> {
+  try {
+    const [fieldRules, productPrompt, categoryMapping] = await Promise.all([
+      readText(join(rulesDir, RULE_FILE_NAMES.fieldRules)),
+      readText(join(rulesDir, RULE_FILE_NAMES.productPrompt)),
+      readText(join(rulesDir, RULE_FILE_NAMES.categoryMapping))
+    ]);
+
+    return {
+      fieldRules,
+      productPrompt,
+      categoryMapping
+    };
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
 async function readText(path: string): Promise<string> {
   return readFile(path, "utf8");
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code !== undefined &&
+    ["ENOENT", "ENOTDIR"].includes(String((error as NodeJS.ErrnoException).code))
+  );
 }
 
 function round(value: number, decimals: number): number {
