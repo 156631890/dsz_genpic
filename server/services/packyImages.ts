@@ -120,14 +120,61 @@ export async function generateAmazonMainImagesWithPacky(input: {
   }
 
   const count = clampAmazonImageCount(input.count);
+  const fetcher = input.fetchImpl || fetch;
+  const firstBatch = await requestPackyAmazonMainImageUrls({
+    images: input.images,
+    productType: input.productType,
+    sellingPoints: input.sellingPoints,
+    count,
+    env,
+    fetcher,
+    apiKey
+  });
+  const missingCount = count - firstBatch.length;
+  const extraBatches =
+    missingCount > 0
+      ? await Promise.all(
+          Array.from({ length: missingCount }, () =>
+            requestPackyAmazonMainImageUrls({
+              images: input.images,
+              productType: input.productType,
+              sellingPoints: input.sellingPoints,
+              count: 1,
+              env,
+              fetcher,
+              apiKey
+            })
+          )
+        )
+      : [];
+  const imageUrls = uniqueList([...firstBatch, ...extraBatches.flat()]).slice(0, count);
+
+  if (imageUrls.length < 4) {
+    throw new Error(
+      `Packy Amazon main image API returned ${imageUrls.length} image URLs; at least 4 are required.`
+    );
+  }
+
+  return { imageUrls };
+}
+
+async function requestPackyAmazonMainImageUrls(input: {
+  images: Express.Multer.File[];
+  productType: string;
+  sellingPoints: string;
+  count: number;
+  env: Record<string, string | undefined>;
+  fetcher: typeof fetch;
+  apiKey: string;
+}): Promise<string[]> {
   const request = buildPackyEditRequest({
-    baseUrl: env.PACKY_BASE_URL,
-    model: env.PACKY_IMAGE_MODEL,
+    baseUrl: input.env.PACKY_BASE_URL,
+    model: input.env.PACKY_IMAGE_MODEL,
     productType: input.productType,
     prompt: buildAmazonMainImagePrompt(input.sellingPoints),
-    count,
-    size: env.PACKY_IMAGE_SIZE || "1024x1024",
-    quality: normalizeQuality(env.PACKY_IMAGE_QUALITY)
+    count: input.count,
+    size: input.env.PACKY_IMAGE_SIZE || "1024x1024",
+    quality: normalizeQuality(input.env.PACKY_IMAGE_QUALITY)
   });
   const form = new FormData();
 
@@ -145,11 +192,10 @@ export async function generateAmazonMainImagesWithPacky(input: {
     );
   }
 
-  const fetcher = input.fetchImpl || fetch;
-  const response = await fetcher(request.url, {
+  const response = await input.fetcher(request.url, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${input.apiKey}`
     },
     body: form
   });
@@ -161,13 +207,7 @@ export async function generateAmazonMainImagesWithPacky(input: {
   const data = (await response.json()) as {
     data?: PackyImageResult[];
   };
-  const imageUrls = await resolvePackyImageUrls(data.data || [], env, fetcher);
-
-  if (imageUrls.length === 0) {
-    throw new Error("Packy Amazon main image API returned no images.");
-  }
-
-  return { imageUrls };
+  return resolvePackyImageUrls(data.data || [], input.env, input.fetcher);
 }
 
 function buildAmazonMainImagePrompt(sellingPoints: string): string {
@@ -257,6 +297,10 @@ function normalizeQuality(value?: string): "low" | "medium" | "high" | "auto" {
   }
 
   return "high";
+}
+
+function uniqueList(values: string[]): string[] {
+  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function trimTrailingSlash(value: string): string {

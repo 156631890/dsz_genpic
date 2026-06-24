@@ -350,6 +350,57 @@ describe("Packy image helpers", () => {
     ]);
   });
 
+  test("requests extra Packy main images when the first response has fewer than requested", async () => {
+    const packyUrls = [
+      ["https://cdn.example.com/main-1.png"],
+      ["https://cdn.example.com/main-2.png"],
+      ["https://cdn.example.com/main-3.png"],
+      ["https://cdn.example.com/main-4.png"]
+    ];
+    const fetchMock = vi.fn(async (_url, init) => {
+      const form = init?.body as FormData;
+      const callIndex = fetchMock.mock.calls.length - 1;
+
+      expect(init?.headers).toEqual({
+        Authorization: "Bearer image-key"
+      });
+      expect(form.get("n")).toBe(callIndex === 0 ? "4" : "1");
+
+      return new Response(
+        JSON.stringify({
+          data: packyUrls[callIndex].map((url) => ({ url }))
+        }),
+        { status: 200 }
+      );
+    });
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+
+    const result = await generateAmazonMainImagesWithPacky({
+      images: [
+        {
+          buffer: Buffer.from("front"),
+          mimetype: "image/png",
+          originalname: "front.png"
+        }
+      ] as Express.Multer.File[],
+      productType: "Women Cotton Thong Underwear",
+      sellingPoints: "Soft cotton breathable stretch everyday fit",
+      count: 4,
+      env: {
+        PACKY_IMAGE_API_KEY: "image-key"
+      },
+      fetchImpl
+    });
+
+    expect(result.imageUrls).toEqual([
+      "https://cdn.example.com/main-1.png",
+      "https://cdn.example.com/main-2.png",
+      "https://cdn.example.com/main-3.png",
+      "https://cdn.example.com/main-4.png"
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   test("uploads Packy base64 Amazon main images to ImgBB and keeps URL order", async () => {
     const fetchMock = vi.fn(async (url, init) => {
       if (String(url).includes("/v1/images/edits")) {
@@ -358,7 +409,8 @@ describe("Packy image helpers", () => {
             data: [
               { b64_json: Buffer.from("main-1").toString("base64") },
               { url: "https://cdn.example.com/main-2.png" },
-              { b64_json: Buffer.from("main-3").toString("base64") }
+              { b64_json: Buffer.from("main-3").toString("base64") },
+              { url: "https://cdn.example.com/main-4.png" }
             ]
           }),
           { status: 200 }
@@ -391,6 +443,7 @@ describe("Packy image helpers", () => {
       ] as Express.Multer.File[],
       productType: "Women Cotton Thong Underwear",
       sellingPoints: "Soft cotton breathable stretch everyday fit",
+      count: 4,
       env: {
         PACKY_IMAGE_API_KEY: "image-key",
         IMGBB_API_KEY: "imgbb-key"
@@ -401,7 +454,8 @@ describe("Packy image helpers", () => {
     expect(result.imageUrls).toEqual([
       "https://i.ibb.co/main-1.png",
       "https://cdn.example.com/main-2.png",
-      "https://i.ibb.co/main-2.png"
+      "https://i.ibb.co/main-2.png",
+      "https://cdn.example.com/main-4.png"
     ]);
     expect(result.imageUrls.every((url) => url.startsWith("https://"))).toBe(true);
     expect(result.imageUrls.some((url) => url.startsWith("data:image"))).toBe(false);
