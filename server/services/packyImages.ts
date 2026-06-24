@@ -1,5 +1,7 @@
 import { uploadImagesToImgbb } from "./imageUploader.js";
 
+const PACKY_MAIN_IMAGE_MAX_ATTEMPTS = 3;
+
 export interface PackyEditInput {
   baseUrl?: string;
   model?: string;
@@ -130,7 +132,8 @@ export async function generateAmazonMainImagesWithPacky(input: {
       count,
       env,
       fetcher,
-      apiKey
+      apiKey,
+      maxAttempts: PACKY_MAIN_IMAGE_MAX_ATTEMPTS
     });
     const missingCount = count - firstBatch.length;
     const extraBatches =
@@ -144,7 +147,8 @@ export async function generateAmazonMainImagesWithPacky(input: {
                 count: 1,
                 env,
                 fetcher,
-                apiKey
+                apiKey,
+                maxAttempts: PACKY_MAIN_IMAGE_MAX_ATTEMPTS
               })
             )
           )
@@ -171,6 +175,31 @@ export async function generateAmazonMainImagesWithPacky(input: {
 }
 
 async function requestPackyAmazonMainImageUrls(input: {
+  images: Express.Multer.File[];
+  productType: string;
+  sellingPoints: string;
+  count: number;
+  env: Record<string, string | undefined>;
+  fetcher: typeof fetch;
+  apiKey: string;
+  maxAttempts?: number;
+}): Promise<string[]> {
+  const maxAttempts = input.maxAttempts || 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await requestPackyAmazonMainImageUrlsOnce(input);
+    } catch (error) {
+      if (attempt === maxAttempts || !isPackyTransientImageError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  return [];
+}
+
+async function requestPackyAmazonMainImageUrlsOnce(input: {
   images: Express.Multer.File[];
   productType: string;
   sellingPoints: string;

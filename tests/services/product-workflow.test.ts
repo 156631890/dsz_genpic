@@ -401,6 +401,58 @@ describe("Packy image helpers", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  test("retries transient Packy main image failures before falling back", async () => {
+    const fetchMock = vi.fn(async (url, init) => {
+      expect(String(url)).toContain("/v1/images/edits");
+      expect(init?.headers).toEqual({
+        Authorization: "Bearer image-key"
+      });
+
+      if (fetchMock.mock.calls.length < 3) {
+        return new Response("Service unavailable", { status: 503 });
+      }
+
+      return new Response(
+        JSON.stringify({
+          data: [
+            { url: "https://cdn.example.com/retry-main-1.png" },
+            { url: "https://cdn.example.com/retry-main-2.png" },
+            { url: "https://cdn.example.com/retry-main-3.png" },
+            { url: "https://cdn.example.com/retry-main-4.png" }
+          ]
+        }),
+        { status: 200 }
+      );
+    });
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+
+    const result = await generateAmazonMainImagesWithPacky({
+      images: [
+        {
+          buffer: Buffer.from("front"),
+          mimetype: "image/png",
+          originalname: "front.png"
+        }
+      ] as Express.Multer.File[],
+      productType: "Women Cotton Thong Underwear",
+      sellingPoints: "Soft cotton breathable stretch everyday fit",
+      count: 4,
+      env: {
+        PACKY_IMAGE_API_KEY: "image-key",
+        IMGBB_API_KEY: "imgbb-key"
+      },
+      fetchImpl
+    });
+
+    expect(result.imageUrls).toEqual([
+      "https://cdn.example.com/retry-main-1.png",
+      "https://cdn.example.com/retry-main-2.png",
+      "https://cdn.example.com/retry-main-3.png",
+      "https://cdn.example.com/retry-main-4.png"
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   test("falls back to ImgBB source image URLs when Packy main image API is unavailable", async () => {
     const fetchMock = vi.fn(async (url, init) => {
       if (String(url).includes("/v1/images/edits")) {
@@ -443,7 +495,7 @@ describe("Packy image helpers", () => {
       "https://i.ibb.co/source-fallback.png",
       "https://i.ibb.co/source-fallback.png"
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   test("uploads Packy base64 Amazon main images to ImgBB and keeps URL order", async () => {
