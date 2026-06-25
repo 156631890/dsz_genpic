@@ -95,6 +95,12 @@ describe("DSZ field rules", () => {
       "product_name and description must follow the DSZ system prompt rules"
     );
     expect(messages[1].content).toContain(
+      "description must include Product Overview, Key Features, Why It Stands Out and Notes"
+    );
+    expect(messages[1].content).toContain(
+      "Use Specifications, Ideal For and FAQ only when supported by reliable input"
+    );
+    expect(messages[1].content).toContain(
       "return strict JSON for this API call"
     );
     expect(messages[1].content).toContain(
@@ -222,6 +228,56 @@ ${JSON.stringify(fields)}
     expect(result.fields.review_notes).toContain(
       "Packy field generation failed with 503. Local fallback fields were generated."
     );
+    expect(result.fields.description).toContain("<p><strong>Product Overview</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Key Features</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Ideal For</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
+    expect(result.fields.description).not.toMatch(/\r|\n/);
+  });
+
+  test("repairs AI descriptions that do not follow the DSZ product prompt structure", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  ...fields,
+                  description: "<p>Comfortable daily underwear.</p>"
+                })
+              }
+            }
+          ]
+        }),
+        { status: 200 }
+      )
+    ) as unknown as typeof fetch;
+
+    const result = await generateDszFieldsWithPacky({
+      productInput: input,
+      env: {
+        PACKY_API_KEY: "packy-key"
+      },
+      ruleDocuments: {
+        fieldRules: "F2 Product Name. F13 Vendor Product Description.",
+        productPrompt: "Title must be pure English. HTML must be single line.",
+        categoryMapping: "Women's Intimates | 947",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
+      },
+      fetchImpl
+    });
+
+    expect(result.source).toBe("ai");
+    expect(result.fields.description).toContain("<p><strong>Product Overview</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Key Features</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Ideal For</strong></p>");
+    expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
+    expect(result.fields.description).toContain("Returns, Refunds and Replacements");
+    expect(result.fields.description).not.toMatch(/\r|\n/);
   });
 
   test("uses explicit category hint to correct stale AI category IDs", async () => {
@@ -458,7 +514,12 @@ describe("Packy image helpers", () => {
       expect(form.get("model")).toBe("gpt-image-2");
       expect(form.get("n")).toBe("5");
       expect(String(form.get("prompt"))).toContain("Shopify product gallery");
-      expect(String(form.get("prompt"))).toContain("Image 1 URL role: main image");
+      expect(String(form.get("prompt"))).toContain("Images 1 to 3 are product-only feature images");
+      expect(String(form.get("prompt"))).toContain("Images 4 and 5 are scene-only lifestyle images");
+      expect(String(form.get("prompt"))).toContain(
+        "Do not mix product-only feature images with lifestyle scene images"
+      );
+      expect(String(form.get("prompt"))).toContain("Image 1 URL role: feature main image");
       expect(String(form.get("prompt"))).toContain("Image 2 URL role: side angle");
       expect(String(form.get("prompt"))).toContain("Image 3 URL role: size, packaging, or detail");
       expect(String(form.get("prompt"))).toContain("Image 4 URL role: lifestyle scene 1");

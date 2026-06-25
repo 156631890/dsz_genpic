@@ -183,6 +183,13 @@ const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
 const FOOTER =
   "<p><strong>Returns, Refunds and Replacements </strong><br />Products that are received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with the Australian Consumer Law (ACL). We are committed to ensuring all products meet the standards of quality and reliability expected by our customers. However, please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p><p><strong>Delivery Timeframe</strong></p><p>Please note that we cannot guarantee the exact date of arrival, and the delivery timeframes excluding weekends and public holidays are as follows:</p><ul><li>For customers in Victoria, approximately 7-10 working days;</li><li>For customers in NSW, SA, ACT, and QLD, approximately 9-12 working days;</li><li>For customers in WA, NT, and TAS, approximately 9-12 working days.</li></ul>";
 
+const REQUIRED_DESCRIPTION_SECTIONS = [
+  "Product Overview",
+  "Key Features",
+  "Why It Stands Out",
+  "Notes"
+];
+
 const RULE_FILE_NAMES = {
   fieldRules: "Dropshipzone_Field_Rules.md",
   productPrompt: "DSZ系统prompt 4月20版本.txt",
@@ -259,6 +266,8 @@ export function buildDszGenerationMessages(input: {
         JSON.stringify(input.input, null, 2),
         "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates, images, risk_flags, review_notes.",
         "product_name and description must follow the DSZ system prompt rules. If the DSZ system prompt says to output only two final lines, use that as content guidance only; return strict JSON for this API call.",
+        "description must include Product Overview, Key Features, Why It Stands Out and Notes sections in that order, followed by the fixed footer.",
+        "Use Specifications, Ideal For and FAQ only when supported by reliable input. Do not invent specs, package contents, certifications, measurements, URLs or brand claims.",
         "Choose exactly one best matching Category_Mapping ID from the category mapping. Prefer the most specific sub-subcategory that matches categoryHint, selling points, product type and image context. Do not default every product to Women's Intimates.",
         "Use internal JSON key product_name for the title and vendor_price for Vendor Price. The uploader maps product_name to DSZ API name and vendor_price to DSZ API price.",
         "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer.",
@@ -470,9 +479,13 @@ function completeGeneratedFields(
   });
   const hintedCategory = resolveCategoryHint(input.categoryHint);
 
-  if (!merged.description.includes("Returns, Refunds and Replacements")) {
+  merged.description = normalizeDescriptionHtml(merged.description);
+  if (!followsDszDescriptionPrompt(merged.description)) {
+    merged.description = buildFallbackDescription(input);
+  } else if (!merged.description.includes("Returns, Refunds and Replacements")) {
     merged.description = `${merged.description}${FOOTER}`;
   }
+  merged.description = normalizeDescriptionHtml(merged.description);
   if (hintedCategory) {
     merged.category = hintedCategory.id;
     merged.categories = String(hintedCategory.id);
@@ -592,7 +605,31 @@ function buildFallbackTitle(input: ProductInput): string {
 function buildFallbackDescription(input: ProductInput): string {
   const safeSellingPoints = input.sellingPoints.trim() || "This product is prepared for ecommerce listing.";
 
-  return `<p><strong>Product Overview</strong></p><p>${escapeHtml(safeSellingPoints)}</p><p><strong>Key Features</strong></p><ul><li>Prepared from uploaded product images and seller provided selling points.</li><li>Suitable for manual review before Dropshipzone submission.</li></ul><p><strong>Notes</strong></p><p>Please review all generated specifications before publishing.</p>${FOOTER}`;
+  return normalizeDescriptionHtml(
+    [
+      `<p><strong>Product Overview</strong></p><p>${escapeHtml(safeSellingPoints)}</p>`,
+      "<p><strong>Key Features</strong></p><ul><li>Uses the uploaded product images and seller provided selling points for a conservative product listing.</li><li>Highlights practical everyday value without unsupported claims or invented specifications.</li><li>Prepared as single-line HTML for Dropshipzone product upload review.</li></ul>",
+      "<p><strong>Why It Stands Out</strong></p><p>The listing focuses on clear product identification, visible features and verified seller information so customers can quickly understand the product and its use case.</p>",
+      "<p><strong>Ideal For</strong></p><p>Suitable for customers looking for a practical everyday product with a clear independent store product page presentation.</p>",
+      "<p><strong>Notes</strong></p><p>Please review all generated specifications, pricing, category and images before publishing.</p>",
+      FOOTER
+    ].join("")
+  );
+}
+
+function followsDszDescriptionPrompt(description: string): boolean {
+  const normalized = description.toLowerCase();
+
+  return REQUIRED_DESCRIPTION_SECTIONS.every((section) =>
+    normalized.includes(section.toLowerCase())
+  );
+}
+
+function normalizeDescriptionHtml(description: string): string {
+  return String(description || "")
+    .replace(/\s*\r?\n\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 function titleCase(value: string): string {
