@@ -62,10 +62,13 @@ export async function generateCopyWithPacky(input: {
   fetchImpl?: typeof fetch;
 }): Promise<GeneratedCopy> {
   const env = input.env || process.env;
-  const apiKey = env.PACKY_API_KEY;
+  const apiKey =
+    env.PACKY_FIELD_API_KEY || env.PACKY_TEXT_API_KEY || env.PACKY_API_KEY;
 
   if (!apiKey) {
-    throw new Error("缺少 PACKY_API_KEY，无法生成商品文案");
+    throw new Error(
+      "Missing PACKY_FIELD_API_KEY, PACKY_TEXT_API_KEY, or PACKY_API_KEY. Cannot generate product copy."
+    );
   }
 
   const baseUrl = (env.PACKY_BASE_URL || "https://www.packyapi.com").replace(

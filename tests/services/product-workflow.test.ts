@@ -19,6 +19,7 @@ import {
   parseGeneratedFields,
   standardZoneRates
 } from "../../server/services/dszRules";
+import { generateCopyWithPacky } from "../../server/services/copyGenerator";
 import {
   buildPackyEditRequest,
   generateShopifyProductImagesWithPacky,
@@ -438,6 +439,58 @@ ${JSON.stringify(fields)}
 
     expect(result.source).toBe("ai");
     expect(result.fields.sku).toBe("Elosung10001");
+  });
+});
+
+describe("Packy copy helpers", () => {
+  test("uses the field-specific Packy API key for text copy generation", async () => {
+    const fetchImpl = vi.fn(async (_url, init) => {
+      expect(init?.headers).toEqual({
+        Authorization: "Bearer field-key",
+        "Content-Type": "application/json"
+      });
+      expect(JSON.parse(String(init?.body)).model).toBe("field-model");
+
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  title: "Women Cotton Thong Underwear",
+                  bullets: ["Soft cotton blend"],
+                  description: "Comfortable everyday underwear"
+                })
+              }
+            }
+          ]
+        }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await generateCopyWithPacky({
+      draft: {
+        sku: "Elosung10001",
+        productType: "Women Cotton Thong Underwear",
+        material: "95% cotton, 5% elastane",
+        colors: "Black / White / Beige",
+        sizes: "S-XL",
+        packaging: "Single pack",
+        weight: "20g",
+        cartonSpec: "600 pieces per carton",
+        sellingPoints: "Soft stretch cotton for daily comfort.",
+        imageUrls: []
+      },
+      env: {
+        PACKY_API_KEY: "shared-key",
+        PACKY_FIELD_API_KEY: "field-key",
+        PACKY_TEXT_MODEL: "field-model"
+      },
+      fetchImpl
+    });
+
+    expect(result.title).toBe("Women Cotton Thong Underwear");
   });
 });
 
