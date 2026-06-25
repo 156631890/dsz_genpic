@@ -24,6 +24,113 @@ const DEFAULT_CATEGORY = {
   id: 1,
   name: "General Goods"
 };
+const CATEGORY_HINTS = [
+  {
+    id: 947,
+    name: "Fashion / Women's Fashion / Women's Intimates",
+    keywords: [
+      "women's intimates",
+      "womens intimates",
+      "intimate",
+      "thong",
+      "women underwear",
+      "women's underwear",
+      "女士内衣",
+      "女士内裤",
+      "女士丁字裤",
+      "丁字裤"
+    ]
+  },
+  {
+    id: 952,
+    name: "Fashion / Women's Fashion / Women's Lingerie",
+    keywords: [
+      "women's lingerie",
+      "womens lingerie",
+      "lingerie",
+      "bra",
+      "女士文胸",
+      "文胸",
+      "女士内衣套装",
+      "女性内衣"
+    ]
+  },
+  {
+    id: 953,
+    name: "Fashion / Women's Fashion / Women's Sleepwear",
+    keywords: [
+      "women's sleepwear",
+      "womens sleepwear",
+      "sleepwear",
+      "pyjama",
+      "pajama",
+      "nightwear",
+      "女士睡衣",
+      "女式睡衣",
+      "睡衣"
+    ]
+  },
+  {
+    id: 956,
+    name: "Fashion / Women's Fashion / Women's Swimwear",
+    keywords: [
+      "women's swimwear",
+      "womens swimwear",
+      "women swimwear",
+      "swimwear",
+      "swimsuit",
+      "bikini",
+      "女士泳装",
+      "女士泳衣",
+      "女式泳装",
+      "泳装",
+      "泳衣",
+      "比基尼"
+    ]
+  },
+  {
+    id: 936,
+    name: "Fashion / Men's Fashion / Men's Underwear & Socks",
+    keywords: [
+      "men's underwear",
+      "mens underwear",
+      "men underwear",
+      "men's socks",
+      "mens socks",
+      "男士内裤",
+      "男士袜子",
+      "男式内裤",
+      "男内裤"
+    ]
+  },
+  {
+    id: 929,
+    name: "Fashion / Men's Fashion / Men's Sleepwear",
+    keywords: [
+      "men's sleepwear",
+      "mens sleepwear",
+      "men sleepwear",
+      "men's pyjama",
+      "mens pajama",
+      "男士睡衣",
+      "男式睡衣"
+    ]
+  },
+  {
+    id: 961,
+    name: "Fashion / Men's Fashion / Men's Swimwear",
+    keywords: [
+      "men's swimwear",
+      "mens swimwear",
+      "men swimwear",
+      "men's swimsuit",
+      "mens swimsuit",
+      "男士泳装",
+      "男士泳衣",
+      "男式泳装"
+    ]
+  }
+] as const;
 const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
   "7000": "916",
   "7001": "917",
@@ -314,7 +421,7 @@ function buildFallbackFields(
     heightCm: height,
     purchasePriceCny: input.purchasePriceCny || 0
   });
-  const category = guessCategory(input);
+  const category = resolveCategoryHint(input.categoryHint) || guessCategory(input);
   const productName = buildFallbackTitle(input);
 
   return {
@@ -361,9 +468,15 @@ function completeGeneratedFields(
     images: fields.images?.length ? fields.images : input.imageUrls,
     zone_rates: fields.zone_rates || standardZoneRates()
   });
+  const hintedCategory = resolveCategoryHint(input.categoryHint);
 
   if (!merged.description.includes("Returns, Refunds and Replacements")) {
     merged.description = `${merged.description}${FOOTER}`;
+  }
+  if (hintedCategory) {
+    merged.category = hintedCategory.id;
+    merged.categories = String(hintedCategory.id);
+    merged.categoryName = hintedCategory.name;
   }
   if (!isValidSku(merged.sku)) {
     merged.sku = fallback.sku;
@@ -426,6 +539,11 @@ interface ProductIdentity {
 
 function guessCategory(input: ProductInput) {
   const text = `${input.categoryHint || ""} ${input.sellingPoints}`.toLowerCase();
+  const category = resolveCategoryHint(text);
+
+  if (category) {
+    return category;
+  }
 
   if (text.includes("intimate") || text.includes("underwear") || text.includes("thong")) {
     return {
@@ -435,6 +553,33 @@ function guessCategory(input: ProductInput) {
   }
 
   return DEFAULT_CATEGORY;
+}
+
+function resolveCategoryHint(value?: string) {
+  const normalized = normalizeSearchText(value);
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  return CATEGORY_HINTS.flatMap((category) =>
+    category.keywords.map((keyword) => ({
+      category,
+      keyword: normalizeSearchText(keyword)
+    }))
+  )
+    .filter((match) => match.keyword && normalized.includes(match.keyword))
+    .sort((left, right) => right.keyword.length - left.keyword.length)[0]
+    ?.category;
+}
+
+function normalizeSearchText(value?: string): string {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/&/g, " and ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function buildFallbackTitle(input: ProductInput): string {

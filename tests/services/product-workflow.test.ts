@@ -224,6 +224,85 @@ ${JSON.stringify(fields)}
     );
   });
 
+  test("uses explicit category hint to correct stale AI category IDs", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{ message: { content: JSON.stringify(fields) } }]
+        }),
+        { status: 200 }
+      )
+    ) as unknown as typeof fetch;
+
+    const result = await generateDszFieldsWithPacky({
+      productInput: {
+        ...input,
+        categoryHint: "Women's Swimwear"
+      },
+      env: {
+        PACKY_API_KEY: "packy-key"
+      },
+      ruleDocuments: {
+        fieldRules: "F2 Product Name. F13 Vendor Product Description.",
+        productPrompt: "Title must be pure English. HTML must be single line.",
+        categoryMapping: "Fashion / Women's Fashion / Women's Swimwear | 956",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
+      },
+      fetchImpl
+    });
+
+    expect(result.source).toBe("ai");
+    expect(result.fields.category).toBe(956);
+    expect(result.fields.categories).toBe("956");
+    expect(result.fields.categoryName).toBe("Fashion / Women's Fashion / Women's Swimwear");
+  });
+
+  test("uses Chinese category hints for local fallback category IDs", async () => {
+    const result = await generateDszFieldsWithPacky({
+      productInput: {
+        ...input,
+        categoryHint: "女士泳装",
+        sellingPoints: "women beach swimwear"
+      },
+      env: {},
+      ruleDocuments: {
+        fieldRules: "F2 Product Name. F13 Vendor Product Description.",
+        productPrompt: "Title must be pure English. HTML must be single line.",
+        categoryMapping: "Fashion / Women's Fashion / Women's Swimwear | 956",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
+      }
+    });
+
+    expect(result.source).toBe("fallback");
+    expect(result.fields.category).toBe(956);
+    expect(result.fields.categories).toBe("956");
+    expect(result.fields.categoryName).toBe("Fashion / Women's Fashion / Women's Swimwear");
+  });
+
+  test("prefers specific gendered category hints over generic keywords", async () => {
+    const result = await generateDszFieldsWithPacky({
+      productInput: {
+        ...input,
+        categoryHint: "Men's Swimwear",
+        sellingPoints: "quick dry beach swim shorts"
+      },
+      env: {},
+      ruleDocuments: {
+        fieldRules: "F2 Product Name. F13 Vendor Product Description.",
+        productPrompt: "Title must be pure English. HTML must be single line.",
+        categoryMapping: "Fashion / Men's Fashion / Men's Swimwear | 961",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
+      }
+    });
+
+    expect(result.fields.category).toBe(961);
+    expect(result.fields.categories).toBe("961");
+    expect(result.fields.categoryName).toBe("Fashion / Men's Fashion / Men's Swimwear");
+  });
+
   test("uses the field-specific Packy API key for DSZ field generation", async () => {
     const fetchImpl = vi.fn(async (_url, init) => {
       expect(init?.headers).toEqual({
