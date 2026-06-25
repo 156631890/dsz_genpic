@@ -90,7 +90,10 @@ export async function generateImageWithPacky(input: {
     throw new Error(`Packy image edit API failed: ${response.status}`);
   }
 
-  const data = (await response.json()) as {
+  const data = (await readPackyImageJson(
+    response,
+    "Packy image edit API"
+  )) as {
     data?: PackyImageResult[];
   };
   const imageUrls = await resolvePackyImageUrls(data.data || [], env, fetcher);
@@ -236,7 +239,10 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
     throw new Error(`Packy Shopify product image API failed: ${response.status}`);
   }
 
-  const data = (await response.json()) as {
+  const data = (await readPackyImageJson(
+    response,
+    "Packy Shopify product image API"
+  )) as {
     data?: PackyImageResult[];
   };
   return resolvePackyImageUrls(data.data || [], input.env, input.fetcher);
@@ -346,7 +352,28 @@ function isPackyTransientImageError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   const match = error.message.match(/^Packy Shopify product image API failed: (\d{3})$/);
 
-  return Boolean(match && Number(match[1]) >= 500);
+  return (
+    Boolean(match && Number(match[1]) >= 500) ||
+    error.message === "Packy Shopify product image API returned non-JSON response" ||
+    error.message === "Packy Shopify product image API returned empty response"
+  );
+}
+
+async function readPackyImageJson(
+  response: Response,
+  context: string
+): Promise<unknown> {
+  const text = await response.text();
+
+  if (!text.trim()) {
+    throw new Error(`${context} returned empty response`);
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${context} returned non-JSON response`);
+  }
 }
 
 function padUrlList(urls: string[], count: number): string[] {

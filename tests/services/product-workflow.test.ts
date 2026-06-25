@@ -767,6 +767,55 @@ describe("Packy image helpers", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
+  test("falls back when Packy Shopify product image API returns non-JSON text", async () => {
+    const fetchMock = vi.fn(async (url, init) => {
+      if (String(url).includes("/v1/images/edits")) {
+        return new Response("An error occurred while generating the image", {
+          status: 200,
+          headers: { "Content-Type": "text/plain" }
+        });
+      }
+
+      expect(String(url)).toBe("https://api.imgbb.com/1/upload?key=imgbb-key");
+      expect((init?.body as FormData).get("image")).toBeTruthy();
+
+      return new Response(
+        JSON.stringify({
+          data: { display_url: "https://i.ibb.co/non-json-fallback.png" }
+        }),
+        { status: 200 }
+      );
+    });
+    const fetchImpl = fetchMock as unknown as typeof fetch;
+
+    const result = await generateShopifyProductImagesWithPacky({
+      images: [
+        {
+          buffer: Buffer.from("front"),
+          mimetype: "image/png",
+          originalname: "front.png"
+        }
+      ] as Express.Multer.File[],
+      productType: "Women Cotton Thong Underwear",
+      sellingPoints: "Soft cotton breathable stretch everyday fit",
+      count: 4,
+      env: {
+        PACKY_IMAGE_API_KEY: "image-key",
+        IMGBB_API_KEY: "imgbb-key"
+      },
+      fetchImpl
+    });
+
+    expect(result.imageUrls).toEqual([
+      "https://i.ibb.co/non-json-fallback.png",
+      "https://i.ibb.co/non-json-fallback.png",
+      "https://i.ibb.co/non-json-fallback.png",
+      "https://i.ibb.co/non-json-fallback.png",
+      "https://i.ibb.co/non-json-fallback.png"
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
   test("uploads Packy base64 Shopify product images to ImgBB and keeps URL order", async () => {
     const packyResults = [
       { b64_json: Buffer.from("main-1").toString("base64") },
