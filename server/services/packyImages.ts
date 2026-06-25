@@ -252,7 +252,7 @@ function buildShopifyProductImagePrompts(sellingPoints: string): string[] {
     `Selling points for visual emphasis only: ${sellingPoints}`
   ];
   const roles = [
-    "Image 1 URL role: feature main image. Product-only image on a clean white or light background, full product visible, centered, sharp, no props, no scene.",
+    "Image 1 URL role: feature main image. Product-focused hero image on a clean premium neutral, softly lit studio, or subtle real-world background. Do not use a pure white or plain white background. Keep the full product visible, centered, sharp, and not covered by text.",
     "Image 2 URL role: side angle. Product-only side profile, angle, shape, contour, or alternate product view on a clean background, no scene.",
     "Image 3 URL role: size, packaging, or detail. Product-only confirmed size, packaging, texture, material, stitching, label, closure, or useful close-up detail. Do not invent measurements or text.",
     "Image 4 URL role: lifestyle scene 1. A single realistic usage-context image only, not a white-background feature image and not a collage.",

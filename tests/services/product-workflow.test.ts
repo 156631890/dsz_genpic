@@ -543,6 +543,11 @@ describe("Packy image helpers", () => {
         "Do not create a collage, grid, contact sheet, split screen or multi-panel image"
       );
       expect(String(form.get("prompt"))).toContain(rolePrompts[callIndex]);
+      if (callIndex === 0) {
+        expect(String(form.get("prompt"))).toContain(
+          "Do not use a pure white or plain white background"
+        );
+      }
       expect(String(form.get("prompt"))).not.toContain("Return exactly 5 square ecommerce images");
       expect(form.getAll("image")).toHaveLength(2);
 
