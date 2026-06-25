@@ -238,30 +238,61 @@ ${JSON.stringify(fields)}
     );
     expect(result.fields.description).toContain("<p><strong>Product Overview</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Key Features</strong></p>");
+    expect(result.fields.description).toContain("Uses the uploaded product images");
+    expect(result.fields.description).toContain("Highlights practical everyday value");
+    expect(result.fields.description).toContain("Keeps the product page readable");
+    expect(result.fields.description).toContain("Prepared as single-line HTML");
     expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
     expect(result.fields.description).not.toContain("<p><strong>Ideal For</strong></p>");
     expect(result.fields.description).not.toMatch(/\r|\n/);
   });
 
-  test("repairs AI descriptions that do not follow the DSZ product prompt structure", async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(
+  test("repairs invalid AI HTML descriptions through Packy with the DSZ product prompt", async () => {
+    const productPrompt =
+      "【HTML 描述生成总规则】\n- 描述必须是 Amazon 风格。\n【HTML 描述建议结构】\nProduct Overview, Key Features, Why It Stands Out, Notes.";
+    const repairedDescription =
+      "<p><strong>Product Overview</strong></p><p>Women cotton thong underwear designed for breathable everyday comfort and smooth daily wear.</p><p><strong>Key Features</strong></p><ul><li>Soft cotton blend helps support comfortable everyday wear.</li><li>Breathable stretch fabric supports flexible movement.</li><li>Low-profile thong cut helps reduce visible lines under outfits.</li><li>Multiple colour options support easy wardrobe matching.</li></ul><p><strong>Why It Stands Out</strong></p><p>The design focuses on a practical balance of softness, stretch and everyday fit without unsupported claims.</p><p><strong>Notes</strong></p><p>Please check the selected colour and size before purchase.</p><p><strong>Returns, Refunds and Replacements </strong><br />Products that are received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with the Australian Consumer Law (ACL). We are committed to ensuring all products meet the standards of quality and reliability expected by our customers. However, please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p><p><strong>Delivery Timeframe</strong></p><p>Please note that we cannot guarantee the exact date of arrival, and the delivery timeframes excluding weekends and public holidays are as follows:</p><ul><li>For customers in Victoria, approximately 7-10 working days;</li><li>For customers in NSW, SA, ACT, and QLD, approximately 9-12 working days;</li><li>For customers in WA, NT, and TAS, approximately 9-12 working days.</li></ul>";
+    let callIndex = 0;
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const currentCallIndex = callIndex;
+      callIndex += 1;
+      const body = JSON.parse(String(init?.body));
+
+      if (currentCallIndex === 1) {
+        expect(body.messages[1].content).toContain(productPrompt);
+        expect(body.messages[1].content).toContain(
+          "For product_name and description, PRODUCT PROMPT is the only writing rule source"
+        );
+        expect(body.messages[1].content).toContain(
+          "Return JSON with keys: product_name, description"
+        );
+      }
+
+      return new Response(
         JSON.stringify({
           choices: [
             {
               message: {
-                content: JSON.stringify({
-                  ...fields,
-                  description: "<p>Comfortable daily underwear.</p>"
-                })
+                content: JSON.stringify(
+                  currentCallIndex === 0
+                    ? {
+                        ...fields,
+                        description: "<p>Comfortable daily underwear.</p>"
+                      }
+                    : {
+                        product_name:
+                          "Women Cotton Thong Underwear - Soft Stretch Blend, Breathable Everyday Fit, Low Profile Comfort",
+                        description: repairedDescription
+                      }
+                )
               }
             }
           ]
         }),
         { status: 200 }
-      )
-    ) as unknown as typeof fetch;
+      );
+    }) as unknown as typeof fetch;
 
     const result = await generateDszFieldsWithPacky({
       productInput: input,
@@ -270,7 +301,7 @@ ${JSON.stringify(fields)}
       },
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
-        productPrompt: "Title must be pure English. HTML must be single line.",
+        productPrompt,
         categoryMapping: "Women's Intimates | 947",
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
@@ -279,6 +310,11 @@ ${JSON.stringify(fields)}
     });
 
     expect(result.source).toBe("ai");
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.fields.product_name).toBe(
+      "Women Cotton Thong Underwear - Soft Stretch Blend, Breathable Everyday Fit, Low Profile Comfort"
+    );
+    expect(result.fields.description).toBe(repairedDescription);
     expect(result.fields.description).toContain("<p><strong>Product Overview</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Key Features</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");

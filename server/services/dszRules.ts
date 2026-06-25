@@ -276,13 +276,37 @@ export function buildDszGenerationMessages(input: {
   ];
 }
 
+function buildDszTitleDescriptionRepairMessages(input: {
+  input: ProductInput;
+  fields: DszProductFields;
+  ruleDocuments: RuleDocuments;
+}): ChatMessage[] {
+  return [
+    {
+      role: "system",
+      content:
+        "You repair only Dropshipzone product_name and description. Return only strict JSON."
+    },
+    {
+      role: "user",
+      content: [
+        "Regenerate only product_name and description for this product.",
+        "PRODUCT PROMPT:",
+        truncate(input.ruleDocuments.productPrompt, 30000),
+        "INPUT:",
+        JSON.stringify(input.input, null, 2),
+        "CURRENT PRODUCT JSON:",
+        JSON.stringify(input.fields, null, 2),
+        "Return JSON with keys: product_name, description.",
+        "For product_name and description, PRODUCT PROMPT is the only writing rule source. Do not add, override, shorten or reinterpret title and HTML description rules outside PRODUCT PROMPT.",
+        "Do not change category, categories, categoryName, sku, ean_code, price, shipping, images or other upload fields."
+      ].join("\n")
+    }
+  ];
+}
+
 export function parseGeneratedFields(rawContent: string): DszProductFields {
-  const trimmed = rawContent.trim();
-  const withoutFence = trimmed
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "");
-  const parsed = JSON.parse(withoutFence) as DszProductFields;
+  const parsed = parseJsonContent(rawContent) as DszProductFields;
 
   return normalizeGeneratedFields(parsed);
 }
@@ -350,11 +374,86 @@ export async function generateDszFieldsWithPacky(input: {
   if (!content) {
     throw new Error("Packy field generation returned empty content");
   }
+  const generatedFields = parseGeneratedFields(content);
+  const repairedFields = followsDszDescriptionPrompt(
+    normalizeDescriptionHtml(generatedFields.description)
+  )
+    ? generatedFields
+    : await repairGeneratedTitleDescription({
+        fields: generatedFields,
+        productInput: input.productInput,
+        ruleDocuments,
+        env,
+        fetcher,
+        apiKey,
+        baseUrl
+      });
 
   return {
-    fields: completeGeneratedFields(parseGeneratedFields(content), input.productInput, identity),
+    fields: completeGeneratedFields(repairedFields, input.productInput, identity),
     source: "ai"
   };
+}
+
+async function repairGeneratedTitleDescription(input: {
+  fields: DszProductFields;
+  productInput: ProductInput;
+  ruleDocuments: RuleDocuments;
+  env: Record<string, string | undefined>;
+  fetcher: typeof fetch;
+  apiKey: string;
+  baseUrl: string;
+}): Promise<DszProductFields> {
+  const response = await input.fetcher(`${input.baseUrl}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${input.apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      model: input.env.PACKY_TEXT_MODEL || "gpt-5-mini",
+      messages: buildDszTitleDescriptionRepairMessages({
+        input: input.productInput,
+        fields: input.fields,
+        ruleDocuments: input.ruleDocuments
+      }),
+      response_format: { type: "json_object" }
+    })
+  });
+
+  if (!response.ok) {
+    if (response.status >= 500) {
+      return input.fields;
+    }
+
+    throw new Error(`Packy field repair failed: ${response.status}`);
+  }
+
+  const data = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string } }>;
+  };
+  const content = data.choices?.[0]?.message?.content;
+
+  if (!content) {
+    return input.fields;
+  }
+
+  const repaired = parseJsonContent(content) as {
+    product_name?: unknown;
+    description?: unknown;
+  };
+
+  return normalizeGeneratedFields({
+    ...input.fields,
+    product_name:
+      typeof repaired.product_name === "string"
+        ? repaired.product_name
+        : input.fields.product_name,
+    description:
+      typeof repaired.description === "string"
+        ? repaired.description
+        : input.fields.description
+  });
 }
 
 export function calculateCbm(lengthCm: number, widthCm: number, heightCm: number): number {
@@ -607,7 +706,7 @@ function buildFallbackDescription(input: ProductInput): string {
   return normalizeDescriptionHtml(
     [
       `<p><strong>Product Overview</strong></p><p>${escapeHtml(safeSellingPoints)}</p>`,
-      "<p><strong>Key Features</strong></p><ul><li>Uses the uploaded product images and seller provided selling points for a conservative product listing.</li><li>Highlights practical everyday value without unsupported claims or invented specifications.</li><li>Prepared as single-line HTML for Dropshipzone product upload review.</li></ul>",
+      "<p><strong>Key Features</strong></p><ul><li>Uses the uploaded product images and seller provided selling points for a conservative product listing.</li><li>Highlights practical everyday value without unsupported claims or invented specifications.</li><li>Keeps the product page readable with clear feature and benefit wording.</li><li>Prepared as single-line HTML for Dropshipzone product upload review.</li></ul>",
       "<p><strong>Why It Stands Out</strong></p><p>The listing focuses on clear product identification, visible features and verified seller information so customers can quickly understand the product and its use case.</p>",
       "<p><strong>Notes</strong></p><p>Please review all generated specifications, pricing, category and images before publishing.</p>",
       FOOTER
@@ -644,6 +743,16 @@ function escapeHtml(value: string): string {
 
 function truncate(value: string, maxLength: number): string {
   return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+}
+
+function parseJsonContent(rawContent: string): unknown {
+  const trimmed = rawContent.trim();
+  const withoutFence = trimmed
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "");
+
+  return JSON.parse(withoutFence);
 }
 
 function getRuleDirectories(env: Record<string, string | undefined>): string[] {
