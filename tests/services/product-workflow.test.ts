@@ -504,41 +504,48 @@ describe("Packy image helpers", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  test("generates exactly 5 Shopify product gallery images through Packy image API", async () => {
-    const fetchImpl = vi.fn(async (_url, init) => {
+  test("generates the 5 Shopify images as separate one-role Packy requests", async () => {
+    const roleUrls = [
+      "https://cdn.example.com/feature-main.png",
+      "https://cdn.example.com/side-angle.png",
+      "https://cdn.example.com/detail.png",
+      "https://cdn.example.com/scene-1.png",
+      "https://cdn.example.com/scene-2.png"
+    ];
+    const rolePrompts = [
+      "Image 1 URL role: feature main image",
+      "Image 2 URL role: side angle",
+      "Image 3 URL role: size, packaging, or detail",
+      "Image 4 URL role: lifestyle scene 1",
+      "Image 5 URL role: lifestyle scene 2"
+    ];
+    const fetchMock = vi.fn(async (_url, init) => {
       const form = init?.body as FormData;
+      const callIndex = fetchMock.mock.calls.length - 1;
 
       expect(init?.headers).toEqual({
         Authorization: "Bearer image-key"
       });
       expect(form.get("model")).toBe("gpt-image-2");
-      expect(form.get("n")).toBe("5");
-      expect(String(form.get("prompt"))).toContain("Shopify product gallery");
-      expect(String(form.get("prompt"))).toContain("Images 1 to 3 are product-only feature images");
-      expect(String(form.get("prompt"))).toContain("Images 4 and 5 are scene-only lifestyle images");
+      expect(form.get("n")).toBe("1");
       expect(String(form.get("prompt"))).toContain(
-        "Do not mix product-only feature images with lifestyle scene images"
+        "Generate exactly one square Shopify product image for this single role"
       );
-      expect(String(form.get("prompt"))).toContain("Image 1 URL role: feature main image");
-      expect(String(form.get("prompt"))).toContain("Image 2 URL role: side angle");
-      expect(String(form.get("prompt"))).toContain("Image 3 URL role: size, packaging, or detail");
-      expect(String(form.get("prompt"))).toContain("Image 4 URL role: lifestyle scene 1");
-      expect(String(form.get("prompt"))).toContain("Image 5 URL role: lifestyle scene 2");
+      expect(String(form.get("prompt"))).toContain(
+        "Do not create a collage, grid, contact sheet, split screen or multi-panel image"
+      );
+      expect(String(form.get("prompt"))).toContain(rolePrompts[callIndex]);
+      expect(String(form.get("prompt"))).not.toContain("Return exactly 5 square ecommerce images");
       expect(form.getAll("image")).toHaveLength(2);
 
       return new Response(
         JSON.stringify({
-          data: [
-            { url: "https://cdn.example.com/main-1.png" },
-            { url: "https://cdn.example.com/main-2.png" },
-            { url: "https://cdn.example.com/main-3.png" },
-            { url: "https://cdn.example.com/main-4.png" },
-            { url: "https://cdn.example.com/main-5.png" }
-          ]
+          data: [{ url: roleUrls[callIndex] }]
         }),
         { status: 200 }
       );
-    }) as unknown as typeof fetch;
+    });
+    const fetchImpl = fetchMock as unknown as typeof fetch;
 
     const result = await generateShopifyProductImagesWithPacky({
       images: [
@@ -563,23 +570,11 @@ describe("Packy image helpers", () => {
       fetchImpl
     });
 
-    expect(result.imageUrls).toEqual([
-      "https://cdn.example.com/main-1.png",
-      "https://cdn.example.com/main-2.png",
-      "https://cdn.example.com/main-3.png",
-      "https://cdn.example.com/main-4.png",
-      "https://cdn.example.com/main-5.png"
-    ]);
+    expect(result.imageUrls).toEqual(roleUrls);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
-  test("requests extra Packy Shopify images when the first response has fewer than 5 URLs", async () => {
-    const packyUrls = [
-      ["https://cdn.example.com/main-1.png"],
-      ["https://cdn.example.com/main-2.png"],
-      ["https://cdn.example.com/main-3.png"],
-      ["https://cdn.example.com/main-4.png"],
-      ["https://cdn.example.com/main-5.png"]
-    ];
+  test("keeps 5 fixed Shopify image roles even when caller requests a different count", async () => {
     const fetchMock = vi.fn(async (_url, init) => {
       const form = init?.body as FormData;
       const callIndex = fetchMock.mock.calls.length - 1;
@@ -587,11 +582,11 @@ describe("Packy image helpers", () => {
       expect(init?.headers).toEqual({
         Authorization: "Bearer image-key"
       });
-      expect(form.get("n")).toBe(callIndex === 0 ? "5" : "1");
+      expect(form.get("n")).toBe("1");
 
       return new Response(
         JSON.stringify({
-          data: packyUrls[callIndex].map((url) => ({ url }))
+          data: [{ url: `https://cdn.example.com/role-${callIndex + 1}.png` }]
         }),
         { status: 200 }
       );
@@ -616,35 +611,39 @@ describe("Packy image helpers", () => {
     });
 
     expect(result.imageUrls).toEqual([
-      "https://cdn.example.com/main-1.png",
-      "https://cdn.example.com/main-2.png",
-      "https://cdn.example.com/main-3.png",
-      "https://cdn.example.com/main-4.png",
-      "https://cdn.example.com/main-5.png"
+      "https://cdn.example.com/role-1.png",
+      "https://cdn.example.com/role-2.png",
+      "https://cdn.example.com/role-3.png",
+      "https://cdn.example.com/role-4.png",
+      "https://cdn.example.com/role-5.png"
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
   test("retries transient Packy Shopify product image failures before falling back", async () => {
+    const roleUrls = [
+      "https://cdn.example.com/retry-main-1.png",
+      "https://cdn.example.com/retry-main-2.png",
+      "https://cdn.example.com/retry-main-3.png",
+      "https://cdn.example.com/retry-main-4.png",
+      "https://cdn.example.com/retry-main-5.png"
+    ];
+    let packyCalls = 0;
+    let successIndex = 0;
     const fetchMock = vi.fn(async (url, init) => {
       expect(String(url)).toContain("/v1/images/edits");
       expect(init?.headers).toEqual({
         Authorization: "Bearer image-key"
       });
 
-      if (fetchMock.mock.calls.length < 3) {
+      packyCalls += 1;
+      if (packyCalls < 3) {
         return new Response("Service unavailable", { status: 503 });
       }
 
       return new Response(
         JSON.stringify({
-          data: [
-            { url: "https://cdn.example.com/retry-main-1.png" },
-            { url: "https://cdn.example.com/retry-main-2.png" },
-            { url: "https://cdn.example.com/retry-main-3.png" },
-            { url: "https://cdn.example.com/retry-main-4.png" },
-            { url: "https://cdn.example.com/retry-main-5.png" }
-          ]
+          data: [{ url: roleUrls[successIndex++] }]
         }),
         { status: 200 }
       );
@@ -669,14 +668,8 @@ describe("Packy image helpers", () => {
       fetchImpl
     });
 
-    expect(result.imageUrls).toEqual([
-      "https://cdn.example.com/retry-main-1.png",
-      "https://cdn.example.com/retry-main-2.png",
-      "https://cdn.example.com/retry-main-3.png",
-      "https://cdn.example.com/retry-main-4.png",
-      "https://cdn.example.com/retry-main-5.png"
-    ]);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.imageUrls).toEqual(roleUrls);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 
   test("falls back to ImgBB source image URLs when Packy Shopify product image API is unavailable", async () => {
@@ -726,17 +719,19 @@ describe("Packy image helpers", () => {
   });
 
   test("uploads Packy base64 Shopify product images to ImgBB and keeps URL order", async () => {
+    const packyResults = [
+      { b64_json: Buffer.from("main-1").toString("base64") },
+      { url: "https://cdn.example.com/main-2.png" },
+      { b64_json: Buffer.from("main-3").toString("base64") },
+      { url: "https://cdn.example.com/main-4.png" },
+      { url: "https://cdn.example.com/main-5.png" }
+    ];
+    let packyIndex = 0;
     const fetchMock = vi.fn(async (url, init) => {
       if (String(url).includes("/v1/images/edits")) {
         return new Response(
           JSON.stringify({
-            data: [
-              { b64_json: Buffer.from("main-1").toString("base64") },
-              { url: "https://cdn.example.com/main-2.png" },
-              { b64_json: Buffer.from("main-3").toString("base64") },
-              { url: "https://cdn.example.com/main-4.png" },
-              { url: "https://cdn.example.com/main-5.png" }
-            ]
+            data: [packyResults[packyIndex++]]
           }),
           { status: 200 }
         );
@@ -785,7 +780,7 @@ describe("Packy image helpers", () => {
     ]);
     expect(result.imageUrls.every((url) => url.startsWith("https://"))).toBe(true);
     expect(result.imageUrls.some((url) => url.startsWith("data:image"))).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(7);
   });
 });
 

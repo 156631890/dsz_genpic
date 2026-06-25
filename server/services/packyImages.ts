@@ -126,38 +126,28 @@ export async function generateShopifyProductImagesWithPacky(input: {
   const fetcher = input.fetchImpl || fetch;
 
   try {
-    const firstBatch = await requestPackyShopifyProductImageUrls({
-      images: input.images,
-      productType: input.productType,
-      sellingPoints: input.sellingPoints,
-      count,
-      env,
-      fetcher,
-      apiKey,
-      maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS
-    });
-    const missingCount = count - firstBatch.length;
-    const extraBatches =
-      missingCount > 0
-        ? await Promise.all(
-            Array.from({ length: missingCount }, () =>
-              requestPackyShopifyProductImageUrls({
-                images: input.images,
-                productType: input.productType,
-                sellingPoints: input.sellingPoints,
-                count: 1,
-                env,
-                fetcher,
-                apiKey,
-                maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS
-              })
-            )
-          )
-        : [];
-    const imageUrls = uniqueList([...firstBatch, ...extraBatches.flat()]).slice(0, count);
+    const imageUrls: string[] = [];
+
+    for (const prompt of buildShopifyProductImagePrompts(input.sellingPoints)) {
+      const roleUrls = await requestPackyShopifyProductImageUrls({
+        images: input.images,
+        productType: input.productType,
+        prompt,
+        count: 1,
+        env,
+        fetcher,
+        apiKey,
+        maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS
+      });
+      const imageUrl = roleUrls[0];
+
+      if (imageUrl) {
+        imageUrls.push(imageUrl);
+      }
+    }
 
     if (imageUrls.length >= SHOPIFY_PRODUCT_IMAGE_COUNT) {
-      return { imageUrls };
+      return { imageUrls: imageUrls.slice(0, count) };
     }
   } catch (error) {
     if (!isPackyTransientImageError(error)) {
@@ -178,7 +168,7 @@ export async function generateShopifyProductImagesWithPacky(input: {
 async function requestPackyShopifyProductImageUrls(input: {
   images: Express.Multer.File[];
   productType: string;
-  sellingPoints: string;
+  prompt: string;
   count: number;
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
@@ -203,7 +193,7 @@ async function requestPackyShopifyProductImageUrls(input: {
 async function requestPackyShopifyProductImageUrlsOnce(input: {
   images: Express.Multer.File[];
   productType: string;
-  sellingPoints: string;
+  prompt: string;
   count: number;
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
@@ -213,7 +203,7 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
     baseUrl: input.env.PACKY_BASE_URL,
     model: input.env.PACKY_IMAGE_MODEL,
     productType: input.productType,
-    prompt: buildShopifyProductImagePrompt(input.sellingPoints),
+    prompt: input.prompt,
     count: input.count,
     size: input.env.PACKY_IMAGE_SIZE || "1024x1024",
     quality: normalizeQuality(input.env.PACKY_IMAGE_QUALITY)
@@ -252,22 +242,24 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
   return resolvePackyImageUrls(data.data || [], input.env, input.fetcher);
 }
 
-function buildShopifyProductImagePrompt(sellingPoints: string): string {
-  return [
-    "Generate a Shopify product gallery from the uploaded product photos.",
-    "Return exactly 5 square ecommerce images in this URL order.",
-    "Images 1 to 3 are product-only feature images, not lifestyle scenes. Use clean studio presentation, no room setting, no model lifestyle scene, no decorative props.",
-    "Images 4 and 5 are scene-only lifestyle images, not white-background feature images. Show the product in a realistic usage context while keeping it recognizable.",
-    "Do not mix product-only feature images with lifestyle scene images. Feature images must stay separate from scene images.",
-    "Image 1 URL role: feature main image. Clean white or light background, full product visible, centered, sharp, no props, no scene.",
-    "Image 2 URL role: side angle. Product-only side profile, angle, shape, contour, or alternate product view on a clean background.",
-    "Image 3 URL role: size, packaging, or detail. Product-only confirmed size, packaging, texture, material, stitching, label, closure, or useful close-up detail. Do not invent measurements or text.",
-    "Image 4 URL role: lifestyle scene 1. Show one realistic use context relevant to the product and Australian independent store presentation, without turning it into a studio main image.",
-    "Image 5 URL role: lifestyle scene 2. Show a second distinct realistic use context relevant to the product, without repeating the main image composition.",
-    "Follow Shopify product image conventions: square 1:1 composition, consistent product presentation, high clarity, no watermarks, no logos, no badges, no unsupported text overlays.",
-    "Keep the actual product accurate, recognizable, sharp, fully visible where appropriate, and free of unsupported claims.",
+function buildShopifyProductImagePrompts(sellingPoints: string): string[] {
+  const sharedRules = [
+    "Generate exactly one square Shopify product image for this single role.",
+    "Do not create a collage, grid, contact sheet, split screen or multi-panel image.",
+    "Do not combine multiple product roles into one image.",
+    "Follow Shopify product image conventions: square 1:1 composition, high clarity, no watermarks, no logos, no badges, no unsupported text overlays.",
+    "Keep the actual product accurate, recognizable, sharp, and free of unsupported claims.",
     `Selling points for visual emphasis only: ${sellingPoints}`
-  ].join("\n");
+  ];
+  const roles = [
+    "Image 1 URL role: feature main image. Product-only image on a clean white or light background, full product visible, centered, sharp, no props, no scene.",
+    "Image 2 URL role: side angle. Product-only side profile, angle, shape, contour, or alternate product view on a clean background, no scene.",
+    "Image 3 URL role: size, packaging, or detail. Product-only confirmed size, packaging, texture, material, stitching, label, closure, or useful close-up detail. Do not invent measurements or text.",
+    "Image 4 URL role: lifestyle scene 1. A single realistic usage-context image only, not a white-background feature image and not a collage.",
+    "Image 5 URL role: lifestyle scene 2. A second distinct realistic usage-context image only, not a white-background feature image and not a collage."
+  ];
+
+  return roles.map((role) => [...sharedRules, role].join("\n"));
 }
 
 async function resolvePackyImageUrls(
@@ -377,10 +369,6 @@ function normalizeQuality(value?: string): "low" | "medium" | "high" | "auto" {
   }
 
   return "high";
-}
-
-function uniqueList(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
 }
 
 function trimTrailingSlash(value: string): string {
