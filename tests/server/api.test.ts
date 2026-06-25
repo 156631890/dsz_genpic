@@ -114,13 +114,18 @@ describe("API app", () => {
     ]);
   });
 
-  test("generates Amazon main images through injected Packy image service", async () => {
+  test("generates 5 Shopify product images through injected Packy image service", async () => {
     const app = createApp({
-      generateMainImages: async (input) => ({
-        imageUrls: input.images.map(
-          (_file, index) => `https://cdn.example.com/main-${index + 1}.png`
-        )
-      })
+      generateMainImages: async (input) => {
+        expect(input.count).toBe(5);
+
+        return {
+          imageUrls: Array.from(
+            { length: input.count },
+            (_item, index) => `https://cdn.example.com/shopify-${index + 1}.png`
+          )
+        };
+      }
     });
 
     const response = await request(app)
@@ -133,8 +138,11 @@ describe("API app", () => {
       .expect(200);
 
     expect(response.body.imageUrls).toEqual([
-      "https://cdn.example.com/main-1.png",
-      "https://cdn.example.com/main-2.png"
+      "https://cdn.example.com/shopify-1.png",
+      "https://cdn.example.com/shopify-2.png",
+      "https://cdn.example.com/shopify-3.png",
+      "https://cdn.example.com/shopify-4.png",
+      "https://cdn.example.com/shopify-5.png"
     ]);
   });
 

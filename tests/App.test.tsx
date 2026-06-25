@@ -21,7 +21,7 @@ describe("App", () => {
 
   test("uploads multiple images and displays generated DSZ fields", async () => {
     const user = userEvent.setup();
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url) => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (url, init) => {
       if (url === "/api/upload-images") {
         return {
           ok: true,
@@ -78,6 +78,8 @@ describe("App", () => {
       }
 
       if (url === "/api/generate-main-images") {
+        expect((init?.body as FormData).get("count")).toBe("5");
+
         return {
           ok: true,
           json: async () => ({
@@ -86,8 +88,7 @@ describe("App", () => {
               "https://cdn.example.com/main-2.png",
               "https://cdn.example.com/main-3.png",
               "https://cdn.example.com/main-4.png",
-              "https://cdn.example.com/main-5.png",
-              "https://cdn.example.com/main-6.png"
+              "https://cdn.example.com/main-5.png"
             ]
           })
         } as Response;

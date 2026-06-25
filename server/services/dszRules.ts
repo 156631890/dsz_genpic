@@ -89,7 +89,7 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
     "Use category as an internal integer mirror of categories. The DSZ upload API sends categories only.",
     "Use product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates and images.",
     "sku must use the Elosung prefix. ean_code must be a 10 digit string. brand_name must be Elosung. status must be 1. stock must be 1000.",
-    "images must be HTTPS URL strings and should include at least 4 product images.",
+    "images must be HTTPS URL strings and should include at least 5 Shopify product gallery image URLs in this order: main image, side angle, size packaging or detail, lifestyle scene 1, lifestyle scene 2.",
     "weight is in kg. length, width and height are in cm. cbm is length * width * height / 1000000.",
     "vendor_price formula: (MAX(weight, length * width * height / 8000) * 40 + 45 + purchasePriceCny) / 3.05. rrp is vendor_price * 2.",
     "zone_rates must include Australian regions at 0 and nz at 10."
@@ -151,6 +151,8 @@ export function buildDszGenerationMessages(input: {
         "INPUT:",
         JSON.stringify(input.input, null, 2),
         "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates, images, risk_flags, review_notes.",
+        "product_name and description must follow the DSZ system prompt rules. If the DSZ system prompt says to output only two final lines, use that as content guidance only; return strict JSON for this API call.",
+        "Choose exactly one best matching Category_Mapping ID from the category mapping. Prefer the most specific sub-subcategory that matches categoryHint, selling points, product type and image context. Do not default every product to Women's Intimates.",
         "Use internal JSON key product_name for the title and vendor_price for Vendor Price. The uploader maps product_name to DSZ API name and vendor_price to DSZ API price.",
         "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer.",
         "Use zone_rates with AU zones at 0 and nz at 10."

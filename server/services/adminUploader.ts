@@ -6,7 +6,7 @@ import type {
 
 const DEFAULT_ADMIN_BASE_URL =
   "https://services.dropshipzone.com.au/admin/api/supplier/v1";
-const MINIMUM_IMAGE_COUNT = 4;
+const MINIMUM_IMAGE_COUNT = 5;
 const DEFAULT_UPLOAD_MAX_ATTEMPTS = 3;
 const DEFAULT_UPLOAD_RETRY_DELAY_MS = 500;
 const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
@@ -206,7 +206,9 @@ export function validateDszProductFields(
   if (!hasRequiredZoneRates(fields.zone_rates)) {
     errors.push("zone_rates must include all required shipping zones");
   }
-  if (fields.images.length < 4) errors.push("Images must contain at least 4 URLs");
+  if (fields.images.length < MINIMUM_IMAGE_COUNT) {
+    errors.push(`Images must contain at least ${MINIMUM_IMAGE_COUNT} URLs`);
+  }
   if (!fields.images.every((url) => /^https:\/\//.test(url))) {
     errors.push("Images must be HTTPS URLs");
   }

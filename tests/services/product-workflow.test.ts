@@ -21,7 +21,7 @@ import {
 } from "../../server/services/dszRules";
 import {
   buildPackyEditRequest,
-  generateAmazonMainImagesWithPacky,
+  generateShopifyProductImagesWithPacky,
   generateImageWithPacky
 } from "../../server/services/packyImages";
 import { buildImgbbUploadRequest } from "../../server/services/imageUploader";
@@ -91,6 +91,15 @@ describe("DSZ field rules", () => {
     expect(messages[1].content).toContain("Soft cotton blend thong underwear");
     expect(messages[1].content).toContain("https://cdn.example.com/1.jpg");
     expect(messages[1].content).toContain("F13 Vendor Product Description");
+    expect(messages[1].content).toContain(
+      "product_name and description must follow the DSZ system prompt rules"
+    );
+    expect(messages[1].content).toContain(
+      "return strict JSON for this API call"
+    );
+    expect(messages[1].content).toContain(
+      "Choose exactly one best matching Category_Mapping ID"
+    );
     expect(messages[1].content).toContain("JSON");
   });
 
@@ -360,7 +369,7 @@ describe("Packy image helpers", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  test("generates 4 to 6 Amazon main images through Packy image API", async () => {
+  test("generates exactly 5 Shopify product gallery images through Packy image API", async () => {
     const fetchImpl = vi.fn(async (_url, init) => {
       const form = init?.body as FormData;
 
@@ -368,8 +377,13 @@ describe("Packy image helpers", () => {
         Authorization: "Bearer image-key"
       });
       expect(form.get("model")).toBe("gpt-image-2");
-      expect(form.get("n")).toBe("6");
-      expect(String(form.get("prompt"))).toContain("Amazon main image");
+      expect(form.get("n")).toBe("5");
+      expect(String(form.get("prompt"))).toContain("Shopify product gallery");
+      expect(String(form.get("prompt"))).toContain("Image 1 URL role: main image");
+      expect(String(form.get("prompt"))).toContain("Image 2 URL role: side angle");
+      expect(String(form.get("prompt"))).toContain("Image 3 URL role: size, packaging, or detail");
+      expect(String(form.get("prompt"))).toContain("Image 4 URL role: lifestyle scene 1");
+      expect(String(form.get("prompt"))).toContain("Image 5 URL role: lifestyle scene 2");
       expect(form.getAll("image")).toHaveLength(2);
 
       return new Response(
@@ -379,15 +393,14 @@ describe("Packy image helpers", () => {
             { url: "https://cdn.example.com/main-2.png" },
             { url: "https://cdn.example.com/main-3.png" },
             { url: "https://cdn.example.com/main-4.png" },
-            { url: "https://cdn.example.com/main-5.png" },
-            { url: "https://cdn.example.com/main-6.png" }
+            { url: "https://cdn.example.com/main-5.png" }
           ]
         }),
         { status: 200 }
       );
     }) as unknown as typeof fetch;
 
-    const result = await generateAmazonMainImagesWithPacky({
+    const result = await generateShopifyProductImagesWithPacky({
       images: [
         {
           buffer: Buffer.from("front"),
@@ -415,17 +428,17 @@ describe("Packy image helpers", () => {
       "https://cdn.example.com/main-2.png",
       "https://cdn.example.com/main-3.png",
       "https://cdn.example.com/main-4.png",
-      "https://cdn.example.com/main-5.png",
-      "https://cdn.example.com/main-6.png"
+      "https://cdn.example.com/main-5.png"
     ]);
   });
 
-  test("requests extra Packy main images when the first response has fewer than requested", async () => {
+  test("requests extra Packy Shopify images when the first response has fewer than 5 URLs", async () => {
     const packyUrls = [
       ["https://cdn.example.com/main-1.png"],
       ["https://cdn.example.com/main-2.png"],
       ["https://cdn.example.com/main-3.png"],
-      ["https://cdn.example.com/main-4.png"]
+      ["https://cdn.example.com/main-4.png"],
+      ["https://cdn.example.com/main-5.png"]
     ];
     const fetchMock = vi.fn(async (_url, init) => {
       const form = init?.body as FormData;
@@ -434,7 +447,7 @@ describe("Packy image helpers", () => {
       expect(init?.headers).toEqual({
         Authorization: "Bearer image-key"
       });
-      expect(form.get("n")).toBe(callIndex === 0 ? "4" : "1");
+      expect(form.get("n")).toBe(callIndex === 0 ? "5" : "1");
 
       return new Response(
         JSON.stringify({
@@ -445,7 +458,7 @@ describe("Packy image helpers", () => {
     });
     const fetchImpl = fetchMock as unknown as typeof fetch;
 
-    const result = await generateAmazonMainImagesWithPacky({
+    const result = await generateShopifyProductImagesWithPacky({
       images: [
         {
           buffer: Buffer.from("front"),
@@ -466,12 +479,13 @@ describe("Packy image helpers", () => {
       "https://cdn.example.com/main-1.png",
       "https://cdn.example.com/main-2.png",
       "https://cdn.example.com/main-3.png",
-      "https://cdn.example.com/main-4.png"
+      "https://cdn.example.com/main-4.png",
+      "https://cdn.example.com/main-5.png"
     ]);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
-  test("retries transient Packy main image failures before falling back", async () => {
+  test("retries transient Packy Shopify product image failures before falling back", async () => {
     const fetchMock = vi.fn(async (url, init) => {
       expect(String(url)).toContain("/v1/images/edits");
       expect(init?.headers).toEqual({
@@ -488,7 +502,8 @@ describe("Packy image helpers", () => {
             { url: "https://cdn.example.com/retry-main-1.png" },
             { url: "https://cdn.example.com/retry-main-2.png" },
             { url: "https://cdn.example.com/retry-main-3.png" },
-            { url: "https://cdn.example.com/retry-main-4.png" }
+            { url: "https://cdn.example.com/retry-main-4.png" },
+            { url: "https://cdn.example.com/retry-main-5.png" }
           ]
         }),
         { status: 200 }
@@ -496,7 +511,7 @@ describe("Packy image helpers", () => {
     });
     const fetchImpl = fetchMock as unknown as typeof fetch;
 
-    const result = await generateAmazonMainImagesWithPacky({
+    const result = await generateShopifyProductImagesWithPacky({
       images: [
         {
           buffer: Buffer.from("front"),
@@ -518,12 +533,13 @@ describe("Packy image helpers", () => {
       "https://cdn.example.com/retry-main-1.png",
       "https://cdn.example.com/retry-main-2.png",
       "https://cdn.example.com/retry-main-3.png",
-      "https://cdn.example.com/retry-main-4.png"
+      "https://cdn.example.com/retry-main-4.png",
+      "https://cdn.example.com/retry-main-5.png"
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  test("falls back to ImgBB source image URLs when Packy main image API is unavailable", async () => {
+  test("falls back to ImgBB source image URLs when Packy Shopify product image API is unavailable", async () => {
     const fetchMock = vi.fn(async (url, init) => {
       if (String(url).includes("/v1/images/edits")) {
         return new Response("Service unavailable", { status: 503 });
@@ -541,7 +557,7 @@ describe("Packy image helpers", () => {
     });
     const fetchImpl = fetchMock as unknown as typeof fetch;
 
-    const result = await generateAmazonMainImagesWithPacky({
+    const result = await generateShopifyProductImagesWithPacky({
       images: [
         {
           buffer: Buffer.from("front"),
@@ -563,12 +579,13 @@ describe("Packy image helpers", () => {
       "https://i.ibb.co/source-fallback.png",
       "https://i.ibb.co/source-fallback.png",
       "https://i.ibb.co/source-fallback.png",
+      "https://i.ibb.co/source-fallback.png",
       "https://i.ibb.co/source-fallback.png"
     ]);
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  test("uploads Packy base64 Amazon main images to ImgBB and keeps URL order", async () => {
+  test("uploads Packy base64 Shopify product images to ImgBB and keeps URL order", async () => {
     const fetchMock = vi.fn(async (url, init) => {
       if (String(url).includes("/v1/images/edits")) {
         return new Response(
@@ -577,7 +594,8 @@ describe("Packy image helpers", () => {
               { b64_json: Buffer.from("main-1").toString("base64") },
               { url: "https://cdn.example.com/main-2.png" },
               { b64_json: Buffer.from("main-3").toString("base64") },
-              { url: "https://cdn.example.com/main-4.png" }
+              { url: "https://cdn.example.com/main-4.png" },
+              { url: "https://cdn.example.com/main-5.png" }
             ]
           }),
           { status: 200 }
@@ -600,7 +618,7 @@ describe("Packy image helpers", () => {
     });
     const fetchImpl = fetchMock as unknown as typeof fetch;
 
-    const result = await generateAmazonMainImagesWithPacky({
+    const result = await generateShopifyProductImagesWithPacky({
       images: [
         {
           buffer: Buffer.from("front"),
@@ -622,7 +640,8 @@ describe("Packy image helpers", () => {
       "https://i.ibb.co/main-1.png",
       "https://cdn.example.com/main-2.png",
       "https://i.ibb.co/main-2.png",
-      "https://cdn.example.com/main-4.png"
+      "https://cdn.example.com/main-4.png",
+      "https://cdn.example.com/main-5.png"
     ]);
     expect(result.imageUrls.every((url) => url.startsWith("https://"))).toBe(true);
     expect(result.imageUrls.some((url) => url.startsWith("data:image"))).toBe(false);
@@ -677,7 +696,7 @@ describe("admin upload helpers", () => {
     const result = validateDszProductFields(payload);
 
     expect(result.valid).toBe(false);
-    expect(result.errors).toEqual(["Images must contain at least 4 URLs"]);
+    expect(result.errors).toEqual(["Images must contain at least 5 URLs"]);
   });
 
   test("wraps product in Dropshipzone products array", () => {
@@ -761,6 +780,7 @@ describe("admin upload helpers", () => {
     });
 
     expect(payload.images).toEqual([
+      "https://cdn.example.com/only-image.jpg",
       "https://cdn.example.com/only-image.jpg",
       "https://cdn.example.com/only-image.jpg",
       "https://cdn.example.com/only-image.jpg",

@@ -55,7 +55,14 @@ const editableNumberFields: Array<{ key: keyof DszProductFields; label: string }
   { key: "rrp", label: "RRP" }
 ];
 
-const AMAZON_MAIN_IMAGE_COUNT = 6;
+const SHOPIFY_PRODUCT_IMAGE_COUNT = 5;
+const SHOPIFY_IMAGE_ROLES = [
+  "图片1链接（主图）",
+  "图片2链接（侧面）",
+  "图片3链接（尺寸/包装/细节）",
+  "图片4链接（场景1）",
+  "图片5链接（场景2）"
+];
 
 export default function App() {
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
@@ -63,7 +70,6 @@ export default function App() {
   const [optionalInputs, setOptionalInputs] =
     useState<OptionalInputs>(emptyOptionalInputs);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
-  const [detailImageUrls, setDetailImageUrls] = useState<string[]>([]);
   const [fields, setFields] = useState<DszProductFields | null>(null);
   const [fieldSource, setFieldSource] = useState<"ai" | "fallback" | null>(null);
   const [status, setStatus] = useState<Status>("idle");
@@ -73,8 +79,8 @@ export default function App() {
   const [uploadResult, setUploadResult] = useState<unknown>(null);
 
   const allImages = useMemo(
-    () => uniqueList([...(fields?.images || imageUrls), ...detailImageUrls]),
-    [detailImageUrls, fields?.images, imageUrls]
+    () => fields?.images || imageUrls,
+    [fields?.images, imageUrls]
   );
 
   function updateOptionalInput(field: keyof OptionalInputs, value: string) {
@@ -122,7 +128,6 @@ export default function App() {
     setDetailStatus("idle");
     setUploadStatus("idle");
     setUploadResult(null);
-    setDetailImageUrls([]);
     setMessage("正在上传图片并按规则生成 DSZ 字段");
 
     try {
@@ -133,30 +138,29 @@ export default function App() {
       setImageUrls(uploadedUrls);
       setFieldSource(generated.source);
       setDetailStatus("loading");
-      setMessage(`正在调用 Packy 图片 API 生成 ${AMAZON_MAIN_IMAGE_COUNT} 张亚马逊主图`);
+      setMessage(`正在调用 Packy 图片 API 生成 ${SHOPIFY_PRODUCT_IMAGE_COUNT} 张 Shopify 产品图`);
 
       try {
-        const mainImageUrls = await requestAmazonMainImages(baseFields);
+        const mainImageUrls = await requestShopifyProductImages(baseFields);
         const fieldsWithMainImages = {
           ...baseFields,
-          images: uniqueList([...mainImageUrls, ...baseFields.images])
+          images: mergeProductImageUrls(mainImageUrls, baseFields.images)
         };
 
-        setDetailImageUrls(mainImageUrls);
         setFields(fieldsWithMainImages);
         setDetailStatus("success");
         setStatus("success");
         setMessage(
           generated.source === "fallback"
-            ? `已生成备用字段和 ${mainImageUrls.length} 张亚马逊主图，请人工校对`
-            : `已生成 DSZ 字段和 ${mainImageUrls.length} 张亚马逊主图`
+            ? `已生成备用字段和 ${mainImageUrls.length} 张 Shopify 产品图，请人工校对`
+            : `已生成 DSZ 字段和 ${mainImageUrls.length} 张 Shopify 产品图`
         );
       } catch (imageError) {
         setFields(baseFields);
         setDetailStatus("error");
         setStatus("success");
         setMessage(
-          `字段已生成，但亚马逊主图生成失败：${
+          `字段已生成，但 Shopify 产品图生成失败：${
             imageError instanceof Error ? imageError.message : "Packy 图片接口失败"
           }`
         );
@@ -211,13 +215,13 @@ export default function App() {
     return data.result as { fields: DszProductFields; source: "ai" | "fallback" };
   }
 
-  async function requestAmazonMainImages(productFields: DszProductFields): Promise<string[]> {
+  async function requestShopifyProductImages(productFields: DszProductFields): Promise<string[]> {
     const form = new FormData();
 
     sourceFiles.forEach((file) => form.append("images", file));
     form.append("productType", productFields.product_name || "Product");
     form.append("sellingPoints", sellingPoints.trim());
-    form.append("count", String(AMAZON_MAIN_IMAGE_COUNT));
+    form.append("count", String(SHOPIFY_PRODUCT_IMAGE_COUNT));
 
     const response = await fetch("/api/generate-main-images", {
       method: "POST",
@@ -226,7 +230,7 @@ export default function App() {
     const data = await response.json();
 
     if (!response.ok) {
-      throw new Error(data.error || "Packy 亚马逊主图生成失败");
+      throw new Error(data.error || "Packy Shopify 产品图生成失败");
     }
 
     return data.imageUrls;
@@ -240,21 +244,20 @@ export default function App() {
     }
 
     setDetailStatus("loading");
-    setMessage(`正在重新生成 ${AMAZON_MAIN_IMAGE_COUNT} 张亚马逊主图`);
+    setMessage(`正在重新生成 ${SHOPIFY_PRODUCT_IMAGE_COUNT} 张 Shopify 产品图`);
 
     try {
-      const mainImageUrls = await requestAmazonMainImages(fields);
+      const mainImageUrls = await requestShopifyProductImages(fields);
 
-      setDetailImageUrls(mainImageUrls);
       setFields({
         ...fields,
-        images: uniqueList([...mainImageUrls, ...fields.images])
+        images: mergeProductImageUrls(mainImageUrls, fields.images)
       });
       setDetailStatus("success");
-      setMessage(`${mainImageUrls.length} 张亚马逊主图已生成，并加入上传图片列表`);
+      setMessage(`${mainImageUrls.length} 张 Shopify 产品图已生成，并加入上传图片列表`);
     } catch (error) {
       setDetailStatus("error");
-      setMessage(error instanceof Error ? error.message : "Packy 亚马逊主图生成失败");
+      setMessage(error instanceof Error ? error.message : "Packy Shopify 产品图生成失败");
     }
   }
 
@@ -483,7 +486,7 @@ export default function App() {
                   ) : (
                     <Wand2 size={16} />
                   )}
-                  Packy 重新生成亚马逊主图
+                  Packy 重新生成 Shopify 产品图
                 </button>
               </div>
             </>
@@ -524,7 +527,12 @@ export default function App() {
             {allImages.length === 0 ? (
               <span>暂无图片 URL</span>
             ) : (
-              allImages.map((url) => <span key={url}>{url}</span>)
+              allImages.map((url, index) => (
+                <span key={`${url}-${index}`}>
+                  <strong>{SHOPIFY_IMAGE_ROLES[index] || `图片${index + 1}链接`}</strong>
+                  <span>{url}</span>
+                </span>
+              ))
             )}
           </div>
 
@@ -556,8 +564,9 @@ function optionalNumber(value: string): number | undefined {
   return Number.isFinite(parsed) && value.trim() ? parsed : undefined;
 }
 
-function uniqueList(values: string[]): string[] {
-  return Array.from(new Set(values.filter(Boolean)));
+function mergeProductImageUrls(primaryUrls: string[], secondaryUrls: string[]): string[] {
+  const secondaryOnly = secondaryUrls.filter((url) => !primaryUrls.includes(url));
+  return [...primaryUrls, ...secondaryOnly];
 }
 
 function statusTone(...statuses: Status[]): Status {

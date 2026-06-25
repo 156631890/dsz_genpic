@@ -1,6 +1,7 @@
 import { uploadImagesToImgbb } from "./imageUploader.js";
 
-const PACKY_MAIN_IMAGE_MAX_ATTEMPTS = 3;
+const PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS = 3;
+const SHOPIFY_PRODUCT_IMAGE_COUNT = 5;
 
 export interface PackyEditInput {
   baseUrl?: string;
@@ -102,7 +103,7 @@ export async function generateImageWithPacky(input: {
   return { imageUrl };
 }
 
-export async function generateAmazonMainImagesWithPacky(input: {
+export async function generateShopifyProductImagesWithPacky(input: {
   images: Express.Multer.File[];
   productType: string;
   sellingPoints: string;
@@ -121,11 +122,11 @@ export async function generateAmazonMainImagesWithPacky(input: {
     throw new Error("Missing PACKY_IMAGE_API_KEY or PACKY_API_KEY. Cannot generate images.");
   }
 
-  const count = clampAmazonImageCount(input.count);
+  const count = SHOPIFY_PRODUCT_IMAGE_COUNT;
   const fetcher = input.fetchImpl || fetch;
 
   try {
-    const firstBatch = await requestPackyAmazonMainImageUrls({
+    const firstBatch = await requestPackyShopifyProductImageUrls({
       images: input.images,
       productType: input.productType,
       sellingPoints: input.sellingPoints,
@@ -133,14 +134,14 @@ export async function generateAmazonMainImagesWithPacky(input: {
       env,
       fetcher,
       apiKey,
-      maxAttempts: PACKY_MAIN_IMAGE_MAX_ATTEMPTS
+      maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS
     });
     const missingCount = count - firstBatch.length;
     const extraBatches =
       missingCount > 0
         ? await Promise.all(
             Array.from({ length: missingCount }, () =>
-              requestPackyAmazonMainImageUrls({
+              requestPackyShopifyProductImageUrls({
                 images: input.images,
                 productType: input.productType,
                 sellingPoints: input.sellingPoints,
@@ -148,14 +149,14 @@ export async function generateAmazonMainImagesWithPacky(input: {
                 env,
                 fetcher,
                 apiKey,
-                maxAttempts: PACKY_MAIN_IMAGE_MAX_ATTEMPTS
+                maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS
               })
             )
           )
         : [];
     const imageUrls = uniqueList([...firstBatch, ...extraBatches.flat()]).slice(0, count);
 
-    if (imageUrls.length >= 4) {
+    if (imageUrls.length >= SHOPIFY_PRODUCT_IMAGE_COUNT) {
       return { imageUrls };
     }
   } catch (error) {
@@ -174,7 +175,7 @@ export async function generateAmazonMainImagesWithPacky(input: {
   };
 }
 
-async function requestPackyAmazonMainImageUrls(input: {
+async function requestPackyShopifyProductImageUrls(input: {
   images: Express.Multer.File[];
   productType: string;
   sellingPoints: string;
@@ -188,7 +189,7 @@ async function requestPackyAmazonMainImageUrls(input: {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await requestPackyAmazonMainImageUrlsOnce(input);
+      return await requestPackyShopifyProductImageUrlsOnce(input);
     } catch (error) {
       if (attempt === maxAttempts || !isPackyTransientImageError(error)) {
         throw error;
@@ -199,7 +200,7 @@ async function requestPackyAmazonMainImageUrls(input: {
   return [];
 }
 
-async function requestPackyAmazonMainImageUrlsOnce(input: {
+async function requestPackyShopifyProductImageUrlsOnce(input: {
   images: Express.Multer.File[];
   productType: string;
   sellingPoints: string;
@@ -212,7 +213,7 @@ async function requestPackyAmazonMainImageUrlsOnce(input: {
     baseUrl: input.env.PACKY_BASE_URL,
     model: input.env.PACKY_IMAGE_MODEL,
     productType: input.productType,
-    prompt: buildAmazonMainImagePrompt(input.sellingPoints),
+    prompt: buildShopifyProductImagePrompt(input.sellingPoints),
     count: input.count,
     size: input.env.PACKY_IMAGE_SIZE || "1024x1024",
     quality: normalizeQuality(input.env.PACKY_IMAGE_QUALITY)
@@ -242,7 +243,7 @@ async function requestPackyAmazonMainImageUrlsOnce(input: {
   });
 
   if (!response.ok) {
-    throw new Error(`Packy Amazon main image API failed: ${response.status}`);
+    throw new Error(`Packy Shopify product image API failed: ${response.status}`);
   }
 
   const data = (await response.json()) as {
@@ -251,13 +252,17 @@ async function requestPackyAmazonMainImageUrlsOnce(input: {
   return resolvePackyImageUrls(data.data || [], input.env, input.fetcher);
 }
 
-function buildAmazonMainImagePrompt(sellingPoints: string): string {
+function buildShopifyProductImagePrompt(sellingPoints: string): string {
   return [
-    "Generate Amazon main image gallery assets from the uploaded product photos.",
-    "Create clean marketplace-ready product images on a pure white background.",
-    "Keep the actual product accurate, centered, sharp, fully visible, and occupying most of the frame.",
-    "Generate varied main-image angles or compositions suitable for an Amazon product gallery.",
-    "Do not add text, logos, watermarks, badges, lifestyle scenes, extra props, mannequins, or unsupported claims.",
+    "Generate a Shopify product gallery from the uploaded product photos.",
+    "Return exactly 5 square ecommerce images in this URL order.",
+    "Image 1 URL role: main image. Clean white or light background, full product visible, centered, sharp, no props.",
+    "Image 2 URL role: side angle. Show side profile, angle, shape, contour, or alternate product view.",
+    "Image 3 URL role: size, packaging, or detail. Show confirmed size, packaging, texture, material, stitching, label, closure, or useful close-up detail. Do not invent measurements or text.",
+    "Image 4 URL role: lifestyle scene 1. Show one realistic use context relevant to the product and Australian independent store presentation.",
+    "Image 5 URL role: lifestyle scene 2. Show a second distinct realistic use context relevant to the product.",
+    "Follow Shopify product image conventions: square 1:1 composition, consistent product presentation, high clarity, no watermarks, no logos, no badges, no unsupported text overlays.",
+    "Keep the actual product accurate, recognizable, sharp, fully visible where appropriate, and free of unsupported claims.",
     `Selling points for visual emphasis only: ${sellingPoints}`
   ].join("\n");
 }
@@ -327,11 +332,6 @@ function parseBase64Image(value: string): { base64: string; mimetype: string } {
   };
 }
 
-function clampAmazonImageCount(count = 6): number {
-  if (!Number.isFinite(count)) return 6;
-  return Math.min(6, Math.max(4, Math.round(count)));
-}
-
 async function buildSourceImageFallbackUrls(input: {
   images: Express.Multer.File[];
   count: number;
@@ -349,7 +349,7 @@ async function buildSourceImageFallbackUrls(input: {
 
 function isPackyTransientImageError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  const match = error.message.match(/^Packy Amazon main image API failed: (\d{3})$/);
+  const match = error.message.match(/^Packy Shopify product image API failed: (\d{3})$/);
 
   return Boolean(match && Number(match[1]) >= 500);
 }

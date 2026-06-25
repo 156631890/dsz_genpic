@@ -10,7 +10,7 @@ import {
 import { generateDszFieldsWithPacky } from "./services/dszRules.js";
 import { uploadImagesToImgbb } from "./services/imageUploader.js";
 import {
-  generateAmazonMainImagesWithPacky,
+  generateShopifyProductImagesWithPacky,
   generateImageWithPacky
 } from "./services/packyImages.js";
 import type {
@@ -146,7 +146,7 @@ export function createApp(dependencies: AppDependencies = {}) {
 
       const productType = String(req.body.productType || "");
       const sellingPoints = String(req.body.sellingPoints || "");
-      const count = Number(req.body.count || 6);
+      const count = 5;
       const result = dependencies.generateMainImages
         ? await dependencies.generateMainImages({
             images: files,
@@ -154,7 +154,7 @@ export function createApp(dependencies: AppDependencies = {}) {
             sellingPoints,
             count
           })
-        : await generateAmazonMainImagesWithPacky({
+        : await generateShopifyProductImagesWithPacky({
             images: files,
             productType,
             sellingPoints,
