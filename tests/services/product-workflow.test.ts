@@ -75,11 +75,13 @@ const fields: DszProductFields = {
 
 describe("DSZ field rules", () => {
   test("builds Packy messages with uploaded image URLs and rule snippets", () => {
+    const productPrompt =
+      "【标题生成规则】\n- 标题长度控制在 110 到 200 个字符之间。\n【HTML 描述生成总规则】\n- 描述必须是 Amazon 风格。";
     const messages = buildDszGenerationMessages({
       input,
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
-        productPrompt: "Title must be pure English. HTML must be single line.",
+        productPrompt,
         categoryMapping: "Women's Intimates | 947",
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
@@ -94,10 +96,14 @@ describe("DSZ field rules", () => {
     expect(messages[1].content).toContain(
       "product_name and description must follow the DSZ system prompt rules"
     );
+    expect(messages[1].content).toContain(productPrompt);
     expect(messages[1].content).toContain(
+      "For product_name and description, PRODUCT PROMPT is the only writing rule source"
+    );
+    expect(messages[1].content).not.toContain(
       "description must include Product Overview, Key Features, Why It Stands Out and Notes"
     );
-    expect(messages[1].content).toContain(
+    expect(messages[1].content).not.toContain(
       "Use Specifications, Ideal For and FAQ only when supported by reliable input"
     );
     expect(messages[1].content).toContain(
@@ -150,6 +156,8 @@ ${JSON.stringify(fields)}
 
   test("loads all provided DSZ rule documents from the rules directory", async () => {
     const rulesDir = await mkdtemp(join(tmpdir(), "dsz-rules-"));
+    const productPrompt =
+      "【标题生成规则】\n标题必须是纯英文电商标题。\n【HTML 描述生成总规则】\n描述必须是英文单行 HTML。";
 
     try {
       await Promise.all([
@@ -160,7 +168,7 @@ ${JSON.stringify(fields)}
         ),
         writeFile(
           join(rulesDir, "DSZ系统prompt 4月20版本.txt"),
-          "固定页脚规则. 输出规则. 最终自检.",
+          productPrompt,
           "utf8"
         ),
         writeFile(
@@ -183,7 +191,7 @@ ${JSON.stringify(fields)}
       const rules = await loadRuleDocuments({ RULES_DIR: rulesDir });
 
       expect(rules.fieldRules).toContain("name and price are required");
-      expect(rules.productPrompt).toContain("固定页脚规则");
+      expect(rules.productPrompt).toBe(productPrompt);
       expect(rules.categoryMapping).toContain("Women's Intimates | 947");
       expect(rules.uploadSop).toContain("Dropshipzone 16 字段");
       expect(rules.productUploadAu).toContain("澳洲独立站");
@@ -231,8 +239,8 @@ ${JSON.stringify(fields)}
     expect(result.fields.description).toContain("<p><strong>Product Overview</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Key Features</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
-    expect(result.fields.description).toContain("<p><strong>Ideal For</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
+    expect(result.fields.description).not.toContain("<p><strong>Ideal For</strong></p>");
     expect(result.fields.description).not.toMatch(/\r|\n/);
   });
 
@@ -274,8 +282,8 @@ ${JSON.stringify(fields)}
     expect(result.fields.description).toContain("<p><strong>Product Overview</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Key Features</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
-    expect(result.fields.description).toContain("<p><strong>Ideal For</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
+    expect(result.fields.description).not.toContain("<p><strong>Ideal For</strong></p>");
     expect(result.fields.description).toContain("Returns, Refunds and Replacements");
     expect(result.fields.description).not.toMatch(/\r|\n/);
   });

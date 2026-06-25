@@ -255,7 +255,7 @@ export function buildDszGenerationMessages(input: {
         "FIELD RULES:",
         truncate(ruleDocuments.fieldRules, 12000),
         "PRODUCT PROMPT:",
-        truncate(ruleDocuments.productPrompt, 13000),
+        truncate(ruleDocuments.productPrompt, 30000),
         "CATEGORY MAPPING:",
         truncate(ruleDocuments.categoryMapping, 20000),
         "FULL PRODUCT UPLOAD SOP:",
@@ -266,8 +266,7 @@ export function buildDszGenerationMessages(input: {
         JSON.stringify(input.input, null, 2),
         "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates, images, risk_flags, review_notes.",
         "product_name and description must follow the DSZ system prompt rules. If the DSZ system prompt says to output only two final lines, use that as content guidance only; return strict JSON for this API call.",
-        "description must include Product Overview, Key Features, Why It Stands Out and Notes sections in that order, followed by the fixed footer.",
-        "Use Specifications, Ideal For and FAQ only when supported by reliable input. Do not invent specs, package contents, certifications, measurements, URLs or brand claims.",
+        "For product_name and description, PRODUCT PROMPT is the only writing rule source. Do not add, override, shorten or reinterpret title and HTML description rules outside PRODUCT PROMPT.",
         "Choose exactly one best matching Category_Mapping ID from the category mapping. Prefer the most specific sub-subcategory that matches categoryHint, selling points, product type and image context. Do not default every product to Women's Intimates.",
         "Use internal JSON key product_name for the title and vendor_price for Vendor Price. The uploader maps product_name to DSZ API name and vendor_price to DSZ API price.",
         "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer.",
@@ -610,7 +609,6 @@ function buildFallbackDescription(input: ProductInput): string {
       `<p><strong>Product Overview</strong></p><p>${escapeHtml(safeSellingPoints)}</p>`,
       "<p><strong>Key Features</strong></p><ul><li>Uses the uploaded product images and seller provided selling points for a conservative product listing.</li><li>Highlights practical everyday value without unsupported claims or invented specifications.</li><li>Prepared as single-line HTML for Dropshipzone product upload review.</li></ul>",
       "<p><strong>Why It Stands Out</strong></p><p>The listing focuses on clear product identification, visible features and verified seller information so customers can quickly understand the product and its use case.</p>",
-      "<p><strong>Ideal For</strong></p><p>Suitable for customers looking for a practical everyday product with a clear independent store product page presentation.</p>",
       "<p><strong>Notes</strong></p><p>Please review all generated specifications, pricing, category and images before publishing.</p>",
       FOOTER
     ].join("")
