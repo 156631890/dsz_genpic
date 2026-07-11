@@ -94,10 +94,9 @@ export function buildProductCopyMessages(
 
 export function parseProductCopy(raw: string): GeneratedProductCopy {
   const lines = raw
-    .trim()
     .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
+    .map((line) => line.replace(/^ +| +$/g, ""))
+    .filter((line) => line.trim().length > 0);
 
   if (lines.length !== 2) {
     throw new Error("Product copy response must contain exactly two non-empty lines.");
@@ -172,7 +171,6 @@ export function validateProductCopy(
 
 export async function generateProductCopyWithPacky(
   input: ProductInput & {
-    systemPrompt?: string;
     env?: Record<string, string | undefined>;
     fetchImpl?: typeof fetch;
   }
@@ -184,7 +182,7 @@ export async function generateProductCopyWithPacky(
     throw new Error("Missing PACKY_API_KEY. Cannot generate product copy.");
   }
 
-  const systemPrompt = input.systemPrompt ?? (await loadProductSystemPrompt());
+  const systemPrompt = await loadProductSystemPrompt();
   const baseUrl = (env.PACKY_BASE_URL || "https://www.packyapi.com").replace(/\/+$/, "");
   const fetcher = input.fetchImpl || fetch;
   const response = await fetcher(`${baseUrl}/v1/chat/completions`, {
@@ -241,11 +239,20 @@ function containsMarkdown(value: string): boolean {
   const markdownText = value
     .replace(/<\/?(?:p|ul|li)>|<br \/>/g, "\n")
     .replace(/<\/?strong>/g, "")
-    .replace(/<[^>]*>/g, "\n");
+    .replace(/<[^>]*>/g, "\n")
+    .replace(/\n+/g, "\n");
   const inlineMarkdown =
     /```|~~~|`[^`]*`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|!?\[[^\]]+\]\([^)]*\)/;
   const blockMarkdown = /^[ \t]*(?:#{1,6}(?:\s|$)|[-+*]\s+|>\s+|\d+[.)]\s+)/m;
-  return inlineMarkdown.test(markdownText) || blockMarkdown.test(markdownText);
+  const markdownRule = /^[ \t]*(?:={3,}|-{3,}|\*{3,}|_{3,})[ \t]*$/m;
+  const markdownTable =
+    /^\s*\|?.+\|.+\|?\s*\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m;
+  return (
+    inlineMarkdown.test(markdownText) ||
+    blockMarkdown.test(markdownText) ||
+    markdownRule.test(markdownText) ||
+    markdownTable.test(markdownText)
+  );
 }
 
 function containsUrlOrUri(value: string): boolean {
@@ -264,7 +271,6 @@ function hasInvalidHtmlStructure(value: string): boolean {
   const stack: string[] = [];
   const tokens = value.match(/<[^>]*>|[^<>]+|[<>]/g) || [];
   let hasAllowedElement = false;
-  let hasCompletedParagraph = false;
 
   for (const token of tokens) {
     if (!token.startsWith("<")) {
@@ -289,14 +295,12 @@ function hasInvalidHtmlStructure(value: string): boolean {
       const parent = stack.at(-1);
 
       if (name === "p" && parent !== undefined) return true;
-      if (name === "ul" && (parent !== undefined || !hasCompletedParagraph)) return true;
+      if (name === "ul" && parent !== undefined) return true;
       if (name === "li" && parent !== "ul") return true;
       if (name === "strong" && !isTextContainer(parent)) return true;
       stack.push(name);
     } else if (stack.pop() !== name) {
       return true;
-    } else if (name === "p") {
-      hasCompletedParagraph = true;
     }
   }
 

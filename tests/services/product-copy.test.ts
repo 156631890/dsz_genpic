@@ -123,6 +123,31 @@ describe("product copy parsing", () => {
       /exactly two non-empty lines/i
     );
   });
+
+  test.each([
+    [
+      "leading title tab",
+      `\t${validTitle}\n${validDescription}`,
+      "Title contains a character outside the approved ecommerce punctuation set."
+    ],
+    [
+      "trailing title tab",
+      `${validTitle}\t\n${validDescription}`,
+      "Title contains a character outside the approved ecommerce punctuation set."
+    ],
+    [
+      "leading description tab",
+      `${validTitle}\n\t${validDescription}`,
+      "Description must be one line without tabs."
+    ],
+    [
+      "trailing description tab",
+      `${validTitle}\n${validDescription}\t`,
+      "Description must be one line without tabs."
+    ]
+  ])("preserves and rejects a %s", (_label, raw, expectedError) => {
+    expect(validateCopy(parseProductCopy(raw))).toContain(expectedError);
+  });
 });
 
 describe("product copy validation", () => {
@@ -275,6 +300,12 @@ describe("product copy validation", () => {
     expect(validateCopy({ title: validTitle, description })).toEqual([]);
   });
 
+  test("accepts a balanced top-level ul without a preceding p", () => {
+    const description = `<ul><li>Standalone list item.</li></ul>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toEqual([]);
+  });
+
   test("rejects a description with no allowed HTML elements", () => {
     expect(
       validateProductCopy({ title: validTitle, description: "Plain text only" }, canonicalFooter)
@@ -316,6 +347,22 @@ describe("product copy validation", () => {
     expect(validateCopy({ title: validTitle, description })).toContain(markdownError);
   });
 
+  test.each([
+    ["setext equals heading", "<p>Heading text</p>===<p>After</p>"],
+    ["setext hyphen heading", "<p>Heading text</p>---<p>After</p>"],
+    ["hyphen horizontal rule", "<p>Before</p>---<p>After</p>"],
+    ["asterisk horizontal rule", "<p>Before</p>***<p>After</p>"],
+    ["underscore horizontal rule", "<p>Before</p>___<p>After</p>"],
+    [
+      "Markdown table",
+      "<p>| Feature | Benefit |</p><p>| --- | --- |</p><p>| Compact | Portable |</p>"
+    ]
+  ])("rejects %s between allowed HTML blocks", (_label, adversarialHtml) => {
+    const description = `${adversarialHtml}${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toContain(markdownError);
+  });
+
   test("preserves legitimate hyphenated prose", () => {
     const description = `<p>Space-saving design supports day-to-day use.</p>${canonicalFooter}`;
     expect(validateCopy({ title: validTitle, description })).toEqual([]);
@@ -323,6 +370,14 @@ describe("product copy validation", () => {
 });
 
 describe("Packy product copy generation", () => {
+  test("does not expose a system prompt override", () => {
+    type GenerationInput = Parameters<typeof generateProductCopyWithPacky>[0];
+    type HasSystemPromptOverride = "systemPrompt" extends keyof GenerationInput ? true : false;
+    const hasSystemPromptOverride: HasSystemPromptOverride = false;
+
+    expect(hasSystemPromptOverride).toBe(false);
+  });
+
   test("posts exact-prompt multimodal messages to the default GPT-5.6 SOL endpoint", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       void url;
@@ -332,12 +387,9 @@ describe("Packy product copy generation", () => {
         { status: 200, headers: { "content-type": "application/json" } }
       );
     });
-    const systemPrompt = exactSystemPrompt;
-
     await expect(
       generateProductCopyWithPacky({
         ...productInput(),
-        systemPrompt,
         env: { PACKY_API_KEY: "test-key" },
         fetchImpl: fetchImpl as typeof fetch
       })
@@ -356,7 +408,7 @@ describe("Packy product copy generation", () => {
     const body = JSON.parse(String(init?.body));
     expect(body).toEqual({
       model: "gpt-5.6-sol",
-      messages: buildProductCopyMessages(productInput(), systemPrompt)
+      messages: buildProductCopyMessages(productInput(), exactSystemPrompt)
     });
     expect(body).not.toHaveProperty("response_format");
   });
@@ -365,7 +417,6 @@ describe("Packy product copy generation", () => {
     await expect(
       generateProductCopyWithPacky({
         ...productInput(),
-        systemPrompt: "prompt",
         env: { PACKY_IMAGE_API_KEY: "wrong-key" }
       })
     ).rejects.toThrow("Missing PACKY_API_KEY");
@@ -381,7 +432,6 @@ describe("Packy product copy generation", () => {
     await expect(
       generateProductCopyWithPacky({
         ...productInput(),
-        systemPrompt: "private prompt",
         env: { PACKY_API_KEY: "secret-key" },
         fetchImpl: fetchImpl as typeof fetch
       })
@@ -400,7 +450,6 @@ describe("Packy product copy generation", () => {
     await expect(
       generateProductCopyWithPacky({
         ...productInput(),
-        systemPrompt: "prompt",
         env: { PACKY_API_KEY: "test-key" },
         fetchImpl: fetchImpl as typeof fetch
       })
