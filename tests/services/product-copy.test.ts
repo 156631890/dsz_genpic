@@ -1,4 +1,7 @@
-import { readFile } from "node:fs/promises";
+// @vitest-environment node
+
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
@@ -30,6 +33,10 @@ function productInput(overrides: Partial<ProductInput> = {}): ProductInput {
     heightCm: 10,
     ...overrides
   };
+}
+
+function titleContaining(markdown: string): string {
+  return `${"A".repeat(110 - markdown.length)}${markdown}`;
 }
 
 test("exports the five approved product image role contracts", () => {
@@ -79,6 +86,20 @@ describe("product copy messages", () => {
 
     await expect(loadProductSystemPrompt()).resolves.toBe(expected);
   });
+
+  test("resolves the prompt only from the module-relative rules path, independent of cwd", async () => {
+    const expected = await readFile(resolve("rules/DSZ系统prompt 4月20版本.txt"), "utf8");
+    const originalCwd = process.cwd();
+    const unrelatedCwd = await mkdtemp(resolve(tmpdir(), "product-copy-cwd-"));
+
+    try {
+      process.chdir(unrelatedCwd);
+      await expect(loadProductSystemPrompt()).resolves.toBe(expected);
+    } finally {
+      process.chdir(originalCwd);
+      await rm(unrelatedCwd, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("product copy parsing", () => {
@@ -108,7 +129,12 @@ describe("product copy validation", () => {
     ["question mark", `${"A".repeat(109)}?`],
     ["asterisk", `${"A".repeat(109)}*`],
     ["trademark symbol", `${"A".repeat(109)}™`],
-    ["Markdown fence", `${"A".repeat(110)}\`\`\``]
+    ["Markdown fence", titleContaining("```code```")],
+    ["Markdown link", titleContaining("[link](x)")],
+    ["Markdown heading", `# ${"A".repeat(108)}`],
+    ["Markdown list", `- ${"A".repeat(108)}`],
+    ["Markdown emphasis", titleContaining("_emphasis_")],
+    ["Markdown inline code", titleContaining("`code`")]
   ])("rejects %s", (_label, title) => {
     expect(validateProductCopy({ title, description: validDescription })).not.toEqual([]);
   });
@@ -120,6 +146,12 @@ describe("product copy validation", () => {
     ["Markdown", `${validDescription} **bold**`],
     ["single-marker Markdown", `${validDescription} *bold*`],
     ["inline Markdown code", `${validDescription} \`code\``],
+    ["strikethrough Markdown", `${validDescription} ~~strike~~`],
+    ["Markdown link", `${validDescription} [link](x)`],
+    ["Markdown image", `${validDescription} ![alt](image.png)`],
+    ["Markdown heading", `# Heading ${validDescription}`],
+    ["Markdown list", `- item ${validDescription}`],
+    ["Markdown blockquote", `> quote ${validDescription}`],
     ["div tag", `${validDescription}<div>More</div>`],
     ["anchor tag", `${validDescription}<a>More</a>`],
     ["image tag", `${validDescription}<img>`],

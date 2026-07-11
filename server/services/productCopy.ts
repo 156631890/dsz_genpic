@@ -1,5 +1,4 @@
 import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
 import type { GeneratedProductCopy, ProductInput } from "../../shared/product.js";
 
 export type ProductCopyMessage =
@@ -29,11 +28,7 @@ const ALLOWED_HTML_TAGS = new Set([
 ]);
 
 export async function loadProductSystemPrompt(): Promise<string> {
-  const path =
-    PRODUCT_PROMPT_URL.protocol === "file:"
-      ? PRODUCT_PROMPT_URL
-      : resolve(process.cwd(), decodeURIComponent(PRODUCT_PROMPT_URL.pathname).replace(/^[/\\]+/, ""));
-  return readFile(path, "utf8");
+  return readFile(PRODUCT_PROMPT_URL, "utf8");
 }
 
 export function buildProductCopyMessages(
@@ -91,8 +86,8 @@ export function validateProductCopy(copy: GeneratedProductCopy): string[] {
     errors.push("Title must contain only printable ASCII characters.");
   }
 
-  if (/[?*]/.test(copy.title) || copy.title.includes("```")) {
-    errors.push("Title contains a forbidden symbol or Markdown fence.");
+  if (/[?*]/.test(copy.title) || containsMarkdown(copy.title)) {
+    errors.push("Title contains a forbidden symbol or Markdown.");
   }
 
   if (/[\r\n\t]/.test(copy.description)) {
@@ -193,7 +188,10 @@ function isHttpsUrl(value: string): boolean {
 }
 
 function containsMarkdown(value: string): boolean {
-  return /[*`]|~~~|__|_[^_]+_|!?\[[^\]]+\]\([^)]*\)|(?:^|\s)#{1,6}\s/.test(value);
+  const inlineMarkdown =
+    /```|~~~|`[^`]*`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|!?\[[^\]]+\]\([^)]*\)/;
+  const blockMarkdown = /^(?:#{1,6}\s|[-+*]\s|>\s|\d+\.\s)/;
+  return inlineMarkdown.test(value) || blockMarkdown.test(value);
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
