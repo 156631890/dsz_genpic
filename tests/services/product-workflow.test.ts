@@ -116,6 +116,31 @@ describe("DSZ field rules", () => {
     expect(messages[1].content).toContain("JSON");
   });
 
+  test("keeps server-calculated shipping rates out of model-owned fields", async () => {
+    const ruleDocuments = await loadRuleDocuments({
+      RULES_DIR: "Z:\\missing-dsz-rule-files"
+    });
+    const messages = buildDszGenerationMessages({ input, ruleDocuments });
+    const prompt = messages.map((message) => message.content).join("\n");
+
+    expect(prompt).not.toMatch(/\bnz\b[^\r\n]*\b10\b/i);
+    expect(prompt).not.toContain("zone_rates");
+    expect(prompt).toContain("Shipping rates are calculated by the server");
+    expect(prompt).toContain("length * width * height / 5000");
+    expect(prompt).toContain("AUD 20 below 3 kg and AUD 40 at or above 3 kg");
+  });
+
+  test("builds standard zone rates from named measurements", () => {
+    expect(
+      standardZoneRates({
+        actualWeightKg: 1,
+        lengthCm: 50,
+        widthCm: 40,
+        heightCm: 30
+      }).nz
+    ).toBe(40);
+  });
+
   test("parses generated DSZ field JSON from fenced content", () => {
     const parsed = parseGeneratedFields(`
 \`\`\`json

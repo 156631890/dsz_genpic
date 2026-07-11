@@ -6,7 +6,10 @@ import type {
   ProductGenerationResult,
   ProductInput
 } from "../../shared/product.js";
-import { buildShippingZoneRates } from "../../shared/shipping.js";
+import {
+  buildShippingZoneRates,
+  type ShippingMeasurements
+} from "../../shared/shipping.js";
 
 export interface RuleDocuments {
   fieldRules: string;
@@ -202,12 +205,12 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
     "Dropshipzone supplier product field rules for POST /products.",
     "Return one product object that can be wrapped as { products: [product] }.",
     "Use category as an internal integer mirror of categories. The DSZ upload API sends categories only.",
-    "Use product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates and images.",
+    "Use product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp and images.",
     "sku must use the Elosung prefix. ean_code must be a 10 digit string. brand_name must be Elosung. status must be 1. stock must be 1000.",
     "images must be HTTPS URL strings and should include at least 5 Shopify product gallery image URLs in this order: main image, side angle, size packaging or detail, lifestyle scene 1, lifestyle scene 2.",
     "weight is in kg. length, width and height are in cm. cbm is length * width * height / 1000000.",
     "vendor_price formula: (MAX(weight, length * width * height / 8000) * 40 + 45 + purchasePriceCny) / 3.05. rrp is vendor_price * 2.",
-    "zone_rates must include Australian regions at 0 and nz at 10."
+    "Shipping rates are calculated by the server, not the model: all Australian zones are 0; New Zealand uses max(actual weight, length * width * height / 5000), with AUD 20 below 3 kg and AUD 40 at or above 3 kg."
   ].join("\n"),
   productPrompt: [
     "Generate a pure English ecommerce title and product description for an Australian independent store.",
@@ -254,27 +257,38 @@ export function buildDszGenerationMessages(input: {
         "Generate a complete Dropshipzone product JSON object from the uploaded image URLs and seller selling points.",
         "Follow these rule documents exactly.",
         "FIELD RULES:",
-        truncate(ruleDocuments.fieldRules, 12000),
+        truncate(stripServerOwnedShippingRules(ruleDocuments.fieldRules), 12000),
         "PRODUCT PROMPT:",
-        truncate(ruleDocuments.productPrompt, 30000),
+        truncate(stripServerOwnedShippingRules(ruleDocuments.productPrompt), 30000),
         "CATEGORY MAPPING:",
-        truncate(ruleDocuments.categoryMapping, 20000),
+        truncate(stripServerOwnedShippingRules(ruleDocuments.categoryMapping), 20000),
         "FULL PRODUCT UPLOAD SOP:",
-        truncate(ruleDocuments.uploadSop, 9000),
+        truncate(stripServerOwnedShippingRules(ruleDocuments.uploadSop), 9000),
         "AU PRODUCT CONTENT RULES:",
-        truncate(ruleDocuments.productUploadAu, 6000),
+        truncate(stripServerOwnedShippingRules(ruleDocuments.productUploadAu), 6000),
         "INPUT:",
         JSON.stringify(input.input, null, 2),
-        "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, zone_rates, images, risk_flags, review_notes.",
+        "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, images, risk_flags, review_notes.",
         "product_name and description must follow the DSZ system prompt rules. If the DSZ system prompt says to output only two final lines, use that as content guidance only; return strict JSON for this API call.",
         "For product_name and description, PRODUCT PROMPT is the only writing rule source. Do not add, override, shorten or reinterpret title and HTML description rules outside PRODUCT PROMPT.",
         "Choose exactly one best matching Category_Mapping ID from the category mapping. Prefer the most specific sub-subcategory that matches categoryHint, selling points, product type and image context. Do not default every product to Women's Intimates.",
         "Use internal JSON key product_name for the title and vendor_price for Vendor Price. The uploader maps product_name to DSZ API name and vendor_price to DSZ API price.",
         "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer.",
-        "Use zone_rates with AU zones at 0 and nz at 10."
+        "Shipping rates are calculated by the server, not the model: all Australian zones are 0; New Zealand uses max(actual weight, length * width * height / 5000), with AUD 20 below 3 kg and AUD 40 at or above 3 kg. Do not return shipping rates."
       ].join("\n")
     }
   ];
+}
+
+function stripServerOwnedShippingRules(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .filter(
+      (line) =>
+        !/\bzone_rates\b/i.test(line) &&
+        !/\bnz\b[^\r\n]*\b10\b/i.test(line)
+    )
+    .join("\n");
 }
 
 function buildDszTitleDescriptionRepairMessages(input: {
@@ -478,17 +492,14 @@ export function formatSku(value: number): string {
 }
 
 export function standardZoneRates(
-  weightKg = 0,
-  lengthCm = 0,
-  widthCm = 0,
-  heightCm = 0
+  measurements: ShippingMeasurements = {
+    actualWeightKg: 0,
+    lengthCm: 0,
+    widthCm: 0,
+    heightCm: 0
+  }
 ): Record<string, number> {
-  return buildShippingZoneRates({
-    actualWeightKg: weightKg,
-    lengthCm,
-    widthCm,
-    heightCm
-  });
+  return buildShippingZoneRates(measurements);
 }
 
 export async function loadRuleDocuments(
@@ -544,7 +555,12 @@ function buildFallbackFields(
     description: buildFallbackDescription(input),
     vendor_price: vendorPrice,
     rrp: round(vendorPrice * 2, 2),
-    zone_rates: standardZoneRates(weight, length, width, height),
+    zone_rates: standardZoneRates({
+      actualWeightKg: weight,
+      lengthCm: length,
+      widthCm: width,
+      heightCm: height
+    }),
     images: input.imageUrls,
     risk_flags: [],
     review_notes: [
@@ -566,12 +582,12 @@ function completeGeneratedFields(
     sku: fields.sku || fallback.sku,
     ean_code: fields.ean_code || fallback.ean_code,
     images: fields.images?.length ? fields.images : input.imageUrls,
-    zone_rates: standardZoneRates(
-      fields.weight,
-      fields.length,
-      fields.width,
-      fields.height
-    )
+    zone_rates: standardZoneRates({
+      actualWeightKg: fields.weight,
+      lengthCm: fields.length,
+      widthCm: fields.width,
+      heightCm: fields.height
+    })
   });
   const hintedCategory = resolveCategoryHint(input.categoryHint);
 
@@ -599,12 +615,12 @@ function completeGeneratedFields(
   if (!Number.isFinite(merged.rrp) || merged.rrp < merged.vendor_price) {
     merged.rrp = round(merged.vendor_price * 2, 2);
   }
-  merged.zone_rates = standardZoneRates(
-    merged.weight,
-    merged.length,
-    merged.width,
-    merged.height
-  );
+  merged.zone_rates = standardZoneRates({
+    actualWeightKg: merged.weight,
+    lengthCm: merged.length,
+    widthCm: merged.width,
+    heightCm: merged.height
+  });
 
   return merged;
 }
@@ -632,12 +648,12 @@ function normalizeGeneratedFields(fields: DszProductFields): DszProductFields {
     brand_name: fields.brand_name || "Elosung",
     colour: fields.colour || "N/A",
     enabled: fields.enabled !== false,
-    zone_rates: standardZoneRates(
-      Number(fields.weight || 0),
-      Number(fields.length || 0),
-      Number(fields.width || 0),
-      Number(fields.height || 0)
-    ),
+    zone_rates: standardZoneRates({
+      actualWeightKg: Number(fields.weight || 0),
+      lengthCm: Number(fields.length || 0),
+      widthCm: Number(fields.width || 0),
+      heightCm: Number(fields.height || 0)
+    }),
     images: fields.images || [],
     risk_flags: fields.risk_flags || [],
     review_notes: fields.review_notes || []
