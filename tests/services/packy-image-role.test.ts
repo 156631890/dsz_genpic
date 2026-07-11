@@ -195,6 +195,54 @@ describe("Packy fixed-role product images", () => {
   });
 
   test.each([
+    ["relative", "/generated/product.png"],
+    ["malformed", "not a url"],
+    ["data", "data:image/png;base64,AAAA"],
+    ["file", "file:///tmp/product.png"],
+    ["javascript", "javascript:alert(1)"],
+    ["ftp", "ftp://cdn.example.com/product.png"]
+  ])("rejects %s provider URLs as malformed after bounded role retries", async (_name, url) => {
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ data: [{ url }] }),
+      { status: 200 }
+    )) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "main",
+        env: { PACKY_API_KEY: "role-key" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Packy Shopify product image API returned malformed response");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  test.each([
+    "http://cdn.example.com/generated.png",
+    "https://cdn.example.com/generated.png"
+  ])("accepts and returns an absolute web provider URL: %s", async (url) => {
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ data: [{ url }] }),
+      { status: 200 }
+    )) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "side",
+        env: { PACKY_API_KEY: "role-key" },
+        fetchImpl
+      })
+    ).resolves.toEqual({ role: "side", imageUrl: url });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  test.each([
     ["429", () => new Response("rate limited", { status: 429 })],
     ["network TypeError", () => new TypeError("fetch failed")]
   ])("retries transient %s and returns the later image", async (_name, firstFailure) => {
@@ -304,6 +352,70 @@ describe("Packy fixed-role product images", () => {
       })
     ).rejects.toThrow("Packy Shopify product image API returned malformed base64 image");
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  test("does not regenerate when ImgBB delivery throws a TypeError", async () => {
+    const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    let packyCalls = 0;
+    let imgbbCalls = 0;
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        packyCalls += 1;
+        return new Response(
+          JSON.stringify({ data: [{ b64_json: `data:image/png;base64,${tinyPng}` }] }),
+          { status: 200 }
+        );
+      }
+
+      imgbbCalls += 1;
+      throw new TypeError("delivery connection failed");
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "detail",
+        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-key" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Packy generated image delivery failed: delivery connection failed");
+    expect(packyCalls).toBe(1);
+    expect(imgbbCalls).toBe(1);
+  });
+
+  test.each([
+    ["image/jpeg", "jpg"],
+    ["image/webp", "webp"]
+  ])("uses the %s MIME type and matching filename extension", async (mimetype, extension) => {
+    const bytes = Buffer.from("valid-base64-fixture").toString("base64");
+    const fetchImpl = vi.fn(async (url, init) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        return new Response(
+          JSON.stringify({ data: [{ b64_json: `data:${mimetype};base64,${bytes}` }] }),
+          { status: 200 }
+        );
+      }
+
+      const file = (init?.body as FormData).get("image") as File;
+      expect(file.type).toBe(mimetype);
+      expect(file.name).toBe(`packy-generated-1.${extension}`);
+      return new Response(
+        JSON.stringify({ data: { display_url: "https://i.ibb.co/generated-image" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await generateProductImageRoleWithPacky({
+      images,
+      productType: "Cotton underwear",
+      sellingPoints: "soft cotton",
+      role: "detail",
+      env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-key" },
+      fetchImpl
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 

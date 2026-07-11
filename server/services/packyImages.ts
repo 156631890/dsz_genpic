@@ -67,6 +67,13 @@ interface PackyImageResult {
   b64_json?: string;
 }
 
+class PackyImageTransportError extends Error {
+  constructor(message: string) {
+    super(`Packy image transport failed: ${message}`);
+    this.name = "PackyImageTransportError";
+  }
+}
+
 export function buildPackyEditRequest(input: PackyEditInput): PackyEditRequest {
   const baseUrl = trimTrailingSlash(input.baseUrl || "https://www.packyapi.com");
   const prompt = [
@@ -324,13 +331,22 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
     );
   }
 
-  const response = await input.fetcher(request.url, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${input.apiKey}`
-    },
-    body: form
-  });
+  let response: Response;
+
+  try {
+    response = await input.fetcher(request.url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${input.apiKey}`
+      },
+      body: form
+    });
+  } catch (error) {
+    if (error instanceof TypeError) {
+      throw new PackyImageTransportError(error.message);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
     throw new Error(`Packy Shopify product image API failed: ${response.status}`);
@@ -397,11 +413,20 @@ async function resolvePackyImageUrls(
   });
 
   if (uploadFiles.length > 0) {
-    const uploaded = await uploadImagesToImgbb({
-      files: uploadFiles,
-      env,
-      fetchImpl: fetcher
-    });
+    let uploaded: { imageUrls: string[] };
+
+    try {
+      uploaded = await uploadImagesToImgbb({
+        files: uploadFiles,
+        env,
+        fetchImpl: fetcher
+      });
+    } catch (error) {
+      if (validateBase64 && error instanceof TypeError) {
+        throw new Error(`Packy generated image delivery failed: ${error.message}`);
+      }
+      throw error;
+    }
 
     uploaded.imageUrls.forEach((url, index) => {
       imageUrls[uploadIndexes[index]] = url;
@@ -422,7 +447,7 @@ function buildGeneratedImageFile(
   return {
     buffer: Buffer.from(parsed.base64, "base64"),
     mimetype: parsed.mimetype,
-    originalname: `packy-generated-${index + 1}.png`
+    originalname: `packy-generated-${index + 1}.${parsed.extension}`
   } as Express.Multer.File;
 }
 
@@ -430,27 +455,32 @@ function parseBase64Image(
   value: string,
   context: string,
   validate: boolean
-): { base64: string; mimetype: string } {
+): { base64: string; mimetype: string; extension: string } {
   const dataUrlMatch = value.match(/^data:([^;]+);base64,(.*)$/);
 
   if (!validate) {
     return dataUrlMatch
-      ? { mimetype: dataUrlMatch[1], base64: dataUrlMatch[2] }
-      : { mimetype: "image/png", base64: value };
+      ? { mimetype: dataUrlMatch[1], base64: dataUrlMatch[2], extension: "png" }
+      : { mimetype: "image/png", base64: value, extension: "png" };
   }
 
   const mimetype = dataUrlMatch?.[1] || "image/png";
   const base64 = (dataUrlMatch?.[2] || value).replace(/\s/g, "");
+  const extension = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/webp": "webp"
+  }[mimetype];
 
   if (
-    !mimetype.startsWith("image/") ||
+    !extension ||
     !base64 ||
     !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)
   ) {
     throw new Error(`${context} returned malformed base64 image.`);
   }
 
-  return { mimetype, base64 };
+  return { mimetype, base64, extension };
 }
 
 async function buildSourceImageFallbackUrls(input: {
@@ -480,7 +510,7 @@ function isLegacyPackyTransientImageError(error: unknown): boolean {
 }
 
 function isRolePackyTransientImageError(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
+  if (error instanceof PackyImageTransportError) return true;
   if (!(error instanceof Error)) return false;
   const match = error.message.match(/^Packy Shopify product image API failed: (\d{3})$/);
   const status = match ? Number(match[1]) : undefined;
@@ -510,9 +540,25 @@ function parsePackyImageResults(
       throw new Error(`${context} returned malformed response.`);
     }
 
-    const url = typeof entry.url === "string" && entry.url.trim()
+    const rawUrl = typeof entry.url === "string" && entry.url.trim()
       ? entry.url.trim()
       : undefined;
+    let url: string | undefined;
+
+    if (rawUrl) {
+      try {
+        const parsedUrl = new URL(rawUrl);
+        if (
+          (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") ||
+          !parsedUrl.hostname
+        ) {
+          throw new Error("unsupported image URL");
+        }
+        url = parsedUrl.toString();
+      } catch {
+        throw new Error(`${context} returned malformed response.`);
+      }
+    }
     const b64Json = typeof entry.b64_json === "string" && entry.b64_json.trim()
       ? entry.b64_json.trim()
       : undefined;
