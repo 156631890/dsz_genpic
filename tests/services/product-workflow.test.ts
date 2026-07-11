@@ -993,8 +993,33 @@ describe("admin upload helpers", () => {
     expect(payload.name).toBe(fields.product_name);
     expect(payload.price).toBe(fields.vendor_price);
     expect(payload.brand_name).toBe("Elosung");
-    expect(payload.zone_rates.nz).toBe(10);
+    expect(payload.zone_rates.nz).toBe(20);
     expect(body).toEqual({ products: [payload] });
+  });
+
+  test("builds free AU rates and the lower NZ rate below 3 kg", () => {
+    const payload = buildAdminProductPayload({
+      ...fields,
+      weight: 2,
+      length: 10,
+      width: 10,
+      height: 10
+    });
+
+    expect(payload.zone_rates.act).toBe(0);
+    expect(payload.zone_rates.nz).toBe(20);
+  });
+
+  test("uses volumetric weight to select the higher NZ rate", () => {
+    const payload = buildAdminProductPayload({
+      ...fields,
+      weight: 1,
+      length: 50,
+      width: 40,
+      height: 30
+    });
+
+    expect(payload.zone_rates.nz).toBe(40);
   });
 
   test("maps legacy local category IDs to real Dropshipzone new category IDs", () => {
@@ -1093,7 +1118,7 @@ describe("admin upload helpers", () => {
         rrp: 0
       }),
       zone_rates: {
-        nz: 10
+        nz: 20
       } as Record<string, number>
     };
 

@@ -6,6 +6,7 @@ import type {
   ProductGenerationResult,
   ProductInput
 } from "../../shared/product.js";
+import { buildShippingZoneRates } from "../../shared/shipping.js";
 
 export interface RuleDocuments {
   fieldRules: string;
@@ -476,26 +477,18 @@ export function formatSku(value: number): string {
   return `Elosung${value}`;
 }
 
-export function standardZoneRates(): Record<string, number> {
-  return {
-    act: 0,
-    nsw_m: 0,
-    nsw_r: 0,
-    nt_m: 0,
-    nt_r: 0,
-    qld_m: 0,
-    qld_r: 0,
-    remote: 0,
-    sa_m: 0,
-    sa_r: 0,
-    tas_m: 0,
-    tas_r: 0,
-    vic_m: 0,
-    vic_r: 0,
-    wa_m: 0,
-    wa_r: 0,
-    nz: 10
-  };
+export function standardZoneRates(
+  weightKg = 0,
+  lengthCm = 0,
+  widthCm = 0,
+  heightCm = 0
+): Record<string, number> {
+  return buildShippingZoneRates({
+    actualWeightKg: weightKg,
+    lengthCm,
+    widthCm,
+    heightCm
+  });
 }
 
 export async function loadRuleDocuments(
@@ -551,7 +544,7 @@ function buildFallbackFields(
     description: buildFallbackDescription(input),
     vendor_price: vendorPrice,
     rrp: round(vendorPrice * 2, 2),
-    zone_rates: standardZoneRates(),
+    zone_rates: standardZoneRates(weight, length, width, height),
     images: input.imageUrls,
     risk_flags: [],
     review_notes: [
@@ -573,7 +566,12 @@ function completeGeneratedFields(
     sku: fields.sku || fallback.sku,
     ean_code: fields.ean_code || fallback.ean_code,
     images: fields.images?.length ? fields.images : input.imageUrls,
-    zone_rates: fields.zone_rates || standardZoneRates()
+    zone_rates: standardZoneRates(
+      fields.weight,
+      fields.length,
+      fields.width,
+      fields.height
+    )
   });
   const hintedCategory = resolveCategoryHint(input.categoryHint);
 
@@ -601,7 +599,12 @@ function completeGeneratedFields(
   if (!Number.isFinite(merged.rrp) || merged.rrp < merged.vendor_price) {
     merged.rrp = round(merged.vendor_price * 2, 2);
   }
-  merged.zone_rates = standardZoneRates();
+  merged.zone_rates = standardZoneRates(
+    merged.weight,
+    merged.length,
+    merged.width,
+    merged.height
+  );
 
   return merged;
 }
@@ -629,7 +632,12 @@ function normalizeGeneratedFields(fields: DszProductFields): DszProductFields {
     brand_name: fields.brand_name || "Elosung",
     colour: fields.colour || "N/A",
     enabled: fields.enabled !== false,
-    zone_rates: fields.zone_rates || standardZoneRates(),
+    zone_rates: standardZoneRates(
+      Number(fields.weight || 0),
+      Number(fields.length || 0),
+      Number(fields.width || 0),
+      Number(fields.height || 0)
+    ),
     images: fields.images || [],
     risk_flags: fields.risk_flags || [],
     review_notes: fields.review_notes || []

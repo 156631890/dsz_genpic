@@ -3,6 +3,10 @@ import type {
   DszProductFields,
   ValidationResult
 } from "../../shared/product.js";
+import {
+  AU_ZONE_KEYS,
+  buildShippingZoneRates
+} from "../../shared/shipping.js";
 
 const DEFAULT_ADMIN_BASE_URL =
   "https://services.dropshipzone.com.au/admin/api/supplier/v1";
@@ -57,26 +61,6 @@ const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
   "7044": "959",
   "7045": "960"
 };
-const REQUIRED_ZONE_RATES = {
-  act: 0,
-  nsw_m: 0,
-  nsw_r: 0,
-  nt_m: 0,
-  nt_r: 0,
-  qld_m: 0,
-  qld_r: 0,
-  remote: 0,
-  sa_m: 0,
-  sa_r: 0,
-  tas_m: 0,
-  tas_r: 0,
-  vic_m: 0,
-  vic_r: 0,
-  wa_m: 0,
-  wa_r: 0,
-  nz: 10
-} as const;
-
 export interface AdminConfig {
   baseUrl: string;
   authUrl: string;
@@ -203,7 +187,7 @@ export function validateDszProductFields(
   if (!Number.isFinite(fields.cbm) || fields.cbm <= 0) {
     errors.push("CBM must be greater than 0");
   }
-  if (!hasRequiredZoneRates(fields.zone_rates)) {
+  if (!hasRequiredZoneRates(fields.zone_rates, fields)) {
     errors.push("zone_rates must include all required shipping zones");
   }
   if (fields.images.length < MINIMUM_IMAGE_COUNT) {
@@ -232,7 +216,7 @@ export function buildAdminProductPayload(
     description: fields.description,
     price: Number(fields.vendor_price),
     rrp: Number(fields.rrp),
-    zone_rates: normalizeZoneRates(),
+    zone_rates: expectedZoneRates(fields),
     weight: Number(fields.weight),
     length: Number(fields.length),
     width: Number(fields.width),
@@ -432,8 +416,15 @@ function isTransientUploadStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-function normalizeZoneRates(): Record<string, number> {
-  return { ...REQUIRED_ZONE_RATES };
+function expectedZoneRates(
+  fields: Pick<DszProductFields, "weight" | "length" | "width" | "height">
+): Record<string, number> {
+  return buildShippingZoneRates({
+    actualWeightKg: Number(fields.weight),
+    lengthCm: Number(fields.length),
+    widthCm: Number(fields.width),
+    heightCm: Number(fields.height)
+  });
 }
 
 function normalizeCategoryId(value: string | number): string {
@@ -441,9 +432,20 @@ function normalizeCategoryId(value: string | number): string {
   return LEGACY_CATEGORY_ID_MAP[id] || id;
 }
 
-function hasRequiredZoneRates(zoneRates: Record<string, number>): boolean {
-  return Object.entries(REQUIRED_ZONE_RATES).every(
-    ([key, value]) => zoneRates[key] === value
+function hasRequiredZoneRates(
+  zoneRates: Record<string, number>,
+  fields: Pick<AdminProductPayload, "weight" | "length" | "width" | "height">
+): boolean {
+  let expected: Record<string, number>;
+
+  try {
+    expected = expectedZoneRates(fields);
+  } catch {
+    return false;
+  }
+
+  return [...AU_ZONE_KEYS, "nz"].every(
+    (key) => zoneRates[key] === expected[key]
   );
 }
 
