@@ -27,6 +27,14 @@ const productInput: ProductInput = {
   heightCm: 2
 };
 
+const pngImage = Buffer.from("89504e470d0a1a0a", "hex");
+const jpegImage = Buffer.from("ffd8ffe000104a464946", "hex");
+const webpImage = Buffer.concat([
+  Buffer.from("RIFF"),
+  Buffer.alloc(4),
+  Buffer.from("WEBP")
+]);
+
 const fields: DszProductFields = {
   category: 947,
   categories: "947",
@@ -84,8 +92,11 @@ describe("API app", () => {
     expect(response.body).toEqual({
       ok: true,
       packyConfigured: true,
+      sharedPackyConfigured: true,
       textConfigured: true,
       imageConfigured: true,
+      legacyTextConfigured: true,
+      legacyImageConfigured: true,
       textModel: "copy-model",
       imageModel: "image-model",
       imageSize: "1536x1024",
@@ -105,6 +116,9 @@ describe("API app", () => {
     expect(response.body).toMatchObject({
       textConfigured: false,
       imageConfigured: false,
+      sharedPackyConfigured: false,
+      legacyTextConfigured: false,
+      legacyImageConfigured: false,
       textModel: "gpt-5.6-sol",
       imageModel: "gpt-image-2",
       imageSize: "1024x1024",
@@ -113,11 +127,86 @@ describe("API app", () => {
   });
 
   test.each([
+    ["shared only", { PACKY_API_KEY: "shared-secret" }, true, true, true, true, true],
+    [
+      "legacy only",
+      { PACKY_FIELD_API_KEY: "field-secret", PACKY_IMAGE_API_KEY: "image-secret" },
+      true,
+      false,
+      false,
+      true,
+      true
+    ],
+    [
+      "legacy text alias only",
+      { PACKY_TEXT_API_KEY: "text-secret" },
+      true,
+      false,
+      false,
+      true,
+      false
+    ],
+    [
+      "mixed",
+      { PACKY_API_KEY: "shared-secret", PACKY_FIELD_API_KEY: "field-secret" },
+      true,
+      true,
+      true,
+      true,
+      true
+    ],
+    ["empty", {}, false, false, false, false, false]
+  ])(
+    "reports unambiguous %s Packy health state",
+    async (
+      _name,
+      env,
+      packyConfigured,
+      sharedPackyConfigured,
+      textConfigured,
+      legacyTextConfigured,
+      legacyImageConfigured
+    ) => {
+      const response = await request(createApp({ env }))
+        .get("/api/health")
+        .expect(200);
+
+      expect(response.body).toMatchObject({
+        packyConfigured,
+        sharedPackyConfigured,
+        textConfigured,
+        imageConfigured: textConfigured,
+        legacyTextConfigured,
+        legacyImageConfigured
+      });
+      for (const secret of Object.values(env)) {
+        expect(JSON.stringify(response.body)).not.toContain(secret);
+      }
+    }
+  );
+
+  test.each([
     [undefined, "Selling points are required"],
+    [null, "Selling points are required"],
+    ["wrong", "Selling points are required"],
+    [[], "Selling points are required"],
+    [{ ...productInput, sellingPoints: 7 }, "Selling points are required"],
     [{ ...productInput, sellingPoints: "   " }, "Selling points are required"],
+    [{ ...productInput, sellingPoints: "x".repeat(10001) }, "Selling points are invalid"],
     [{ ...productInput, imageUrls: [] }, "Uploaded image URLs are required"],
     [{ ...productInput, imageUrls: undefined }, "Uploaded image URLs are required"],
-    [{ ...productInput, imageUrls: "not-an-array" }, "Uploaded image URLs are required"]
+    [{ ...productInput, imageUrls: "not-an-array" }, "Uploaded image URLs are required"],
+    [{ ...productInput, imageUrls: ["http://cdn.example.com/a.png"] }, "Uploaded image URLs are invalid"],
+    [{ ...productInput, imageUrls: ["not-a-url"] }, "Uploaded image URLs are invalid"],
+    [{ ...productInput, imageUrls: ["https://cdn.example.com/a.png", 7] }, "Uploaded image URLs are invalid"],
+    [{ ...productInput, imageUrls: Array(11).fill("https://cdn.example.com/a.png") }, "Uploaded image URLs are invalid"],
+    [{ ...productInput, images: "wrong" }, "Images are invalid"],
+    [{ ...productInput, images: ["ok", 3] }, "Images are invalid"],
+    [{ ...productInput, categoryHint: 3 }, "Category hint is invalid"],
+    [{ ...productInput, categoryHint: "x".repeat(501) }, "Category hint is invalid"],
+    [{ ...productInput, purchasePriceCny: -1 }, "Product numeric facts are invalid"],
+    [{ ...productInput, packageWeightKg: Number.NaN }, "Product numeric facts are invalid"],
+    [{ ...productInput, lengthCm: Number.POSITIVE_INFINITY }, "Product numeric facts are invalid"]
   ])("rejects invalid independent product copy input", async (input, error) => {
     const generateProductCopy = vi.fn();
     const response = await request(createApp({ generateProductCopy }))
@@ -126,6 +215,16 @@ describe("API app", () => {
       .expect(400);
 
     expect(response.body).toEqual({ error });
+    expect(generateProductCopy).not.toHaveBeenCalled();
+  });
+
+  test("rejects a missing copy request body safely", async () => {
+    const generateProductCopy = vi.fn();
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .expect(400);
+
+    expect(response.body).toEqual({ error: "Selling points are required" });
     expect(generateProductCopy).not.toHaveBeenCalled();
   });
 
@@ -139,7 +238,7 @@ describe("API app", () => {
       createApp({ generateProductCopy, generateProductImageRole })
     )
       .post("/api/generate-product-copy")
-      .send({ input: productInput })
+      .send({ input: { ...productInput, sellingPoints: `  ${productInput.sellingPoints}  ` } })
       .expect(200);
 
     expect(response.body).toEqual({
@@ -156,7 +255,7 @@ describe("API app", () => {
       .send({ input: productInput })
       .expect(500);
 
-    expect(response.body.error).toContain("PACKY_API_KEY");
+    expect(response.body).toEqual({ error: "Internal server error" });
     expect(JSON.stringify(response.body)).not.toContain("secret-key-value");
   });
 
@@ -172,7 +271,27 @@ describe("API app", () => {
       .send({ input: productInput })
       .expect(500);
 
+    expect(response.body).toEqual({ error: "Internal server error" });
     expect(JSON.stringify(response.body)).not.toContain(apiKey);
+  });
+
+  test.each([
+    [new Error("Packy product copy API failed: 429 /private/path"), 429],
+    [new Error("Packy product copy API failed: 500 token=secret"), 503],
+    [new Error("Packy product copy API returned empty content."), 502]
+  ])("maps copy provider failures to a safe response", async (error, status) => {
+    const app = createApp({
+      generateProductCopy: async () => {
+        throw error;
+      }
+    });
+    const response = await request(app)
+      .post("/api/generate-product-copy")
+      .send({ input: productInput })
+      .expect(status);
+
+    expect(response.body).toEqual({ error: "Packy copy generation failed" });
+    expect(JSON.stringify(response.body)).not.toMatch(/private|token|secret/);
   });
 
   test("rejects an image role request without source images", async () => {
@@ -188,6 +307,99 @@ describe("API app", () => {
     expect(generateProductImageRole).not.toHaveBeenCalled();
   });
 
+  test.each([
+    ["blank selling points", { sellingPoints: "   " }, "Selling points are required"],
+    ["long selling points", { sellingPoints: "x".repeat(10001) }, "Selling points are invalid"],
+    ["long product type", { sellingPoints: "valid", productType: "x".repeat(501) }, "Product type is invalid"]
+  ])("rejects %s before image generation", async (_name, fields, error) => {
+    const generateProductImageRole = vi.fn();
+    let pending = request(createApp({ generateProductImageRole }))
+      .post("/api/generate-product-image-role")
+      .field("role", "main");
+    for (const [key, value] of Object.entries(fields)) {
+      pending = pending.field(key, value);
+    }
+    const response = await pending
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+      .expect(400);
+
+    expect(response.body).toEqual({ error });
+    expect(generateProductImageRole).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    ["non-image MIME", pngImage, "text/plain", "one.txt"],
+    ["spoofed PNG", Buffer.from("not png"), "image/png", "one.png"],
+    ["spoofed JPEG", Buffer.from("not jpeg"), "image/jpeg", "one.jpg"],
+    ["spoofed WebP", Buffer.from("RIFFxxxxNOPE"), "image/webp", "one.webp"]
+  ])("rejects %s before image generation", async (_name, data, contentType, filename) => {
+    const generateProductImageRole = vi.fn();
+    const response = await request(createApp({ generateProductImageRole }))
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid")
+      .attach("images", data, { filename, contentType })
+      .expect(400);
+
+    expect(response.body).toEqual({ error: "Invalid source image file" });
+    expect(generateProductImageRole).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [pngImage, "image/png", "one.png"],
+    [jpegImage, "image/jpeg", "one.jpg"],
+    [webpImage, "image/webp", "one.webp"]
+  ])("accepts an authentic supported image signature", async (data, contentType, filename) => {
+    const generateProductImageRole = vi.fn(async (input) => ({
+      role: input.role,
+      imageUrl: "https://cdn.example.com/result.png"
+    }));
+    await request(createApp({ generateProductImageRole }))
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid")
+      .attach("images", data, { filename, contentType })
+      .expect(200);
+
+    expect(generateProductImageRole).toHaveBeenCalledOnce();
+  });
+
+  test("returns safe JSON when an image exceeds 8 MiB", async () => {
+    const generateProductImageRole = vi.fn();
+    const response = await request(createApp({ generateProductImageRole }))
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid")
+      .attach("images", Buffer.alloc(8 * 1024 * 1024 + 1), {
+        filename: "large.png",
+        contentType: "image/png"
+      })
+      .expect(413);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "Image file exceeds 8 MiB limit" });
+    expect(generateProductImageRole).not.toHaveBeenCalled();
+  });
+
+  test("returns safe JSON when more than 10 images are uploaded", async () => {
+    const generateProductImageRole = vi.fn();
+    let pending = request(createApp({ generateProductImageRole }))
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid");
+    for (let index = 0; index < 11; index += 1) {
+      pending = pending.attach("images", pngImage, {
+        filename: `${index}.png`,
+        contentType: "image/png"
+      });
+    }
+    const response = await pending.expect(400);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "Invalid multipart upload" });
+    expect(generateProductImageRole).not.toHaveBeenCalled();
+  });
+
   test.each(["MAIN", "unknown", "", "main "])(
     "rejects unknown product image role %j before generation",
     async (role) => {
@@ -195,7 +407,8 @@ describe("API app", () => {
       const response = await request(createApp({ generateProductImageRole }))
         .post("/api/generate-product-image-role")
         .field("role", role)
-        .attach("images", Buffer.from("one"), "one.png")
+        .field("sellingPoints", "valid")
+        .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
         .expect(400);
 
       expect(response.body).toEqual({ error: "Invalid product image role" });
@@ -218,7 +431,7 @@ describe("API app", () => {
         .field("role", role)
         .field("productType", "   ")
         .field("sellingPoints", productInput.sellingPoints)
-        .attach("images", Buffer.from("one"), "one.png")
+        .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
         .expect(200);
 
       expect(response.body).toEqual({
@@ -254,7 +467,8 @@ describe("API app", () => {
     const imageResponse = await request(app)
       .post("/api/generate-product-image-role")
       .field("role", "main")
-      .attach("images", Buffer.from("one"), "one.png")
+      .field("sellingPoints", "valid")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
       .expect(200);
 
     expect(imageResponse.body.imageUrl).toBe("https://cdn.example.com/main.png");
@@ -273,7 +487,8 @@ describe("API app", () => {
     await request(app)
       .post("/api/generate-product-image-role")
       .field("role", "main")
-      .attach("images", Buffer.from("one"), "one.png")
+      .field("sellingPoints", "valid")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
       .expect(500);
     const copyResponse = await request(app)
       .post("/api/generate-product-copy")
@@ -284,6 +499,37 @@ describe("API app", () => {
       title: "Recovered copy",
       description: "Independent copy result."
     });
+  });
+
+  test("maps image provider and unknown failures to safe responses", async () => {
+    const providerApp = createApp({
+      generateProductImageRole: async () => {
+        throw new Error("Packy image API failed: 500 C:\\private\\token.txt");
+      }
+    });
+    const providerResponse = await request(providerApp)
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+      .expect(503);
+
+    expect(providerResponse.body).toEqual({ error: "Packy image generation failed" });
+    expect(JSON.stringify(providerResponse.body)).not.toMatch(/private|token/);
+
+    const unknownApp = createApp({
+      generateProductImageRole: async () => {
+        throw new Error("unknown secret path C:\\private");
+      }
+    });
+    const unknownResponse = await request(unknownApp)
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+      .expect(500);
+
+    expect(unknownResponse.body).toEqual({ error: "Internal server error" });
   });
 
   test("uploads multiple source images through injected service", async () => {
