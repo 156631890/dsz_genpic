@@ -1,7 +1,33 @@
 import { uploadImagesToImgbb } from "./imageUploader.js";
+import type {
+  GeneratedProductImage,
+  ProductImageRole
+} from "../../shared/product.js";
 
 const PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS = 3;
 const SHOPIFY_PRODUCT_IMAGE_COUNT = 5;
+
+export const PRODUCT_IMAGE_ROLE_RULES: Record<ProductImageRole, string> = {
+  main: "Feature main image. Use a clean premium neutral, softly lit studio, or subtle real-world background. Do not use a pure white or plain white background. Keep the full product visible, centered, and sharp.",
+  side: "Side profile or alternate view. Clearly show the product angle, shape, contour, or side construction on a clean background without a lifestyle scene.",
+  detail: "Confirmed product detail close-up showing packaging, texture, material, stitching, label, closure, or another visible feature. Do not invent measurements or text.",
+  lifestyle_1: "Realistic lifestyle scene 1: show the product naturally in a credible everyday usage context with restrained styling and believable lighting.",
+  lifestyle_2: "Realistic lifestyle scene 2: show a distinct second usage context, setting, composition, and lighting treatment while keeping the same product accurate."
+};
+
+export function buildProductImageRolePrompt(
+  role: ProductImageRole,
+  sellingPoints: string
+): string {
+  return [
+    "Generate exactly one square product image for this single role.",
+    "Do not create a collage, grid, split screen, contact sheet, or multi-panel image.",
+    "No watermark, no logo, no badge, and no unsupported text.",
+    "Keep the actual product accurate, recognizable, sharp, and free of unsupported claims.",
+    `Selling points for visual emphasis only: ${sellingPoints}`,
+    PRODUCT_IMAGE_ROLE_RULES[role]
+  ].join("\n");
+}
 
 export interface PackyEditInput {
   baseUrl?: string;
@@ -168,6 +194,43 @@ export async function generateShopifyProductImagesWithPacky(input: {
   };
 }
 
+export async function generateProductImageRoleWithPacky(input: {
+  images: Express.Multer.File[];
+  productType: string;
+  sellingPoints: string;
+  role: ProductImageRole;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
+}): Promise<GeneratedProductImage> {
+  if (input.images.length === 0) {
+    throw new Error("At least one source product image is required.");
+  }
+
+  const env = input.env || process.env;
+  const apiKey = env.PACKY_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("Missing PACKY_API_KEY. Cannot generate product image role.");
+  }
+
+  const imageUrls = await requestPackyShopifyProductImageUrls({
+    images: input.images,
+    productType: input.productType,
+    prompt: buildProductImageRolePrompt(input.role, input.sellingPoints),
+    count: 1,
+    env,
+    fetcher: input.fetchImpl || fetch,
+    apiKey,
+    maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS,
+    model: "gpt-image-2",
+    size: "1024x1024",
+    quality: "high",
+    requireImage: true
+  });
+
+  return { role: input.role, imageUrl: imageUrls[0] };
+}
+
 async function requestPackyShopifyProductImageUrls(input: {
   images: Express.Multer.File[];
   productType: string;
@@ -177,12 +240,22 @@ async function requestPackyShopifyProductImageUrls(input: {
   fetcher: typeof fetch;
   apiKey: string;
   maxAttempts?: number;
+  model?: string;
+  size?: string;
+  quality?: "low" | "medium" | "high" | "auto";
+  requireImage?: boolean;
 }): Promise<string[]> {
   const maxAttempts = input.maxAttempts || 1;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await requestPackyShopifyProductImageUrlsOnce(input);
+      const imageUrls = await requestPackyShopifyProductImageUrlsOnce(input);
+
+      if (input.requireImage && imageUrls.length === 0) {
+        throw new Error("Packy Shopify product image API returned no image.");
+      }
+
+      return imageUrls;
     } catch (error) {
       if (attempt === maxAttempts || !isPackyTransientImageError(error)) {
         throw error;
@@ -201,15 +274,18 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
   apiKey: string;
+  model?: string;
+  size?: string;
+  quality?: "low" | "medium" | "high" | "auto";
 }): Promise<string[]> {
   const request = buildPackyEditRequest({
     baseUrl: input.env.PACKY_BASE_URL,
-    model: input.env.PACKY_IMAGE_MODEL,
+    model: input.model || input.env.PACKY_IMAGE_MODEL,
     productType: input.productType,
     prompt: input.prompt,
     count: input.count,
-    size: input.env.PACKY_IMAGE_SIZE || "1024x1024",
-    quality: normalizeQuality(input.env.PACKY_IMAGE_QUALITY)
+    size: input.size || input.env.PACKY_IMAGE_SIZE || "1024x1024",
+    quality: input.quality || normalizeQuality(input.env.PACKY_IMAGE_QUALITY)
   });
   const form = new FormData();
 
@@ -355,7 +431,8 @@ function isPackyTransientImageError(error: unknown): boolean {
   return (
     Boolean(match && Number(match[1]) >= 500) ||
     error.message === "Packy Shopify product image API returned non-JSON response" ||
-    error.message === "Packy Shopify product image API returned empty response"
+    error.message === "Packy Shopify product image API returned empty response" ||
+    error.message === "Packy Shopify product image API returned no image."
   );
 }
 
