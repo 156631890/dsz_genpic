@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
   buildProductCopyMessages,
+  extractCanonicalProductFooter,
   generateProductCopyWithPacky,
   loadProductSystemPrompt,
   parseProductCopy,
@@ -14,7 +15,10 @@ import {
 import { PRODUCT_IMAGE_ROLES, type ProductInput } from "../../shared/product";
 
 const validTitle = "Compact Storage Organiser - Practical Space Saving Design, Easy Everyday Access, Versatile Home and Travel Use";
-const validDescription = "<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p><p><strong>Returns, Refunds and Replacements</strong><br />Eligible claims are handled under the Australian Consumer Law ACL.</p><p><strong>Delivery Timeframe</strong></p><p>Delivery estimates exclude weekends and public holidays.</p>";
+const exactSystemPrompt = await readFile(resolve("rules/DSZ系统prompt 4月20版本.txt"), "utf8");
+const canonicalFooter = extractCanonicalProductFooter(exactSystemPrompt);
+const descriptionPrefix = "<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p>";
+const validDescription = `${descriptionPrefix}${canonicalFooter}`;
 
 function productInput(overrides: Partial<ProductInput> = {}): ProductInput {
   return {
@@ -37,6 +41,10 @@ function productInput(overrides: Partial<ProductInput> = {}): ProductInput {
 
 function titleContaining(markdown: string): string {
   return `${"A".repeat(110 - markdown.length)}${markdown}`;
+}
+
+function validateCopy(copy: { title: string; description: string }): string[] {
+  return validateProductCopy(copy, canonicalFooter);
 }
 
 test("exports the five approved product image role contracts", () => {
@@ -118,33 +126,65 @@ describe("product copy parsing", () => {
 });
 
 describe("product copy validation", () => {
+  const footerError = "Description must end with the exact canonical DSZ footer.";
+  const htmlStructureError =
+    "Description contains unclosed, unexpected, or misnested HTML tags.";
+  const markdownError = "Description must not contain Markdown.";
+  const urlError = "Description must not contain a URL.";
+  const unsupportedTagError = "Description contains an unsupported HTML tag.";
+  const descriptionLineError = "Description must be one line without tabs.";
+  const titleLengthError = "Title must be between 110 and 200 characters.";
+  const titleCharacterError =
+    "Title contains a character outside the approved ecommerce punctuation set.";
+  const titleMarkdownError = "Title must not contain Markdown.";
+
+  test("extracts only the exact HTML footer from the loaded system prompt", () => {
+    expect(canonicalFooter).toMatch(/^<p>/);
+    expect(canonicalFooter).toMatch(/<\/ul>$/);
+    expect(canonicalFooter).not.toContain("在描述最后");
+    expect(canonicalFooter).not.toContain("固定页脚如下");
+  });
+
+  test("extracts the HTML footer without surrounding rule prose", () => {
+    const suppliedPrompt = [
+      "【固定页脚规则】",
+      "- Preserve this rule.",
+      "- 固定页脚如下：",
+      "<p>Exact footer HTML.</p>",
+      "- This prose is not part of the footer.",
+      "【格式清洗规则】"
+    ].join("\n");
+
+    expect(extractCanonicalProductFooter(suppliedPrompt)).toBe("<p>Exact footer HTML.</p>");
+  });
+
   test("accepts a valid title and allowed single-line HTML description", () => {
-    expect(validateProductCopy({ title: validTitle, description: validDescription })).toEqual([]);
+    expect(validateCopy({ title: validTitle, description: validDescription })).toEqual([]);
   });
 
   test.each([
-    ["109-character title", "A".repeat(109)],
-    ["201-character title", "A".repeat(201)],
-    ["unicode title", `${"A".repeat(109)}é`],
-    ["question mark", `${"A".repeat(109)}?`],
-    ["asterisk", `${"A".repeat(109)}*`],
-    ["trademark symbol", `${"A".repeat(109)}™`],
-    ["Markdown fence", titleContaining("```code```")],
-    ["Markdown link", titleContaining("[link](x)")],
-    ["Markdown heading", `# ${"A".repeat(108)}`],
-    ["Markdown list", `- ${"A".repeat(108)}`],
-    ["Markdown emphasis", titleContaining("_emphasis_")],
-    ["Markdown inline code", titleContaining("`code`")]
-  ])("rejects %s", (_label, title) => {
-    expect(validateProductCopy({ title, description: validDescription })).not.toEqual([]);
+    ["109-character title", "A".repeat(109), titleLengthError],
+    ["201-character title", "A".repeat(201), titleLengthError],
+    ["unicode title", `${"A".repeat(109)}é`, titleCharacterError],
+    ["question mark", `${"A".repeat(109)}?`, titleCharacterError],
+    ["asterisk", `${"A".repeat(109)}*`, titleCharacterError],
+    ["trademark symbol", `${"A".repeat(109)}™`, titleCharacterError],
+    ["Markdown fence", titleContaining("```code```"), titleMarkdownError],
+    ["Markdown link", titleContaining("[link](x)"), titleMarkdownError],
+    ["Markdown heading", `# ${"A".repeat(108)}`, titleMarkdownError],
+    ["Markdown list", `- ${"A".repeat(108)}`, titleMarkdownError],
+    ["Markdown emphasis", titleContaining("_emphasis_"), titleMarkdownError],
+    ["Markdown inline code", titleContaining("`code`"), titleMarkdownError]
+  ])("rejects %s", (_label, title, expectedError) => {
+    expect(validateCopy({ title, description: validDescription })).toContain(expectedError);
   });
 
   test.each(["$", "@", "^", "{", "}", "|", "\\", "~", "[", "]", "?", "*", "`"])(
     "rejects forbidden printable ASCII title symbol %s",
     (symbol) => {
       expect(
-        validateProductCopy({ title: titleContaining(symbol), description: validDescription })
-      ).not.toEqual([]);
+        validateCopy({ title: titleContaining(symbol), description: validDescription })
+      ).toContain(titleCharacterError);
     }
   );
 
@@ -152,7 +192,7 @@ describe("product copy validation", () => {
     const approvedPunctuation = `Comma, period. hyphen- apostrophe' quote" colon: semicolon; parentheses() ampersand& slash/ plus+ percent%`;
 
     expect(
-      validateProductCopy({
+      validateCopy({
         title: titleContaining(approvedPunctuation),
         description: validDescription
       })
@@ -160,33 +200,125 @@ describe("product copy validation", () => {
   });
 
   test.each([
-    ["multiline description", `${validDescription}\n<p>More</p>`],
-    ["tabbed description", `${validDescription}\t`],
-    ["URL", `${validDescription}<p>https://example.test</p>`],
-    ["Markdown", `${validDescription} **bold**`],
-    ["single-marker Markdown", `${validDescription} *bold*`],
-    ["inline Markdown code", `${validDescription} \`code\``],
-    ["strikethrough Markdown", `${validDescription} ~~strike~~`],
-    ["Markdown link", `${validDescription} [link](x)`],
-    ["Markdown image", `${validDescription} ![alt](image.png)`],
-    ["Markdown heading", `# Heading ${validDescription}`],
-    ["Markdown list", `- item ${validDescription}`],
-    ["Markdown blockquote", `> quote ${validDescription}`],
-    ["div tag", `${validDescription}<div>More</div>`],
-    ["anchor tag", `${validDescription}<a>More</a>`],
-    ["image tag", `${validDescription}<img>`],
-    ["table tag", `${validDescription}<table></table>`],
-    ["h2 tag", `${validDescription}<h2>More</h2>`],
-    ["span tag", `${validDescription}<span>More</span>`]
-  ])("rejects %s while all other fields remain valid", (_label, description) => {
-    expect(validateProductCopy({ title: validTitle, description })).not.toEqual([]);
+    ["multiline description", `${descriptionPrefix}<p>Line one\nLine two</p>${canonicalFooter}`, descriptionLineError],
+    ["tabbed description", `${descriptionPrefix}<p>Tabbed\ttext</p>${canonicalFooter}`, descriptionLineError],
+    ["URL", `${descriptionPrefix}<p>https://example.test</p>${canonicalFooter}`, urlError],
+    ["Markdown", `${descriptionPrefix}<p>**bold**</p>${canonicalFooter}`, markdownError],
+    ["single-marker Markdown", `${descriptionPrefix}<p>*bold*</p>${canonicalFooter}`, markdownError],
+    ["inline Markdown code", `${descriptionPrefix}<p>\`code\`</p>${canonicalFooter}`, markdownError],
+    ["strikethrough Markdown", `${descriptionPrefix}<p>~~strike~~</p>${canonicalFooter}`, markdownError],
+    ["Markdown link", `${descriptionPrefix}<p>[link](x)</p>${canonicalFooter}`, markdownError],
+    ["Markdown image", `${descriptionPrefix}<p>![alt](image.png)</p>${canonicalFooter}`, markdownError],
+    ["Markdown heading", `# Heading ${descriptionPrefix}${canonicalFooter}`, markdownError],
+    ["Markdown list", `- item ${descriptionPrefix}${canonicalFooter}`, markdownError],
+    ["Markdown blockquote", `> quote ${descriptionPrefix}${canonicalFooter}`, markdownError],
+    ["div tag", `${descriptionPrefix}<div>More</div>${canonicalFooter}`, unsupportedTagError],
+    ["anchor tag", `${descriptionPrefix}<a>More</a>${canonicalFooter}`, unsupportedTagError],
+    ["image tag", `${descriptionPrefix}<img>${canonicalFooter}`, unsupportedTagError],
+    ["table tag", `${descriptionPrefix}<table></table>${canonicalFooter}`, unsupportedTagError],
+    ["h2 tag", `${descriptionPrefix}<h2>More</h2>${canonicalFooter}`, unsupportedTagError],
+    ["span tag", `${descriptionPrefix}<span>More</span>${canonicalFooter}`, unsupportedTagError]
+  ])("rejects %s while all other fields remain valid", (_label, description, expectedError) => {
+    expect(validateCopy({ title: validTitle, description })).toContain(expectedError);
   });
 
   test.each([
     ["missing returns phrase", validDescription.replace("Returns, Refunds and Replacements", "Customer Care")],
     ["missing delivery phrase", validDescription.replace("Delivery Timeframe", "Shipping")]
   ])("rejects a description with %s", (_label, description) => {
-    expect(validateProductCopy({ title: validTitle, description })).not.toEqual([]);
+    expect(validateCopy({ title: validTitle, description })).toContain(footerError);
+  });
+
+  test.each([
+    ["truncated footer", `${descriptionPrefix}${canonicalFooter.slice(0, -20)}`],
+    [
+      "rewritten ACL wording",
+      `${descriptionPrefix}${canonicalFooter.replace("Australian Consumer Law (ACL)", "Australian Consumer Law")}`
+    ],
+    [
+      "missing delivery regions",
+      `${descriptionPrefix}${canonicalFooter.replace("NSW, SA, ACT, and QLD", "NSW and QLD")}`
+    ],
+    ["footer followed by content", `${validDescription}<p>Extra content</p>`]
+  ])("rejects %s", (_label, description) => {
+    expect(validateCopy({ title: validTitle, description })).toContain(footerError);
+  });
+
+  test("accepts the exact footer with normalized whitespace between adjacent tags", () => {
+    const spacedFooter = canonicalFooter.replace(/></g, ">   <");
+
+    expect(validateCopy({
+      title: validTitle,
+      description: `${descriptionPrefix}${spacedFooter}`
+    })).toEqual([]);
+  });
+
+  test.each([
+    ["unclosed p", `<p>Unclosed${canonicalFooter}`],
+    ["mismatched strong and p", `<p><strong>Misnested</p></strong>${canonicalFooter}`],
+    ["p nested directly in ul", `<p>Overview</p><ul><p>Invalid</p></ul>${canonicalFooter}`],
+    ["li outside ul", `<li>Invalid</li>${canonicalFooter}`],
+    ["alternate br", `<p>Invalid<br>break</p>${canonicalFooter}`],
+    ["br with attributes", `<p>Invalid<br class="gap" />break</p>${canonicalFooter}`],
+    ["tag with attributes", `<p class="copy">Invalid</p>${canonicalFooter}`],
+    ["stray markup", `<p>Invalid <<strong>text</strong></p>${canonicalFooter}`]
+  ])("rejects structurally invalid HTML with an %s", (_label, description) => {
+    expect(validateCopy({ title: validTitle, description })).toContain(htmlStructureError);
+  });
+
+  test("accepts valid p, strong, br, ul, and li nesting", () => {
+    const description =
+      `<p>Overview <strong>with emphasis</strong><br />and detail.</p>` +
+      `<ul><li><strong>Feature</strong> with benefit<br />and context.</li></ul>` +
+      canonicalFooter;
+
+    expect(validateCopy({ title: validTitle, description })).toEqual([]);
+  });
+
+  test("rejects a description with no allowed HTML elements", () => {
+    expect(
+      validateProductCopy({ title: validTitle, description: "Plain text only" }, canonicalFooter)
+    ).toContain(htmlStructureError);
+  });
+
+  test.each(["中文", "😀", "™", "©", "€", "?", "*"])(
+    "rejects forbidden description text characters in %s",
+    (text) => {
+      const description = `${descriptionPrefix}<p>Invalid ${text} text</p>${canonicalFooter}`;
+      expect(validateCopy({ title: validTitle, description })).toContain(
+        "Description text contains a forbidden character."
+      );
+    }
+  );
+
+  test.each([
+    "http://example.com/path",
+    "https://example.com/path",
+    "www.example.com",
+    "example.com",
+    "//example.com/path",
+    "ftp://example.com/file",
+    "mailto:buyer@example.com"
+  ])("rejects URL or URI form %s", (url) => {
+    const description = `${descriptionPrefix}<p>${url}</p>${canonicalFooter}`;
+    expect(validateCopy({ title: validTitle, description })).toContain(urlError);
+  });
+
+  test.each([
+    ["before elements", "# Heading<p>Overview</p>"],
+    ["inside an element", "<p># Heading</p>"],
+    ["between elements", "<p>Overview</p>- item<p>More</p>"],
+    ["after a br boundary", "<p>Overview<br />> quote</p>"],
+    ["inside a list item", "<p>Overview</p><ul><li>1. item</li></ul>"],
+    ["after elements", "<p>Overview</p># Heading"]
+  ])("rejects block Markdown %s", (_position, adversarialHtml) => {
+    const description = `${adversarialHtml}${canonicalFooter}`;
+    expect(validateCopy({ title: validTitle, description })).toContain(markdownError);
+  });
+
+  test("preserves legitimate hyphenated prose", () => {
+    const description = `<p>Space-saving design supports day-to-day use.</p>${canonicalFooter}`;
+    expect(validateCopy({ title: validTitle, description })).toEqual([]);
   });
 });
 
@@ -200,7 +332,7 @@ describe("Packy product copy generation", () => {
         { status: 200, headers: { "content-type": "application/json" } }
       );
     });
-    const systemPrompt = "Exact prompt for Packy";
+    const systemPrompt = exactSystemPrompt;
 
     await expect(
       generateProductCopyWithPacky({

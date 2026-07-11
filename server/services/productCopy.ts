@@ -31,6 +31,37 @@ export async function loadProductSystemPrompt(): Promise<string> {
   return readFile(PRODUCT_PROMPT_URL, "utf8");
 }
 
+export function extractCanonicalProductFooter(systemPrompt: string): string {
+  const footerRulesStart = systemPrompt.indexOf("【固定页脚规则】");
+  const formatRulesStart = systemPrompt.indexOf("【格式清洗规则】", footerRulesStart);
+  const footerMarker = "固定页脚如下：";
+  const footerMarkerStart = systemPrompt.indexOf(footerMarker, footerRulesStart);
+
+  if (
+    footerRulesStart < 0 ||
+    formatRulesStart < 0 ||
+    footerMarkerStart < 0 ||
+    footerMarkerStart >= formatRulesStart
+  ) {
+    throw new Error("DSZ system prompt does not contain the canonical product footer.");
+  }
+
+  const footerRegion = systemPrompt
+    .slice(footerMarkerStart + footerMarker.length, formatRulesStart)
+    .trim();
+  const footer =
+    footerRegion
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.startsWith("<")) || "";
+
+  if (!footer.startsWith("<") || !footer.endsWith(">")) {
+    throw new Error("DSZ system prompt does not contain the canonical product footer.");
+  }
+
+  return footer;
+}
+
 export function buildProductCopyMessages(
   input: ProductInput,
   systemPrompt: string
@@ -75,7 +106,10 @@ export function parseProductCopy(raw: string): GeneratedProductCopy {
   return { title: lines[0], description: lines[1] };
 }
 
-export function validateProductCopy(copy: GeneratedProductCopy): string[] {
+export function validateProductCopy(
+  copy: GeneratedProductCopy,
+  canonicalFooter: string
+): string[] {
   const errors: string[] = [];
 
   if (copy.title.length < 110 || copy.title.length > 200) {
@@ -94,7 +128,10 @@ export function validateProductCopy(copy: GeneratedProductCopy): string[] {
     errors.push("Description must be one line without tabs.");
   }
 
-  if (/(?:https?:\/\/|www\.)/i.test(copy.description)) {
+  const tags = copy.description.match(/<[^>]*>/g) || [];
+  const textNodes = copy.description.replace(/<[^>]*>/g, " ");
+
+  if (containsUrlOrUri(textNodes)) {
     errors.push("Description must not contain a URL.");
   }
 
@@ -102,22 +139,32 @@ export function validateProductCopy(copy: GeneratedProductCopy): string[] {
     errors.push("Description must not contain Markdown.");
   }
 
-  const tags = copy.description.match(/<[^>]*>/g) || [];
-  if (tags.some((tag) => !ALLOWED_HTML_TAGS.has(tag))) {
+  const hasUnsupportedTags = tags.some((tag) => !ALLOWED_HTML_TAGS.has(tag));
+  const hasMalformedMarkup = /[<>]/.test(textNodes);
+
+  if (hasUnsupportedTags) {
     errors.push("Description contains an unsupported HTML tag.");
   }
 
-  const textWithoutTags = copy.description.replace(/<[^>]*>/g, "");
-  if (/[<>]/.test(textWithoutTags)) {
+  if (hasUnsupportedTags || hasMalformedMarkup || hasInvalidHtmlStructure(copy.description)) {
+    errors.push("Description contains unclosed, unexpected, or misnested HTML tags.");
+  }
+
+  if (hasMalformedMarkup) {
     errors.push("Description contains malformed or unsupported HTML.");
   }
 
-  if (!copy.description.includes("Returns, Refunds and Replacements")) {
-    errors.push("Description must include Returns, Refunds and Replacements.");
+  if (!/^[\x20-\x7E]*$/.test(textNodes) || /[?*]/.test(textNodes)) {
+    errors.push("Description text contains a forbidden character.");
   }
 
-  if (!copy.description.includes("Delivery Timeframe")) {
-    errors.push("Description must include Delivery Timeframe.");
+  if (
+    !canonicalFooter ||
+    !normalizeFooterTagWhitespace(copy.description).endsWith(
+      normalizeFooterTagWhitespace(canonicalFooter)
+    )
+  ) {
+    errors.push("Description must end with the exact canonical DSZ footer.");
   }
 
   return errors;
@@ -166,7 +213,10 @@ export async function generateProductCopyWithPacky(
   }
 
   const copy = parseProductCopy(content);
-  const validationErrors = validateProductCopy(copy);
+  const validationErrors = validateProductCopy(
+    copy,
+    extractCanonicalProductFooter(systemPrompt)
+  );
 
   if (validationErrors.length > 0) {
     throw new Error(`Packy product copy API returned invalid content: ${validationErrors.join(" ")}`);
@@ -188,10 +238,77 @@ function isHttpsUrl(value: string): boolean {
 }
 
 function containsMarkdown(value: string): boolean {
+  const markdownText = value
+    .replace(/<\/?(?:p|ul|li)>|<br \/>/g, "\n")
+    .replace(/<\/?strong>/g, "")
+    .replace(/<[^>]*>/g, "\n");
   const inlineMarkdown =
     /```|~~~|`[^`]*`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|!?\[[^\]]+\]\([^)]*\)/;
-  const blockMarkdown = /^(?:#{1,6}\s|[-+*]\s|>\s|\d+\.\s)/;
-  return inlineMarkdown.test(value) || blockMarkdown.test(value);
+  const blockMarkdown = /^[ \t]*(?:#{1,6}(?:\s|$)|[-+*]\s+|>\s+|\d+[.)]\s+)/m;
+  return inlineMarkdown.test(markdownText) || blockMarkdown.test(markdownText);
+}
+
+function containsUrlOrUri(value: string): boolean {
+  const uriScheme = /\b[a-z][a-z0-9+.-]*:(?=\/\/|[^\s<])/i;
+  const protocolRelative = /\/\/[a-z0-9]/i;
+  const bareDomain = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/i;
+  return (
+    uriScheme.test(value) ||
+    protocolRelative.test(value) ||
+    /\bwww\./i.test(value) ||
+    bareDomain.test(value)
+  );
+}
+
+function hasInvalidHtmlStructure(value: string): boolean {
+  const stack: string[] = [];
+  const tokens = value.match(/<[^>]*>|[^<>]+|[<>]/g) || [];
+  let hasAllowedElement = false;
+  let hasCompletedParagraph = false;
+
+  for (const token of tokens) {
+    if (!token.startsWith("<")) {
+      if (token === ">" || (stack.at(-1) === "ul" && token.trim())) return true;
+      continue;
+    }
+
+    if (!ALLOWED_HTML_TAGS.has(token)) return true;
+    hasAllowedElement = true;
+
+    if (token === "<br />") {
+      if (!isTextContainer(stack.at(-1))) return true;
+      continue;
+    }
+
+    const match = token.match(/^<(\/)?(p|strong|ul|li)>$/);
+
+    if (!match) return true;
+    const [, closing, name] = match;
+
+    if (!closing) {
+      const parent = stack.at(-1);
+
+      if (name === "p" && parent !== undefined) return true;
+      if (name === "ul" && (parent !== undefined || !hasCompletedParagraph)) return true;
+      if (name === "li" && parent !== "ul") return true;
+      if (name === "strong" && !isTextContainer(parent)) return true;
+      stack.push(name);
+    } else if (stack.pop() !== name) {
+      return true;
+    } else if (name === "p") {
+      hasCompletedParagraph = true;
+    }
+  }
+
+  return !hasAllowedElement || stack.length > 0;
+}
+
+function isTextContainer(tag: string | undefined): boolean {
+  return tag === "p" || tag === "li";
+}
+
+function normalizeFooterTagWhitespace(value: string): string {
+  return value.replace(/>\s+</g, "><");
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {
