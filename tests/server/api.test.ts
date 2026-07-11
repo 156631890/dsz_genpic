@@ -1,10 +1,12 @@
 import request from "supertest";
-import { describe, expect, test, vi } from "vitest";
-import { createApp } from "../../server/app";
+import { describe, expect, expectTypeOf, test, vi } from "vitest";
+import { createApp, type AppDependencies } from "../../server/app";
 import { standardZoneRates } from "../../server/services/dszRules";
 import {
   PRODUCT_IMAGE_ROLES,
   type DszProductFields,
+  type GeneratedProductCopy,
+  type GeneratedProductImage,
   type ProductInput
 } from "../../shared/product";
 
@@ -53,6 +55,15 @@ const fields: DszProductFields = {
 };
 
 describe("API app", () => {
+  test("requires asynchronous independent generation dependencies", () => {
+    expectTypeOf<
+      NonNullable<AppDependencies["generateProductCopy"]>
+    >().returns.toEqualTypeOf<Promise<GeneratedProductCopy>>();
+    expectTypeOf<
+      NonNullable<AppDependencies["generateProductImageRole"]>
+    >().returns.toEqualTypeOf<Promise<GeneratedProductImage>>();
+  });
+
   test("reports health and mock/live upload state", async () => {
     const apiKey = "health-test-secret-key";
     const app = createApp({
@@ -119,7 +130,7 @@ describe("API app", () => {
   });
 
   test("returns independent generated product copy without a wrapper", async () => {
-    const generateProductCopy = vi.fn(() => ({
+    const generateProductCopy = vi.fn(async () => ({
       title: "Premium Cotton Underwear",
       description: "A breathable everyday essential."
     }));
@@ -196,7 +207,7 @@ describe("API app", () => {
     "generates the independent %s product image role without invoking copy",
     async (role) => {
       const generateProductCopy = vi.fn();
-      const generateProductImageRole = vi.fn((input) => ({
+      const generateProductImageRole = vi.fn(async (input) => ({
         role: input.role,
         imageUrl: `https://cdn.example.com/${input.role}.png`
       }));

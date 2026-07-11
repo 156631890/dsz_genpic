@@ -35,13 +35,13 @@ export interface AppDependencies {
   ) => Promise<ProductGenerationResult>;
   generateProductCopy?: (
     input: ProductInput
-  ) => GeneratedProductCopy | Promise<GeneratedProductCopy>;
+  ) => Promise<GeneratedProductCopy>;
   generateProductImageRole?: (input: {
     role: ProductImageRole;
     images: Express.Multer.File[];
     productType: string;
     sellingPoints: string;
-  }) => GeneratedProductImage | Promise<GeneratedProductImage>;
+  }) => Promise<GeneratedProductImage>;
   generateImage?: (input: {
     image: Express.Multer.File;
     productType: string;
