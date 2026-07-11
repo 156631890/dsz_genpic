@@ -226,13 +226,18 @@ export function createApp(dependencies: AppDependencies = {}) {
         return;
       }
 
+      if (files.some((file) => !isSupportedImage(file))) {
+        res.status(400).json({ error: "Invalid source image file" });
+        return;
+      }
+
       const result = dependencies.uploadImages
         ? await dependencies.uploadImages(files)
         : await uploadImagesToImgbb({ files, env });
 
       res.json(result);
-    } catch (error) {
-      sendError(res, error);
+    } catch {
+      sendSafeError(res);
     }
   });
 
@@ -258,8 +263,8 @@ export function createApp(dependencies: AppDependencies = {}) {
         : await generateDszFieldsWithPacky({ productInput, env });
 
       res.json({ result });
-    } catch (error) {
-      sendError(res, error);
+    } catch {
+      sendSafeError(res);
     }
   });
 
@@ -267,6 +272,11 @@ export function createApp(dependencies: AppDependencies = {}) {
     try {
       if (!req.file) {
         res.status(400).json({ error: "Source image file is required" });
+        return;
+      }
+
+      if (!isSupportedImage(req.file)) {
+        res.status(400).json({ error: "Invalid source image file" });
         return;
       }
 
@@ -286,8 +296,8 @@ export function createApp(dependencies: AppDependencies = {}) {
           });
 
       res.json(result);
-    } catch (error) {
-      sendError(res, error);
+    } catch {
+      sendSafeError(res);
     }
   });
 
@@ -297,6 +307,11 @@ export function createApp(dependencies: AppDependencies = {}) {
 
       if (files.length === 0) {
         res.status(400).json({ error: "At least one source image file is required" });
+        return;
+      }
+
+      if (files.some((file) => !isSupportedImage(file))) {
+        res.status(400).json({ error: "Invalid source image file" });
         return;
       }
 
@@ -319,8 +334,8 @@ export function createApp(dependencies: AppDependencies = {}) {
           });
 
       res.json(result);
-    } catch (error) {
-      sendError(res, error);
+    } catch {
+      sendSafeError(res);
     }
   });
 
@@ -338,17 +353,19 @@ export function createApp(dependencies: AppDependencies = {}) {
       const result = await uploadProduct({ payload, env });
 
       res.json(result);
-    } catch (error) {
-      sendError(res, error);
+    } catch {
+      sendSafeError(res);
     }
   });
 
   app.use((
     error: unknown,
-    _req: express.Request,
+    req: express.Request,
     res: express.Response,
-    next: express.NextFunction
+    _next: express.NextFunction
   ) => {
+    void _next;
+
     if (isRecord(error) && error.type === "entity.too.large") {
       res.status(413).json({ error: "JSON body exceeds 2 MiB limit" });
       return;
@@ -363,28 +380,41 @@ export function createApp(dependencies: AppDependencies = {}) {
       return;
     }
 
-    if (!(error instanceof multer.MulterError)) {
-      next(error);
+    if (error instanceof multer.MulterError) {
+      if (error.code === "LIMIT_FILE_SIZE") {
+        res.status(413).json({ error: "Image file exceeds 8 MiB limit" });
+        return;
+      }
+
+      res.status(400).json({ error: "Invalid multipart upload" });
       return;
     }
 
-    if (error.code === "LIMIT_FILE_SIZE") {
-      res.status(413).json({ error: "Image file exceeds 8 MiB limit" });
+    if (req.is("multipart/form-data")) {
+      res.status(400).json({ error: "Invalid multipart upload" });
       return;
     }
 
-    res.status(400).json({ error: "Invalid multipart upload" });
+    if (isRecord(error)) {
+      const status = error.status;
+
+      if (typeof status === "number" && status >= 400 && status <= 499) {
+        const message = status === 415
+          ? "Unsupported request encoding"
+          : "Invalid request body";
+        res.status(status).json({ error: message });
+        return;
+      }
+    }
+
+    res.status(500).json({ error: "Internal server error" });
   });
 
   return app;
 }
 
-function sendError(res: express.Response, error: unknown, secret?: string) {
-  const rawMessage = error instanceof Error ? error.message : "Unknown error";
-  const message = secret
-    ? rawMessage.split(secret).join("[REDACTED]")
-    : rawMessage;
-  res.status(500).json({ error: message });
+function sendSafeError(res: express.Response) {
+  res.status(500).json({ error: "Internal server error" });
 }
 
 function parseProductInput(value: unknown): ProductInputValidation {
@@ -514,6 +544,13 @@ function mapGenerationError(
 
   if (!(error instanceof Error)) {
     return fallback;
+  }
+
+  if (kind === "copy" && error instanceof TypeError) {
+    return {
+      status: 503,
+      message: "Packy copy generation unavailable"
+    };
   }
 
   const providerMessage = kind === "copy"

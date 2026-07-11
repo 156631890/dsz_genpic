@@ -255,6 +255,69 @@ describe("API app", () => {
     expect(generateProductCopy).not.toHaveBeenCalled();
   });
 
+  test("returns safe JSON for an unsupported JSON charset", async () => {
+    const generateProductCopy = vi.fn();
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .set("Content-Type", "application/json; charset=klingon")
+      .send("{}")
+      .expect(415);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "Unsupported request encoding" });
+    expect(response.text).not.toMatch(/stack|charset|node_modules|[A-Z]:\\/i);
+    expect(generateProductCopy).not.toHaveBeenCalled();
+  });
+
+  test("returns safe JSON for an invalid gzip JSON body", async () => {
+    const generateProductCopy = vi.fn();
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .set("Content-Type", "application/json")
+      .set("Content-Encoding", "gzip")
+      .send(Buffer.from("not-valid-gzip C:\\private"))
+      .expect(400);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "Invalid request body" });
+    expect(response.text).not.toMatch(/stack|gzip|private|node_modules|[A-Z]:\\/i);
+    expect(generateProductCopy).not.toHaveBeenCalled();
+  });
+
+  test("returns safe JSON for a truncated multipart body", async () => {
+    const uploadImages = vi.fn();
+    const response = await request(createApp({ uploadImages }))
+      .post("/api/upload-images")
+      .set("Content-Type", "multipart/form-data; boundary=truncated-boundary")
+      .send(
+        "--truncated-boundary\r\n" +
+          'Content-Disposition: form-data; name="images"; filename="C:\\private.txt"\r\n' +
+          "Content-Type: image/png\r\n\r\n" +
+          "unfinished"
+      )
+      .expect(400);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "Invalid multipart upload" });
+    expect(response.text).not.toMatch(/stack|private|node_modules|[A-Z]:\\/i);
+    expect(uploadImages).not.toHaveBeenCalled();
+  });
+
+  test("returns safe JSON for an unknown uncaught error", async () => {
+    const env = new Proxy<Record<string, string | undefined>>({}, {
+      get() {
+        throw new Error("unknown C:\\private\\token-secret.txt");
+      }
+    });
+    const response = await request(createApp({ env }))
+      .get("/api/health")
+      .expect(500);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "Internal server error" });
+    expect(response.text).not.toMatch(/stack|private|token-secret|node_modules/i);
+  });
+
   test("returns independent generated product copy without a wrapper", async () => {
     const generateProductCopy = vi.fn(async () => ({
       title: "Premium Cotton Underwear",
@@ -319,6 +382,19 @@ describe("API app", () => {
 
     expect(response.body).toEqual({ error: "Packy copy generation failed" });
     expect(JSON.stringify(response.body)).not.toMatch(/private|token|secret/);
+  });
+
+  test("maps copy transport failures to a safe unavailable response", async () => {
+    const generateProductCopy = vi.fn(async () => {
+      throw new TypeError("fetch failed C:\\private\\token.txt");
+    });
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .send({ input: productInput })
+      .expect(503);
+
+    expect(response.body).toEqual({ error: "Packy copy generation unavailable" });
+    expect(response.text).not.toMatch(/private|token|fetch failed/i);
   });
 
   test("rejects an image role request without source images", async () => {
@@ -568,15 +644,100 @@ describe("API app", () => {
 
     const response = await request(app)
       .post("/api/upload-images")
-      .attach("images", Buffer.from("one"), "one.png")
-      .attach("images", Buffer.from("two"), "two.png")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+      .attach("images", jpegImage, { filename: "two.jpg", contentType: "image/jpeg" })
       .expect(200);
 
     expect(response.body.imageUrls).toEqual([
       "https://cdn.example.com/one.png",
-      "https://cdn.example.com/two.png"
+      "https://cdn.example.com/two.jpg"
     ]);
   });
+
+  test.each([
+    ["non-image", Buffer.from("plain text"), "text/plain", "one.txt"],
+    ["spoofed image", Buffer.from("not png"), "image/png", "one.png"]
+  ])("rejects %s on the legacy upload-images route", async (_name, data, contentType, filename) => {
+    const uploadImages = vi.fn();
+    const response = await request(createApp({ uploadImages }))
+      .post("/api/upload-images")
+      .attach("images", data, { filename, contentType })
+      .expect(400);
+
+    expect(response.body).toEqual({ error: "Invalid source image file" });
+    expect(uploadImages).not.toHaveBeenCalled();
+  });
+
+  test("rejects spoofed input on the legacy generate-image route", async () => {
+    const generateImage = vi.fn();
+    const response = await request(createApp({ generateImage }))
+      .post("/api/generate-image")
+      .attach("image", Buffer.from("not jpeg"), {
+        filename: "one.jpg",
+        contentType: "image/jpeg"
+      })
+      .expect(400);
+
+    expect(response.body).toEqual({ error: "Invalid source image file" });
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  test("rejects spoofed input on the legacy generate-main-images route", async () => {
+    const generateMainImages = vi.fn();
+    const response = await request(createApp({ generateMainImages }))
+      .post("/api/generate-main-images")
+      .attach("images", Buffer.from("not webp"), {
+        filename: "one.webp",
+        contentType: "image/webp"
+      })
+      .expect(400);
+
+    expect(response.body).toEqual({ error: "Invalid source image file" });
+    expect(generateMainImages).not.toHaveBeenCalled();
+  });
+
+  test.each(["upload", "image", "main"])(
+    "does not expose injected legacy %s errors",
+    async (route) => {
+      const secret = "C:\\private\\token-secret.txt";
+      const dependencies: AppDependencies = {};
+
+      if (route === "upload") {
+        dependencies.uploadImages = async () => {
+          throw new Error(secret);
+        };
+      } else if (route === "image") {
+        dependencies.generateImage = async () => {
+          throw new Error(secret);
+        };
+      } else {
+        dependencies.generateMainImages = async () => {
+          throw new Error(secret);
+        };
+      }
+
+      let pending = request(createApp(dependencies)).post(
+        route === "upload"
+          ? "/api/upload-images"
+          : route === "image"
+            ? "/api/generate-image"
+            : "/api/generate-main-images"
+      );
+      pending = route === "image"
+        ? pending.attach("image", pngImage, {
+            filename: "one.png",
+            contentType: "image/png"
+          })
+        : pending.attach("images", pngImage, {
+            filename: "one.png",
+            contentType: "image/png"
+          });
+      const response = await pending.expect(500);
+
+      expect(response.body).toEqual({ error: "Internal server error" });
+      expect(response.text).not.toMatch(/private|token-secret/i);
+    }
+  );
 
   test("generates Dropshipzone fields from uploaded image URLs and selling points", async () => {
     const app = createApp({
@@ -621,8 +782,8 @@ describe("API app", () => {
       .field("productType", "Women Cotton Thong Underwear")
       .field("sellingPoints", productInput.sellingPoints)
       .field("count", "6")
-      .attach("images", Buffer.from("one"), "one.png")
-      .attach("images", Buffer.from("two"), "two.png")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+      .attach("images", jpegImage, { filename: "two.jpg", contentType: "image/jpeg" })
       .expect(200);
 
     expect(response.body.imageUrls).toEqual([
