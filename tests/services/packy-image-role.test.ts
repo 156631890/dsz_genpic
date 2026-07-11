@@ -1,7 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   buildProductImageRolePrompt,
-  generateProductImageRoleWithPacky
+  generateProductImageRoleWithPacky,
+  generateShopifyProductImagesWithPacky
 } from "../../server/services/packyImages";
 import type { ProductImageRole } from "../../shared/product";
 
@@ -303,5 +304,78 @@ describe("Packy fixed-role product images", () => {
       })
     ).rejects.toThrow("Packy Shopify product image API returned malformed base64 image");
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("legacy aggregate retry isolation", () => {
+  test.each([
+    ["429", () => new Response("rate limited", { status: 429 })],
+    ["network TypeError", () => new TypeError("fetch failed")],
+    ["malformed shape", () => new Response(JSON.stringify({ data: {} }), { status: 200 })]
+  ])("does not retry or fall back for legacy %s failures", async (_name, failureFactory) => {
+    const fetchImpl = vi.fn(async () => {
+      const failure = failureFactory();
+      if (failure instanceof Error) throw failure;
+      return failure;
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateShopifyProductImagesWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        env: {
+          PACKY_IMAGE_API_KEY: "legacy-key",
+          IMGBB_API_KEY: "must-not-be-used"
+        },
+        fetchImpl
+      })
+    ).rejects.toThrow();
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  test("keeps the legacy permissive base64 upload behavior without retry or fallback", async () => {
+    let packyCall = 0;
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        packyCall += 1;
+        return new Response(
+          JSON.stringify({
+            data: packyCall === 1
+              ? [{ b64_json: "%%%legacy-invalid-base64%%%" }]
+              : [{ url: `https://cdn.example.com/legacy-${packyCall}.png` }]
+          }),
+          { status: 200 }
+        );
+      }
+
+      expect(url).toBe("https://api.imgbb.com/1/upload?key=imgbb-key");
+      return new Response(
+        JSON.stringify({ data: { display_url: "https://i.ibb.co/legacy-upload.png" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateShopifyProductImagesWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        env: {
+          PACKY_IMAGE_API_KEY: "legacy-key",
+          IMGBB_API_KEY: "imgbb-key"
+        },
+        fetchImpl
+      })
+    ).resolves.toEqual({
+      imageUrls: [
+        "https://i.ibb.co/legacy-upload.png",
+        "https://cdn.example.com/legacy-2.png",
+        "https://cdn.example.com/legacy-3.png",
+        "https://cdn.example.com/legacy-4.png",
+        "https://cdn.example.com/legacy-5.png"
+      ]
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
   });
 });

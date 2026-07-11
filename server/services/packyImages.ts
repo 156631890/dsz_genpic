@@ -135,12 +135,15 @@ export async function generateImageWithPacky(input: {
   }
 
   const context = "Packy image edit API";
-  const data = await readPackyImageJson(response, context);
+  const data = (await readPackyImageJson(response, context)) as {
+    data?: PackyImageResult[];
+  };
   const imageUrls = await resolvePackyImageUrls(
-    parsePackyImageResults(data, context),
+    data.data || [],
     env,
     fetcher,
-    context
+    context,
+    false
   );
   const imageUrl = imageUrls[0];
 
@@ -185,7 +188,9 @@ export async function generateShopifyProductImagesWithPacky(input: {
         env,
         fetcher,
         apiKey,
-        maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS
+        maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS,
+        isTransientError: isLegacyPackyTransientImageError,
+        validateProviderResponse: false
       });
       const imageUrl = roleUrls[0];
 
@@ -198,7 +203,7 @@ export async function generateShopifyProductImagesWithPacky(input: {
       return { imageUrls: imageUrls.slice(0, count) };
     }
   } catch (error) {
-    if (!isPackyTransientImageError(error)) {
+    if (!isLegacyPackyTransientImageError(error)) {
       throw error;
     }
   }
@@ -241,6 +246,8 @@ export async function generateProductImageRoleWithPacky(input: {
     fetcher: input.fetchImpl || fetch,
     apiKey,
     maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS,
+    isTransientError: isRolePackyTransientImageError,
+    validateProviderResponse: true,
     requireImage: true
   });
 
@@ -256,6 +263,8 @@ async function requestPackyShopifyProductImageUrls(input: {
   fetcher: typeof fetch;
   apiKey: string;
   maxAttempts?: number;
+  isTransientError: (error: unknown) => boolean;
+  validateProviderResponse: boolean;
   requireImage?: boolean;
 }): Promise<string[]> {
   const maxAttempts = input.maxAttempts || 1;
@@ -270,7 +279,7 @@ async function requestPackyShopifyProductImageUrls(input: {
 
       return imageUrls;
     } catch (error) {
-      if (attempt === maxAttempts || !isPackyTransientImageError(error)) {
+      if (attempt === maxAttempts || !input.isTransientError(error)) {
         throw error;
       }
     }
@@ -287,6 +296,7 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
   apiKey: string;
+  validateProviderResponse: boolean;
 }): Promise<string[]> {
   const config = resolvePackyImageConfig(input.env);
   const request = buildPackyEditRequest({
@@ -328,11 +338,16 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
 
   const context = "Packy Shopify product image API";
   const data = await readPackyImageJson(response, context);
+  const images = input.validateProviderResponse
+    ? parsePackyImageResults(data, context)
+    : ((data as { data?: PackyImageResult[] }).data || []);
+
   return resolvePackyImageUrls(
-    parsePackyImageResults(data, context),
+    images,
     input.env,
     input.fetcher,
-    context
+    context,
+    input.validateProviderResponse
   );
 }
 
@@ -360,7 +375,8 @@ async function resolvePackyImageUrls(
   images: PackyImageResult[],
   env: Record<string, string | undefined>,
   fetcher: typeof fetch,
-  context: string
+  context: string,
+  validateBase64: boolean
 ): Promise<string[]> {
   const imageUrls: Array<string | undefined> = [];
   const uploadFiles: Express.Multer.File[] = [];
@@ -374,7 +390,9 @@ async function resolvePackyImageUrls(
 
     if (image.b64_json) {
       uploadIndexes.push(index);
-      uploadFiles.push(buildGeneratedImageFile(image.b64_json, index, context));
+      uploadFiles.push(
+        buildGeneratedImageFile(image.b64_json, index, context, validateBase64)
+      );
     }
   });
 
@@ -396,9 +414,10 @@ async function resolvePackyImageUrls(
 function buildGeneratedImageFile(
   base64Value: string,
   index: number,
-  context: string
+  context: string,
+  validateBase64: boolean
 ): Express.Multer.File {
-  const parsed = parseBase64Image(base64Value, context);
+  const parsed = parseBase64Image(base64Value, context, validateBase64);
 
   return {
     buffer: Buffer.from(parsed.base64, "base64"),
@@ -409,9 +428,17 @@ function buildGeneratedImageFile(
 
 function parseBase64Image(
   value: string,
-  context: string
+  context: string,
+  validate: boolean
 ): { base64: string; mimetype: string } {
   const dataUrlMatch = value.match(/^data:([^;]+);base64,(.*)$/);
+
+  if (!validate) {
+    return dataUrlMatch
+      ? { mimetype: dataUrlMatch[1], base64: dataUrlMatch[2] }
+      : { mimetype: "image/png", base64: value };
+  }
+
   const mimetype = dataUrlMatch?.[1] || "image/png";
   const base64 = (dataUrlMatch?.[2] || value).replace(/\s/g, "");
 
@@ -441,7 +468,18 @@ async function buildSourceImageFallbackUrls(input: {
   return padUrlList(uploaded.imageUrls, input.count);
 }
 
-function isPackyTransientImageError(error: unknown): boolean {
+function isLegacyPackyTransientImageError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const match = error.message.match(/^Packy Shopify product image API failed: (\d{3})$/);
+
+  return (
+    Boolean(match && Number(match[1]) >= 500) ||
+    error.message === "Packy Shopify product image API returned non-JSON response" ||
+    error.message === "Packy Shopify product image API returned empty response"
+  );
+}
+
+function isRolePackyTransientImageError(error: unknown): boolean {
   if (error instanceof TypeError) return true;
   if (!(error instanceof Error)) return false;
   const match = error.message.match(/^Packy Shopify product image API failed: (\d{3})$/);
