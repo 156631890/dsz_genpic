@@ -30,6 +30,26 @@ export interface ProductInput {
   heightCm?: number;
 }
 
+export interface GeneratedProductCopy {
+  title: string;
+  description: string;
+}
+
+export const PRODUCT_IMAGE_ROLES = [
+  "main",
+  "side",
+  "detail",
+  "lifestyle_1",
+  "lifestyle_2"
+] as const;
+
+export type ProductImageRole = (typeof PRODUCT_IMAGE_ROLES)[number];
+
+export interface GeneratedProductImage {
+  role: ProductImageRole;
+  imageUrl: string;
+}
+
 export interface DszProductFields {
   category: number;
   categories: string;
