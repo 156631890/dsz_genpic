@@ -49,13 +49,24 @@ export function extractCanonicalProductFooter(systemPrompt: string): string {
   const footerRegion = systemPrompt
     .slice(footerMarkerStart + footerMarker.length, formatRulesStart)
     .trim();
+  const htmlStart = footerRegion.indexOf("<");
+  const htmlEnd = footerRegion.lastIndexOf(">");
   const footer =
-    footerRegion
-      .split(/\r?\n/)
-      .map((line) => line.trim())
-      .find((line) => line.startsWith("<")) || "";
+    htmlStart >= 0 && htmlEnd >= htmlStart
+      ? footerRegion.slice(htmlStart, htmlEnd + 1).replace(/\r?\n/g, " ")
+      : "";
+  const tags = footer.match(/<[^>]*>/g) || [];
+  const textNodes = footer.replace(/<[^>]*>/g, "");
 
-  if (!footer.startsWith("<") || !footer.endsWith(">")) {
+  if (
+    !footer.startsWith("<") ||
+    !footer.endsWith(">") ||
+    tags.some((tag) => !ALLOWED_HTML_TAGS.has(tag)) ||
+    /[<>]/.test(textNodes) ||
+    hasInvalidHtmlStructure(footer) ||
+    !footer.includes("Australian Consumer Law (ACL)") ||
+    !footer.includes("Delivery Timeframe")
+  ) {
     throw new Error("DSZ system prompt does not contain the canonical product footer.");
   }
 
@@ -159,8 +170,8 @@ export function validateProductCopy(
 
   if (
     !canonicalFooter ||
-    !normalizeFooterTagWhitespace(copy.description).endsWith(
-      normalizeFooterTagWhitespace(canonicalFooter)
+    !normalizeHtmlTokens(copy.description).endsWith(
+      normalizeHtmlTokens(canonicalFooter)
     )
   ) {
     errors.push("Description must end with the exact canonical DSZ footer.");
@@ -183,6 +194,7 @@ export async function generateProductCopyWithPacky(
   }
 
   const systemPrompt = await loadProductSystemPrompt();
+  const canonicalFooter = extractCanonicalProductFooter(systemPrompt);
   const baseUrl = (env.PACKY_BASE_URL || "https://www.packyapi.com").replace(/\/+$/, "");
   const fetcher = input.fetchImpl || fetch;
   const response = await fetcher(`${baseUrl}/v1/chat/completions`, {
@@ -213,7 +225,7 @@ export async function generateProductCopyWithPacky(
   const copy = parseProductCopy(content);
   const validationErrors = validateProductCopy(
     copy,
-    extractCanonicalProductFooter(systemPrompt)
+    canonicalFooter
   );
 
   if (validationErrors.length > 0) {
@@ -243,20 +255,22 @@ function containsMarkdown(value: string): boolean {
     .replace(/\n+/g, "\n");
   const inlineMarkdown =
     /```|~~~|`[^`]*`|\*\*[^*]+\*\*|__[^_]+__|\*[^*]+\*|_[^_]+_|~~[^~]+~~|!?\[[^\]]+\]\([^)]*\)/;
-  const blockMarkdown = /^[ \t]*(?:#{1,6}(?:\s|$)|[-+*]\s+|>\s+|\d+[.)]\s+)/m;
+  const blockMarkdown = /^[ \t]*(?:#{1,6}(?:\s|$)|[-+*]\s+|>\s+)/m;
+  const orderedMarkdown = /^[ \t]*\d+[.)]\s+/m;
   const markdownRule = /^[ \t]*(?:={3,}|-{3,}|\*{3,}|_{3,})[ \t]*$/m;
   const markdownTable =
     /^\s*\|?.+\|.+\|?\s*\n\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/m;
   return (
     inlineMarkdown.test(markdownText) ||
     blockMarkdown.test(markdownText) ||
+    orderedMarkdown.test(extractRootText(value)) ||
     markdownRule.test(markdownText) ||
     markdownTable.test(markdownText)
   );
 }
 
 function containsUrlOrUri(value: string): boolean {
-  const uriScheme = /\b[a-z][a-z0-9+.-]*:(?=\/\/|[^\s<])/i;
+  const uriScheme = /\b(?:https?|ftp|mailto|tel|data|file|javascript):/i;
   const protocolRelative = /\/\/[a-z0-9]/i;
   const bareDomain = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/i;
   return (
@@ -311,8 +325,44 @@ function isTextContainer(tag: string | undefined): boolean {
   return tag === "p" || tag === "li";
 }
 
-function normalizeFooterTagWhitespace(value: string): string {
-  return value.replace(/>\s+</g, "><");
+function extractRootText(value: string): string {
+  const tokens = value.match(/<[^>]*>|[^<]+/g) || [];
+  const stack: string[] = [];
+  let rootText = "";
+
+  for (const token of tokens) {
+    if (!token.startsWith("<")) {
+      if (stack.length === 0) rootText += token;
+      continue;
+    }
+
+    rootText += "\n";
+    const match = token.match(/^<(\/)?(p|strong|ul|li)>$/);
+
+    if (!match) continue;
+    const [, closing, name] = match;
+
+    if (closing) {
+      if (stack.at(-1) === name) stack.pop();
+    } else {
+      stack.push(name);
+    }
+  }
+
+  return rootText;
+}
+
+function normalizeHtmlTokens(value: string): string {
+  const tokens = value.match(/<[^>]*>|[^<]+/g) || [];
+
+  return tokens
+    .map((token) => {
+      if (token.startsWith("<")) return `tag:${token}`;
+      const text = token.replace(/\s+/g, " ").trim();
+      return text ? `text:${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\u0000");
 }
 
 async function readJsonResponse(response: Response): Promise<unknown> {

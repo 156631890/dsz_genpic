@@ -175,12 +175,47 @@ describe("product copy validation", () => {
       "【固定页脚规则】",
       "- Preserve this rule.",
       "- 固定页脚如下：",
-      "<p>Exact footer HTML.</p>",
+      canonicalFooter,
       "- This prose is not part of the footer.",
       "【格式清洗规则】"
     ].join("\n");
 
-    expect(extractCanonicalProductFooter(suppliedPrompt)).toBe("<p>Exact footer HTML.</p>");
+    expect(extractCanonicalProductFooter(suppliedPrompt)).toBe(canonicalFooter);
+  });
+
+  test("extracts and safely joins a complete multiline canonical footer", () => {
+    const multilineFooter = canonicalFooter
+      .replace(/></g, ">\n<")
+      .replace("Products that are received", "Products that\nare received");
+    const suppliedPrompt = [
+      "【固定页脚规则】",
+      "- 固定页脚如下：",
+      multilineFooter,
+      "【格式清洗规则】"
+    ].join("\n");
+
+    const extracted = extractCanonicalProductFooter(suppliedPrompt);
+
+    expect(extracted).toBe(multilineFooter.replace(/\n/g, " "));
+    expect(extracted).toContain("Products that are received");
+    expect(extracted).toContain("Australian Consumer Law (ACL)");
+    expect(extracted).toContain("Delivery Timeframe");
+    expect(extracted).toContain("WA, NT, and TAS");
+  });
+
+  test.each([
+    ["missing ACL phrase", canonicalFooter.replace("Australian Consumer Law (ACL)", "consumer law")],
+    ["missing delivery phrase", canonicalFooter.replace("Delivery Timeframe", "Shipping")],
+    ["invalid HTML structure", canonicalFooter.replace("</ul>", "")]
+  ])("rejects a canonical footer with %s", (_label, footer) => {
+    const suppliedPrompt = [
+      "【固定页脚规则】",
+      "- 固定页脚如下：",
+      footer,
+      "【格式清洗规则】"
+    ].join("\n");
+
+    expect(() => extractCanonicalProductFooter(suppliedPrompt)).toThrow(/canonical product footer/i);
   });
 
   test("accepts a valid title and allowed single-line HTML description", () => {
@@ -278,6 +313,18 @@ describe("product copy validation", () => {
     })).toEqual([]);
   });
 
+  test("accepts insignificant text-node whitespace changes at footer tag boundaries", () => {
+    const footerWithoutHeadingSpace = canonicalFooter.replace(
+      "Returns, Refunds and Replacements </strong>",
+      "Returns, Refunds and Replacements</strong>"
+    );
+
+    expect(validateCopy({
+      title: validTitle,
+      description: `${descriptionPrefix}${footerWithoutHeadingSpace}`
+    })).toEqual([]);
+  });
+
   test.each([
     ["unclosed p", `<p>Unclosed${canonicalFooter}`],
     ["mismatched strong and p", `<p><strong>Misnested</p></strong>${canonicalFooter}`],
@@ -302,6 +349,13 @@ describe("product copy validation", () => {
 
   test("accepts a balanced top-level ul without a preceding p", () => {
     const description = `<ul><li>Standalone list item.</li></ul>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toEqual([]);
+  });
+
+  test("accepts a numbered instruction as ordinary li text", () => {
+    const description =
+      `<ul><li>1. Charge the device before use.</li></ul>${canonicalFooter}`;
 
     expect(validateCopy({ title: validTitle, description })).toEqual([]);
   });
@@ -340,7 +394,7 @@ describe("product copy validation", () => {
     ["inside an element", "<p># Heading</p>"],
     ["between elements", "<p>Overview</p>- item<p>More</p>"],
     ["after a br boundary", "<p>Overview<br />> quote</p>"],
-    ["inside a list item", "<p>Overview</p><ul><li>1. item</li></ul>"],
+    ["ordered list outside elements", "<p>Overview</p>1. item<p>After</p>"],
     ["after elements", "<p>Overview</p># Heading"]
   ])("rejects block Markdown %s", (_position, adversarialHtml) => {
     const description = `${adversarialHtml}${canonicalFooter}`;
@@ -365,6 +419,12 @@ describe("product copy validation", () => {
 
   test("preserves legitimate hyphenated prose", () => {
     const description = `<p>Space-saving design supports day-to-day use.</p>${canonicalFooter}`;
+    expect(validateCopy({ title: validTitle, description })).toEqual([]);
+  });
+
+  test("does not treat ordinary colon-separated prose as a URL scheme", () => {
+    const description = `<p>Note:Use only as intended.</p>${canonicalFooter}`;
+
     expect(validateCopy({ title: validTitle, description })).toEqual([]);
   });
 });
