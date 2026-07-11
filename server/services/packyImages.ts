@@ -197,6 +197,7 @@ export async function generateShopifyProductImagesWithPacky(input: {
         apiKey,
         maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS,
         isTransientError: isLegacyPackyTransientImageError,
+        mapTransportError: preservePackyTransportError,
         validateProviderResponse: false
       });
       const imageUrl = roleUrls[0];
@@ -254,6 +255,7 @@ export async function generateProductImageRoleWithPacky(input: {
     apiKey,
     maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS,
     isTransientError: isRolePackyTransientImageError,
+    mapTransportError: wrapRolePackyTransportError,
     validateProviderResponse: true,
     requireImage: true
   });
@@ -271,6 +273,7 @@ async function requestPackyShopifyProductImageUrls(input: {
   apiKey: string;
   maxAttempts?: number;
   isTransientError: (error: unknown) => boolean;
+  mapTransportError: (error: TypeError) => Error;
   validateProviderResponse: boolean;
   requireImage?: boolean;
 }): Promise<string[]> {
@@ -303,6 +306,7 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
   apiKey: string;
+  mapTransportError: (error: TypeError) => Error;
   validateProviderResponse: boolean;
 }): Promise<string[]> {
   const config = resolvePackyImageConfig(input.env);
@@ -343,7 +347,7 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
     });
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new PackyImageTransportError(error.message);
+      throw input.mapTransportError(error);
     }
     throw error;
   }
@@ -507,6 +511,14 @@ function isLegacyPackyTransientImageError(error: unknown): boolean {
     error.message === "Packy Shopify product image API returned non-JSON response" ||
     error.message === "Packy Shopify product image API returned empty response"
   );
+}
+
+function preservePackyTransportError(error: TypeError): TypeError {
+  return error;
+}
+
+function wrapRolePackyTransportError(error: TypeError): PackyImageTransportError {
+  return new PackyImageTransportError(error.message);
 }
 
 function isRolePackyTransientImageError(error: unknown): boolean {

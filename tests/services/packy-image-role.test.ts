@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import {
   buildProductImageRolePrompt,
+  generateImageWithPacky,
   generateProductImageRoleWithPacky,
   generateShopifyProductImagesWithPacky
 } from "../../server/services/packyImages";
@@ -422,7 +423,6 @@ describe("Packy fixed-role product images", () => {
 describe("legacy aggregate retry isolation", () => {
   test.each([
     ["429", () => new Response("rate limited", { status: 429 })],
-    ["network TypeError", () => new TypeError("fetch failed")],
     ["malformed shape", () => new Response(JSON.stringify({ data: {} }), { status: 200 })]
   ])("does not retry or fall back for legacy %s failures", async (_name, failureFactory) => {
     const fetchImpl = vi.fn(async () => {
@@ -444,6 +444,40 @@ describe("legacy aggregate retry isolation", () => {
       })
     ).rejects.toThrow();
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  test("preserves original TypeError instances for aggregate and standalone legacy APIs", async () => {
+    const aggregateError = new TypeError("aggregate transport failed");
+    const aggregateFetch = vi.fn(async () => {
+      throw aggregateError;
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateShopifyProductImagesWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        env: { PACKY_IMAGE_API_KEY: "legacy-key" },
+        fetchImpl: aggregateFetch
+      })
+    ).rejects.toBe(aggregateError);
+    expect(aggregateFetch).toHaveBeenCalledOnce();
+
+    const standaloneError = new TypeError("standalone transport failed");
+    const standaloneFetch = vi.fn(async () => {
+      throw standaloneError;
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateImageWithPacky({
+        image: images[0],
+        productType: "Cotton underwear",
+        prompt: "clean product image",
+        env: { PACKY_IMAGE_API_KEY: "legacy-key" },
+        fetchImpl: standaloneFetch
+      })
+    ).rejects.toBe(standaloneError);
+    expect(standaloneFetch).toHaveBeenCalledOnce();
   });
 
   test("keeps the legacy permissive base64 upload behavior without retry or fallback", async () => {
