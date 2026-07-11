@@ -27,11 +27,14 @@ export interface ShippingMeasurements {
 export function calculateBillableWeightKg(
   measurements: ShippingMeasurements
 ): number {
-  validateMeasurements(measurements);
+  const actualWeightKg = normalizeMeasurement(measurements.actualWeightKg);
+  const lengthCm = normalizeMeasurement(measurements.lengthCm);
+  const widthCm = normalizeMeasurement(measurements.widthCm);
+  const heightCm = normalizeMeasurement(measurements.heightCm);
 
   return Math.max(
-    measurements.actualWeightKg,
-    (measurements.lengthCm * measurements.widthCm * measurements.heightCm) / 5000
+    actualWeightKg,
+    (lengthCm * widthCm * heightCm) / 5000
   );
 }
 
@@ -53,20 +56,15 @@ export function calculatePackageCbm(
   widthCm: number,
   heightCm: number
 ): number {
-  validateNonnegativeFinite({ lengthCm, widthCm, heightCm });
-  const cbm = (lengthCm * widthCm * heightCm) / 1_000_000;
+  const cbm =
+    (normalizeMeasurement(lengthCm) *
+      normalizeMeasurement(widthCm) *
+      normalizeMeasurement(heightCm)) /
+    1_000_000;
 
   return Math.round(cbm * 1_000_000) / 1_000_000;
 }
 
-function validateMeasurements(measurements: ShippingMeasurements): void {
-  validateNonnegativeFinite(measurements);
-}
-
-function validateNonnegativeFinite(values: object): void {
-  for (const [name, value] of Object.entries(values)) {
-    if (!Number.isFinite(value) || value < 0) {
-      throw new RangeError(`${name} must be a nonnegative finite number`);
-    }
-  }
+function normalizeMeasurement(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
 }

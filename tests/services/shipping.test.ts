@@ -18,6 +18,33 @@ describe("shipping rules", () => {
     ).toBe(12);
   });
 
+  test.each([-1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "normalizes invalid actual weight %s to zero",
+    (actualWeightKg) => {
+      expect(
+        calculateBillableWeightKg({
+          actualWeightKg,
+          lengthCm: 10,
+          widthCm: 10,
+          heightCm: 10
+        })
+      ).toBe(0.2);
+    }
+  );
+
+  test.each([
+    { lengthCm: -1, widthCm: 10, heightCm: 10 },
+    { lengthCm: 10, widthCm: Number.NaN, heightCm: 10 },
+    { lengthCm: 10, widthCm: 10, heightCm: Number.POSITIVE_INFINITY }
+  ])("normalizes invalid dimensions before calculating billable weight", (dimensions) => {
+    expect(
+      calculateBillableWeightKg({
+        actualWeightKg: 2,
+        ...dimensions
+      })
+    ).toBe(2);
+  });
+
   test("makes every Australian zone free and charges NZ AUD20 below 3 kg", () => {
     const rates = buildShippingZoneRates({
       actualWeightKg: 2,
@@ -43,5 +70,13 @@ describe("shipping rules", () => {
 
   test("calculates package CBM rounded to six decimals", () => {
     expect(calculatePackageCbm(50, 40, 30)).toBe(0.06);
+  });
+
+  test.each([
+    [-1, 40, 30],
+    [50, Number.NaN, 30],
+    [50, 40, Number.POSITIVE_INFINITY]
+  ])("normalizes invalid dimensions before calculating package CBM", (length, width, height) => {
+    expect(calculatePackageCbm(length, width, height)).toBe(0);
   });
 });
