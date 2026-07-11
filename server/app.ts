@@ -349,6 +349,20 @@ export function createApp(dependencies: AppDependencies = {}) {
     res: express.Response,
     next: express.NextFunction
   ) => {
+    if (isRecord(error) && error.type === "entity.too.large") {
+      res.status(413).json({ error: "JSON body exceeds 2 MiB limit" });
+      return;
+    }
+
+    if (
+      isRecord(error) &&
+      (error.type === "entity.parse.failed" ||
+        (error instanceof SyntaxError && error.status === 400))
+    ) {
+      res.status(400).json({ error: "Malformed JSON body" });
+      return;
+    }
+
     if (!(error instanceof multer.MulterError)) {
       next(error);
       return;

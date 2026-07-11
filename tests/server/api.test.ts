@@ -228,6 +228,33 @@ describe("API app", () => {
     expect(generateProductCopy).not.toHaveBeenCalled();
   });
 
+  test("returns safe JSON when the JSON body exceeds 2 MiB", async () => {
+    const generateProductCopy = vi.fn();
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .send({ input: { sellingPoints: "x".repeat(2 * 1024 * 1024 + 1) } })
+      .expect(413);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "JSON body exceeds 2 MiB limit" });
+    expect(response.text).not.toMatch(/stack|SyntaxError|node_modules|[A-Z]:\\/i);
+    expect(generateProductCopy).not.toHaveBeenCalled();
+  });
+
+  test("returns safe JSON for malformed JSON", async () => {
+    const generateProductCopy = vi.fn();
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .set("Content-Type", "application/json")
+      .send('{"input":{"sellingPoints":"secret-path C:\\\\private"')
+      .expect(400);
+
+    expect(response.headers["content-type"]).toMatch(/json/);
+    expect(response.body).toEqual({ error: "Malformed JSON body" });
+    expect(response.text).not.toMatch(/stack|SyntaxError|node_modules|private|[A-Z]:\\/i);
+    expect(generateProductCopy).not.toHaveBeenCalled();
+  });
+
   test("returns independent generated product copy without a wrapper", async () => {
     const generateProductCopy = vi.fn(async () => ({
       title: "Premium Cotton Underwear",
