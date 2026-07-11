@@ -11,8 +11,8 @@ export const PRODUCT_IMAGE_ROLE_RULES: Record<ProductImageRole, string> = {
   main: "Feature main image. Use a clean premium neutral, softly lit studio, or subtle real-world background. Do not use a pure white or plain white background. Keep the full product visible, centered, and sharp.",
   side: "Side profile or alternate view. Clearly show the product angle, shape, contour, or side construction on a clean background without a lifestyle scene.",
   detail: "Confirmed product detail close-up showing packaging, texture, material, stitching, label, closure, or another visible feature. Do not invent measurements or text.",
-  lifestyle_1: "Realistic lifestyle scene 1: show the product naturally in a credible everyday usage context with restrained styling and believable lighting.",
-  lifestyle_2: "Realistic lifestyle scene 2: show a distinct second usage context, setting, composition, and lighting treatment while keeping the same product accurate."
+  lifestyle_1: "Realistic lifestyle scene 1: use a wider environmental primary-use composition supported by the supplied product facts, with restrained styling and believable lighting.",
+  lifestyle_2: "Realistic lifestyle scene 2: use a tighter in-use, secondary-context, or alternate-perspective composition. Do not repeat the wide lifestyle 1 setup. If only one verified context exists, use a close in-use detail rather than inventing another use."
 };
 
 export function buildProductImageRolePrompt(
@@ -42,6 +42,24 @@ export interface PackyEditInput {
 export interface PackyEditRequest {
   url: string;
   fields: Record<string, string>;
+}
+
+export interface PackyImageConfig {
+  baseUrl?: string;
+  model: string;
+  size: string;
+  quality: "low" | "medium" | "high" | "auto";
+}
+
+export function resolvePackyImageConfig(
+  env: Record<string, string | undefined> = process.env
+): PackyImageConfig {
+  return {
+    baseUrl: env.PACKY_BASE_URL,
+    model: env.PACKY_IMAGE_MODEL || "gpt-image-2",
+    size: env.PACKY_IMAGE_SIZE || "1024x1024",
+    quality: normalizeQuality(env.PACKY_IMAGE_QUALITY)
+  };
 }
 
 interface PackyImageResult {
@@ -116,13 +134,14 @@ export async function generateImageWithPacky(input: {
     throw new Error(`Packy image edit API failed: ${response.status}`);
   }
 
-  const data = (await readPackyImageJson(
-    response,
-    "Packy image edit API"
-  )) as {
-    data?: PackyImageResult[];
-  };
-  const imageUrls = await resolvePackyImageUrls(data.data || [], env, fetcher);
+  const context = "Packy image edit API";
+  const data = await readPackyImageJson(response, context);
+  const imageUrls = await resolvePackyImageUrls(
+    parsePackyImageResults(data, context),
+    env,
+    fetcher,
+    context
+  );
   const imageUrl = imageUrls[0];
 
   if (!imageUrl) {
@@ -222,9 +241,6 @@ export async function generateProductImageRoleWithPacky(input: {
     fetcher: input.fetchImpl || fetch,
     apiKey,
     maxAttempts: PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS,
-    model: "gpt-image-2",
-    size: "1024x1024",
-    quality: "high",
     requireImage: true
   });
 
@@ -240,9 +256,6 @@ async function requestPackyShopifyProductImageUrls(input: {
   fetcher: typeof fetch;
   apiKey: string;
   maxAttempts?: number;
-  model?: string;
-  size?: string;
-  quality?: "low" | "medium" | "high" | "auto";
   requireImage?: boolean;
 }): Promise<string[]> {
   const maxAttempts = input.maxAttempts || 1;
@@ -274,18 +287,16 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
   apiKey: string;
-  model?: string;
-  size?: string;
-  quality?: "low" | "medium" | "high" | "auto";
 }): Promise<string[]> {
+  const config = resolvePackyImageConfig(input.env);
   const request = buildPackyEditRequest({
-    baseUrl: input.env.PACKY_BASE_URL,
-    model: input.model || input.env.PACKY_IMAGE_MODEL,
+    baseUrl: config.baseUrl,
+    model: config.model,
     productType: input.productType,
     prompt: input.prompt,
     count: input.count,
-    size: input.size || input.env.PACKY_IMAGE_SIZE || "1024x1024",
-    quality: input.quality || normalizeQuality(input.env.PACKY_IMAGE_QUALITY)
+    size: config.size,
+    quality: config.quality
   });
   const form = new FormData();
 
@@ -315,13 +326,14 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
     throw new Error(`Packy Shopify product image API failed: ${response.status}`);
   }
 
-  const data = (await readPackyImageJson(
-    response,
-    "Packy Shopify product image API"
-  )) as {
-    data?: PackyImageResult[];
-  };
-  return resolvePackyImageUrls(data.data || [], input.env, input.fetcher);
+  const context = "Packy Shopify product image API";
+  const data = await readPackyImageJson(response, context);
+  return resolvePackyImageUrls(
+    parsePackyImageResults(data, context),
+    input.env,
+    input.fetcher,
+    context
+  );
 }
 
 function buildShopifyProductImagePrompts(sellingPoints: string): string[] {
@@ -347,7 +359,8 @@ function buildShopifyProductImagePrompts(sellingPoints: string): string[] {
 async function resolvePackyImageUrls(
   images: PackyImageResult[],
   env: Record<string, string | undefined>,
-  fetcher: typeof fetch
+  fetcher: typeof fetch,
+  context: string
 ): Promise<string[]> {
   const imageUrls: Array<string | undefined> = [];
   const uploadFiles: Express.Multer.File[] = [];
@@ -361,7 +374,7 @@ async function resolvePackyImageUrls(
 
     if (image.b64_json) {
       uploadIndexes.push(index);
-      uploadFiles.push(buildGeneratedImageFile(image.b64_json, index));
+      uploadFiles.push(buildGeneratedImageFile(image.b64_json, index, context));
     }
   });
 
@@ -382,9 +395,10 @@ async function resolvePackyImageUrls(
 
 function buildGeneratedImageFile(
   base64Value: string,
-  index: number
+  index: number,
+  context: string
 ): Express.Multer.File {
-  const parsed = parseBase64Image(base64Value);
+  const parsed = parseBase64Image(base64Value, context);
 
   return {
     buffer: Buffer.from(parsed.base64, "base64"),
@@ -393,20 +407,23 @@ function buildGeneratedImageFile(
   } as Express.Multer.File;
 }
 
-function parseBase64Image(value: string): { base64: string; mimetype: string } {
+function parseBase64Image(
+  value: string,
+  context: string
+): { base64: string; mimetype: string } {
   const dataUrlMatch = value.match(/^data:([^;]+);base64,(.*)$/);
+  const mimetype = dataUrlMatch?.[1] || "image/png";
+  const base64 = (dataUrlMatch?.[2] || value).replace(/\s/g, "");
 
-  if (dataUrlMatch) {
-    return {
-      mimetype: dataUrlMatch[1],
-      base64: dataUrlMatch[2]
-    };
+  if (
+    !mimetype.startsWith("image/") ||
+    !base64 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64)
+  ) {
+    throw new Error(`${context} returned malformed base64 image.`);
   }
 
-  return {
-    mimetype: "image/png",
-    base64: value
-  };
+  return { mimetype, base64 };
 }
 
 async function buildSourceImageFallbackUrls(input: {
@@ -425,15 +442,53 @@ async function buildSourceImageFallbackUrls(input: {
 }
 
 function isPackyTransientImageError(error: unknown): boolean {
+  if (error instanceof TypeError) return true;
   if (!(error instanceof Error)) return false;
   const match = error.message.match(/^Packy Shopify product image API failed: (\d{3})$/);
+  const status = match ? Number(match[1]) : undefined;
 
   return (
-    Boolean(match && Number(match[1]) >= 500) ||
+    status === 408 ||
+    status === 429 ||
+    Boolean(status && status >= 500) ||
     error.message === "Packy Shopify product image API returned non-JSON response" ||
     error.message === "Packy Shopify product image API returned empty response" ||
-    error.message === "Packy Shopify product image API returned no image."
+    error.message === "Packy Shopify product image API returned no image." ||
+    error.message === "Packy Shopify product image API returned malformed response." ||
+    error.message === "Packy Shopify product image API returned malformed base64 image."
   );
+}
+
+function parsePackyImageResults(
+  value: unknown,
+  context: string
+): PackyImageResult[] {
+  if (!isRecord(value) || !Array.isArray(value.data)) {
+    throw new Error(`${context} returned malformed response.`);
+  }
+
+  return value.data.map((entry) => {
+    if (!isRecord(entry)) {
+      throw new Error(`${context} returned malformed response.`);
+    }
+
+    const url = typeof entry.url === "string" && entry.url.trim()
+      ? entry.url.trim()
+      : undefined;
+    const b64Json = typeof entry.b64_json === "string" && entry.b64_json.trim()
+      ? entry.b64_json.trim()
+      : undefined;
+
+    if (!url && !b64Json) {
+      throw new Error(`${context} returned malformed response.`);
+    }
+
+    return { url, b64_json: b64Json };
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
 }
 
 async function readPackyImageJson(

@@ -26,6 +26,15 @@ const roles: ProductImageRole[] = [
   "lifestyle_2"
 ];
 
+function readFileBytes(file: Blob): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => resolve(Buffer.from(reader.result as ArrayBuffer));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 describe("Packy fixed-role product images", () => {
   test("builds five distinct role prompts with shared single-image safety rules", () => {
     const prompts = roles.map((role) =>
@@ -54,9 +63,41 @@ describe("Packy fixed-role product images", () => {
     expect(prompts[0]).toMatch(/no plain white|do not use .*plain white/i);
     expect(prompts[1]).toMatch(/side profile|alternate view/i);
     expect(prompts[2]).toMatch(/do not invent measurements or text/i);
-    expect(prompts[3]).toMatch(/realistic.*scene/i);
-    expect(prompts[4]).toMatch(/realistic.*scene/i);
-    expect(prompts[3]).not.toBe(prompts[4]);
+    expect(prompts[3]).toMatch(/wider environmental/i);
+    expect(prompts[3]).toMatch(/primary-use/i);
+    expect(prompts[3]).toMatch(/supported by.*product facts/i);
+    expect(prompts[4]).toMatch(/tighter in-use|secondary-context|alternate-perspective/i);
+    expect(prompts[4]).toMatch(/do not repeat.*wide/i);
+    expect(prompts[4]).toMatch(/only one verified context.*close in-use detail/i);
+    expect(prompts[4]).toMatch(/rather than invent/i);
+  });
+
+  test("uses configured model, size, and normalized quality overrides", async () => {
+    const fetchImpl = vi.fn(async (_url, init) => {
+      const form = init?.body as FormData;
+      expect(form.get("model")).toBe("custom-image-model");
+      expect(form.get("size")).toBe("1536x1024");
+      expect(form.get("quality")).toBe("medium");
+      return new Response(
+        JSON.stringify({ data: [{ url: "https://cdn.example.com/side.png" }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await generateProductImageRoleWithPacky({
+      images,
+      productType: "Cotton underwear",
+      sellingPoints: "soft cotton",
+      role: "side",
+      env: {
+        PACKY_API_KEY: "role-key",
+        PACKY_IMAGE_MODEL: "custom-image-model",
+        PACKY_IMAGE_SIZE: "1536x1024",
+        PACKY_IMAGE_QUALITY: "medium"
+      },
+      fetchImpl
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   test("sends every source image in one fixed GPT-Image-2 multipart request", async () => {
@@ -122,7 +163,9 @@ describe("Packy fixed-role product images", () => {
     ["provider 503", () => new Response("unavailable", { status: 503 })],
     ["non-JSON response", () => new Response("not json", { status: 200 })],
     ["empty response", () => new Response("", { status: 200 })],
-    ["no image", () => new Response(JSON.stringify({ data: [] }), { status: 200 })]
+    ["no image", () => new Response(JSON.stringify({ data: [] }), { status: 200 })],
+    ["wrong data type", () => new Response(JSON.stringify({ data: {} }), { status: 200 })],
+    ["invalid entry", () => new Response(JSON.stringify({ data: [null] }), { status: 200 })]
   ])("rejects %s after retries without source-image fallback", async (_name, response) => {
     const fetchImpl = vi.fn(async (url) => {
       expect(url).toBe("https://www.packyapi.com/v1/images/edits");
@@ -150,17 +193,71 @@ describe("Packy fixed-role product images", () => {
     ).toBe(true);
   });
 
+  test.each([
+    ["429", () => new Response("rate limited", { status: 429 })],
+    ["network TypeError", () => new TypeError("fetch failed")]
+  ])("retries transient %s and returns the later image", async (_name, firstFailure) => {
+    let attempt = 0;
+    const fetchImpl = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        const failure = firstFailure();
+        if (failure instanceof Error) throw failure;
+        return failure;
+      }
+      return new Response(
+        JSON.stringify({ data: [{ url: "https://cdn.example.com/recovered.png" }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "detail",
+        env: { PACKY_API_KEY: "role-key" },
+        fetchImpl
+      })
+    ).resolves.toEqual({
+      role: "detail",
+      imageUrl: "https://cdn.example.com/recovered.png"
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not retry a provider 401", async () => {
+    const fetchImpl = vi.fn(async () => new Response("unauthorized", { status: 401 })) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "main",
+        env: { PACKY_API_KEY: "bad-key" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Packy Shopify product image API failed: 401");
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
   test("converts b64_json through ImgBB and preserves the requested role", async () => {
+    const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
     const fetchImpl = vi.fn(async (url, init) => {
       if (String(url).endsWith("/v1/images/edits")) {
         return new Response(
-          JSON.stringify({ data: [{ b64_json: Buffer.from("generated").toString("base64") }] }),
+          JSON.stringify({ data: [{ b64_json: `data:image/png;base64,${tinyPng}` }] }),
           { status: 200 }
         );
       }
 
       expect(url).toBe("https://api.imgbb.com/1/upload?key=imgbb-key");
-      expect((init?.body as FormData).get("image")).toBeTruthy();
+      const blob = (init?.body as FormData).get("image") as File;
+      expect(blob.type).toBe("image/png");
+      expect(blob.name).toBe("packy-generated-1.png");
+      expect(await readFileBytes(blob)).toEqual(Buffer.from(tinyPng, "base64"));
       return new Response(
         JSON.stringify({ data: { display_url: "https://i.ibb.co/lifestyle.png" } }),
         { status: 200 }
@@ -181,5 +278,30 @@ describe("Packy fixed-role product images", () => {
       imageUrl: "https://i.ibb.co/lifestyle.png"
     });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("rejects malformed base64 with a stable provider error after retries", async () => {
+    const fetchImpl = vi.fn(async (url) => {
+      expect(String(url)).toBe("https://www.packyapi.com/v1/images/edits");
+      return new Response(
+        JSON.stringify({ data: [{ b64_json: "data:image/png;base64,%%%not-base64%%%" }] }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "lifestyle_1",
+        env: {
+          PACKY_API_KEY: "role-key",
+          IMGBB_API_KEY: "must-not-be-used"
+        },
+        fetchImpl
+      })
+    ).rejects.toThrow("Packy Shopify product image API returned malformed base64 image");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 });
