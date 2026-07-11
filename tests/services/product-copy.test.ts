@@ -404,6 +404,20 @@ describe("product copy validation", () => {
   });
 
   test.each([
+    "SMS:+61412345678",
+    "Geo:-37,144",
+    "URN:ISBN:9780141036144",
+    "Magnet:?xt=urn:btih:abcdef",
+    "WS://example.com/socket",
+    "WsS://example.com/socket",
+    "CUSTOM:resource/path"
+  ])("rejects case-insensitive URI scheme %s", (uri) => {
+    const description = `${descriptionPrefix}<p>${uri}</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toContain(urlError);
+  });
+
+  test.each([
     ["before elements", "# Heading<p>Overview</p>"],
     ["inside an element", "<p># Heading</p>"],
     ["between elements", "<p>Overview</p>- item<p>More</p>"],

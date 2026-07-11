@@ -272,11 +272,14 @@ function containsMarkdown(value: string): boolean {
 function containsUrlOrUri(value: string): boolean {
   const knownUriScheme = /\b(?:https?|ftp|mailto|tel|data|file|javascript):/i;
   const lowercaseUriScheme = /\b[a-z][a-z0-9+.-]*:(?=\/\/|[^\s<])/;
+  const structuredUriScheme =
+    /\b[a-z][a-z0-9+.-]*:(?=\/\/|[?#@]|[+-]?\d|[^\s<]*(?:\/|:|%[0-9a-f]{2}))/i;
   const protocolRelative = /\/\/[a-z0-9]/i;
   const bareDomain = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/i;
   return (
     knownUriScheme.test(value) ||
     lowercaseUriScheme.test(value) ||
+    structuredUriScheme.test(value) ||
     protocolRelative.test(value) ||
     /\bwww\./i.test(value) ||
     bareDomain.test(value)
