@@ -82,12 +82,12 @@ export function validateProductCopy(copy: GeneratedProductCopy): string[] {
     errors.push("Title must be between 110 and 200 characters.");
   }
 
-  if (!/^[\x20-\x7E]+$/.test(copy.title)) {
-    errors.push("Title must contain only printable ASCII characters.");
+  if (!/^[A-Za-z0-9 ,.'":;()&/+%-]+$/.test(copy.title)) {
+    errors.push("Title contains a character outside the approved ecommerce punctuation set.");
   }
 
-  if (/[?*]/.test(copy.title) || containsMarkdown(copy.title)) {
-    errors.push("Title contains a forbidden symbol or Markdown.");
+  if (containsMarkdown(copy.title)) {
+    errors.push("Title must not contain Markdown.");
   }
 
   if (/[\r\n\t]/.test(copy.description)) {

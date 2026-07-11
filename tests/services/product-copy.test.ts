@@ -139,6 +139,26 @@ describe("product copy validation", () => {
     expect(validateProductCopy({ title, description: validDescription })).not.toEqual([]);
   });
 
+  test.each(["$", "@", "^", "{", "}", "|", "\\", "~", "[", "]", "?", "*", "`"])(
+    "rejects forbidden printable ASCII title symbol %s",
+    (symbol) => {
+      expect(
+        validateProductCopy({ title: titleContaining(symbol), description: validDescription })
+      ).not.toEqual([]);
+    }
+  );
+
+  test("accepts the complete approved ecommerce title punctuation set", () => {
+    const approvedPunctuation = `Comma, period. hyphen- apostrophe' quote" colon: semicolon; parentheses() ampersand& slash/ plus+ percent%`;
+
+    expect(
+      validateProductCopy({
+        title: titleContaining(approvedPunctuation),
+        description: validDescription
+      })
+    ).toEqual([]);
+  });
+
   test.each([
     ["multiline description", `${validDescription}\n<p>More</p>`],
     ["tabbed description", `${validDescription}\t`],
