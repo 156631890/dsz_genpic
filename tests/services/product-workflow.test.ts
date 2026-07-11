@@ -130,6 +130,87 @@ describe("DSZ field rules", () => {
     expect(prompt).toContain("AUD 20 below 3 kg and AUD 40 at or above 3 kg");
   });
 
+  test("preserves legitimate NZ product content in generation prompts", () => {
+    const legitimateContent =
+      "NZ women size 10 fit guide must remain product content";
+    const messages = buildDszGenerationMessages({
+      input,
+      ruleDocuments: {
+        fieldRules: "Field rules.",
+        productPrompt: legitimateContent,
+        categoryMapping: "Category mapping.",
+        uploadSop: "Upload SOP.",
+        productUploadAu: "AU product content."
+      }
+    });
+
+    expect(messages[1].content).toContain(legitimateContent);
+  });
+
+  test("migrates complete legacy shipping blocks without malformed remnants", () => {
+    const messages = buildDszGenerationMessages({
+      input,
+      ruleDocuments: {
+        fieldRules: [
+          "Field rules before shipping.",
+          "### Zone Rates format",
+          "```python",
+          "zone_rates = {",
+          "  'act': 0, 'nsw_m': 0,",
+          "  'nz': 10",
+          "}",
+          "```",
+          "### Category rules",
+          "Field rules after shipping."
+        ].join("\n"),
+        productPrompt: "Product prompt.",
+        categoryMapping: "Category mapping.",
+        uploadSop: [
+          "Upload rules before shipping.",
+          "**Step 5 — Shipping (Incl. GST):**",
+          "| Country | Rate |",
+          "| AU | 0 |",
+          "| NZ | 10 |",
+          "",
+          "**Pricing examples:**",
+          "Upload rules after shipping."
+        ].join("\n"),
+        productUploadAu: "AU product content."
+      }
+    });
+    const prompt = messages[1].content;
+    const codeFenceCount = prompt.match(/```/g)?.length || 0;
+
+    expect(prompt).not.toContain("zone_rates");
+    expect(prompt).not.toContain("'act'");
+    expect(prompt).not.toContain("'nsw_m'");
+    expect(prompt).not.toMatch(/\bnz\b[^\r\n]*\b10\b/i);
+    expect(codeFenceCount % 2).toBe(0);
+    expect(prompt).toContain("Field rules after shipping.");
+    expect(prompt).toContain("**Pricing examples:**");
+    expect(prompt).toContain("Upload rules after shipping.");
+  });
+
+  test("restricts shipping migration to field rules and upload SOP", () => {
+    const productPrompt = "Product prompt keeps zone_rates verbatim.";
+    const categoryMapping = "NZ women size 10 category mapping stays verbatim.";
+    const productUploadAu = "AU content keeps zone_rates and NZ size 10 verbatim.";
+    const messages = buildDszGenerationMessages({
+      input,
+      ruleDocuments: {
+        fieldRules: "Field rules.",
+        productPrompt,
+        categoryMapping,
+        uploadSop: "Upload SOP.",
+        productUploadAu
+      }
+    });
+
+    expect(messages[1].content).toContain(productPrompt);
+    expect(messages[1].content).toContain(categoryMapping);
+    expect(messages[1].content).toContain(productUploadAu);
+  });
+
   test("builds standard zone rates from named measurements", () => {
     expect(
       standardZoneRates({

@@ -257,15 +257,15 @@ export function buildDszGenerationMessages(input: {
         "Generate a complete Dropshipzone product JSON object from the uploaded image URLs and seller selling points.",
         "Follow these rule documents exactly.",
         "FIELD RULES:",
-        truncate(stripServerOwnedShippingRules(ruleDocuments.fieldRules), 12000),
+        truncate(migrateLegacyShippingSections(ruleDocuments.fieldRules), 12000),
         "PRODUCT PROMPT:",
-        truncate(stripServerOwnedShippingRules(ruleDocuments.productPrompt), 30000),
+        truncate(ruleDocuments.productPrompt, 30000),
         "CATEGORY MAPPING:",
-        truncate(stripServerOwnedShippingRules(ruleDocuments.categoryMapping), 20000),
+        truncate(ruleDocuments.categoryMapping, 20000),
         "FULL PRODUCT UPLOAD SOP:",
-        truncate(stripServerOwnedShippingRules(ruleDocuments.uploadSop), 9000),
+        truncate(migrateLegacyShippingSections(ruleDocuments.uploadSop), 9000),
         "AU PRODUCT CONTENT RULES:",
-        truncate(stripServerOwnedShippingRules(ruleDocuments.productUploadAu), 6000),
+        truncate(ruleDocuments.productUploadAu, 6000),
         "INPUT:",
         JSON.stringify(input.input, null, 2),
         "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, images, risk_flags, review_notes.",
@@ -280,16 +280,82 @@ export function buildDszGenerationMessages(input: {
   ];
 }
 
-function stripServerOwnedShippingRules(value: string): string {
-  return value
-    .split(/\r?\n/)
-    .filter(
-      (line) =>
-        !/\bzone_rates\b/i.test(line) &&
-        !/\bnz\b[^\r\n]*\b10\b/i.test(line)
-    )
-    .join("\n");
+function migrateLegacyShippingSections(value: string): string {
+  const lines = value.split(/\r?\n/);
+  const migrated: string[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+
+    if (/^\|[^|]*`?zone_rates`?[^|]*\|/i.test(line)) {
+      index += 1;
+      continue;
+    }
+
+    const isShippingStep = /\bStep\s*5\b.*\bShipping\b/i.test(line);
+    const isZoneRatesSection = /^###\s+Zone Rates\b/i.test(line);
+
+    if (!isShippingStep && !isZoneRatesSection) {
+      migrated.push(line);
+      index += 1;
+      continue;
+    }
+
+    const sectionEnd = findShippingSectionEnd(
+      lines,
+      index + 1,
+      isZoneRatesSection
+    );
+    const section = lines.slice(index, sectionEnd);
+
+    if (hasLegacyShippingRate(section)) {
+      migrated.push(SERVER_CALCULATED_SHIPPING_RULES);
+    } else {
+      migrated.push(...section);
+    }
+    index = sectionEnd;
+  }
+
+  return migrated.join("\n");
 }
+
+function findShippingSectionEnd(
+  lines: string[],
+  startIndex: number,
+  stopAtAnyHeading: boolean
+): number {
+  for (let index = startIndex; index < lines.length; index += 1) {
+    const line = lines[index];
+
+    const startsNextBoldSection =
+      !stopAtAnyHeading && /^\*\*.+\*\*/.test(line);
+
+    if (
+      /^###\s+/.test(line) ||
+      (!stopAtAnyHeading && line.trim() === "---") ||
+      startsNextBoldSection
+    ) {
+      return index;
+    }
+  }
+
+  return lines.length;
+}
+
+function hasLegacyShippingRate(lines: string[]): boolean {
+  return lines.some(
+    (line) =>
+      /\bzone_rates\b/i.test(line) || /\bnz\b[^\r\n]*\b10\b/i.test(line)
+  );
+}
+
+const SERVER_CALCULATED_SHIPPING_RULES = [
+  "**Shipping rates are server-calculated, not AI output:**",
+  "- All Australian zones: AUD 0.",
+  "- Billable weight (kg): max(actual weight, length * width * height / 5000).",
+  "- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg."
+].join("\n");
 
 function buildDszTitleDescriptionRepairMessages(input: {
   input: ProductInput;

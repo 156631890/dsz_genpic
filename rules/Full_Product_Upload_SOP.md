@@ -198,11 +198,10 @@ Vendor RRP = Vendor Price × 2
 ```
 
 **Step 5 — Shipping (Incl. GST)：**
-| 国家 | 填写 |
-|------|------|
-| AU | 0 |
-| NZ | 10 |
-| 其他 | 0 |
+- Shipping rates are calculated by the server, not AI output.
+- All Australian zones: AUD 0.
+- Billable weight (kg): `MAX(actual weight, length × width × height / 5000)`.
+- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg.
 
 **定价示例（汇率 3.05）：**
 

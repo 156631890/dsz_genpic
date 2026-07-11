@@ -232,11 +232,10 @@ Vendor RRP = Vendor Price × 2
 ```
 
 **Step 5 — Shipping (Incl. GST)：**
-| 国家 | 填写值 |
-|------|--------|
-| AU（澳大利亚） | 0 |
-| NZ（新西兰） | 10 |
-| 其他国家 | 0 |
+- Shipping rates are calculated by the server, not AI output.
+- All Australian zones: AUD 0.
+- Billable weight (kg): `MAX(actual weight, length × width × height / 5000)`.
+- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg.
 
 ---
 
@@ -353,7 +352,6 @@ Step 7: 粘贴至 Dropshipzone 后台
 | `brand_name` | string | `'Elosung'` | 非 `brand` |
 | `rrp` | number | `19.8` | 非 `vendor_rrp` |
 | `cbm` | number | `0.00051` | 长×宽×高/1,000,000 |
-| `zone_rates` | object | 见下方 | 各州缩写 |
 | `images` | string[] | `['https://...']` | URL数组 |
 | `weight` | number | `1.8` | kg |
 | `length/width/height` | number | `35/25/15` | cm |
@@ -361,15 +359,11 @@ Step 7: 粘贴至 Dropshipzone 后台
 | `description` | string | `'<p>...</p>'` | HTML字符串 |
 | `status` | integer | `1` | 1=上线，0=草稿 |
 
-### Zone Rates 格式（各州缩写）
-```python
-zone_rates = {
-    'act': 0, 'nsw_m': 0, 'nsw_r': 0, 'nt_m': 0, 'nt_r': 0,
-    'qld_m': 0, 'qld_r': 0, 'remote': 0, 'sa_m': 0, 'sa_r': 0,
-    'tas_m': 0, 'tas_r': 0, 'vic_m': 0, 'vic_r': 0,
-    'wa_m': 0, 'wa_r': 0, 'nz': 10
-}
-```
+### Shipping Rates
+- Shipping rates are calculated by the server, not AI output.
+- All Australian zones: AUD 0.
+- Billable weight (kg): `MAX(actual weight, length × width × height / 5000)`.
+- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg.
 
 ### 类目 ID 重要说明
 - 上传产品应优先使用 `GET /new_categories` 返回的 ID
