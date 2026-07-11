@@ -390,6 +390,20 @@ describe("product copy validation", () => {
   });
 
   test.each([
+    "sms:+61412345678",
+    "geo:-37,144",
+    "urn:isbn:9780141036144",
+    "magnet:?xt=urn:btih:abcdef",
+    "ws://example.com/socket",
+    "wss://example.com/socket",
+    "custom:resource/path"
+  ])("rejects generic URI scheme %s", (uri) => {
+    const description = `${descriptionPrefix}<p>${uri}</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toContain(urlError);
+  });
+
+  test.each([
     ["before elements", "# Heading<p>Overview</p>"],
     ["inside an element", "<p># Heading</p>"],
     ["between elements", "<p>Overview</p>- item<p>More</p>"],
