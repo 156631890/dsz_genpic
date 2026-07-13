@@ -17,7 +17,6 @@
   --error: #9b3e35;
   --error-wash: #f7ebe8;
   --success: #3f6554;
-  --success-wash: #e7efeb;
 }
 
 * { box-sizing: border-box; }
@@ -29,6 +28,21 @@ body {
   min-width: 320px;
   background: var(--canvas);
 }
+
+.skip-link {
+  position: fixed;
+  z-index: 20;
+  top: 8px;
+  left: 8px;
+  padding: 9px 12px;
+  border-radius: 4px;
+  background: var(--violet-dark);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  transform: translateY(-160%);
+}
+.skip-link:focus { transform: translateY(0); }
 
 button, input, textarea, select { font: inherit; }
 
@@ -98,6 +112,8 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .service-context { text-align: right; }
 .service-context span { display: block; margin-bottom: 3px; color: var(--faint); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 .service-context strong { color: #4f4c54; font-size: 12px; font-weight: 600; }
+.health-loading strong::before { content: "↻"; margin-right: 6px; }
+.health-error strong::before { content: "?"; margin-right: 6px; color: var(--error); }
 
 .workspace {
   display: grid;
@@ -244,6 +260,10 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 .image-preview { display: grid; place-items: center; aspect-ratio: 4 / 5; overflow: hidden; background: #e9e8e6; color: var(--muted); font-size: 10px; text-align: center; }
 .image-preview img { width: 100%; height: 100%; object-fit: cover; }
 .image-role-foot { display: grid; gap: 5px; padding-top: 9px; }
+.replacement-field { gap: 4px; margin: 5px 0 0; font-size: 10px; }
+.replacement-field input { min-height: 34px; padding: 0 8px; font-size: 11px; }
+.replacement-button { min-height: 32px; border: 1px solid var(--line-strong); border-radius: 4px; background: #fff; color: var(--violet); font-size: 10px; font-weight: 750; }
+.replacement-button:hover { border-color: var(--violet); background: var(--violet-wash); }
 
 .payload-disclosure { margin-top: 5px; border-top: 1px solid var(--line); padding-top: 14px; }
 .payload-disclosure summary { width: max-content; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 650; }

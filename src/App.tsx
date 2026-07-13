@@ -11,10 +11,12 @@ import {
   type ProductImageRole,
   type ProductInput
 } from "../shared/product";
-import { buildShippingZoneRates, calculatePackageCbm } from "../shared/shipping";
+import { buildShippingZoneRates, calculateBillableWeightKg, calculatePackageCbm } from "../shared/shipping";
 import {
   requestProductCopy,
   requestProductImageRole,
+  requestServiceHealth,
+  type ServiceHealth,
   uploadProductFields,
   uploadSourceImages
 } from "./productWorkflow";
@@ -36,18 +38,12 @@ type EditorTab = "details" | "price" | "shipping" | "images";
 interface OptionalInputs {
   categoryHint: string;
   purchasePriceCny: string;
-  lengthCm: string;
-  widthCm: string;
-  heightCm: string;
 }
 
 const idleTask: TaskState = { status: "idle", error: "" };
 const emptyOptionalInputs: OptionalInputs = {
   categoryHint: "",
-  purchasePriceCny: "",
-  lengthCm: "",
-  widthCm: "",
-  heightCm: ""
+  purchasePriceCny: ""
 };
 
 const initialFields: DszProductFields = {
@@ -103,6 +99,220 @@ function initialRoleStates(): Record<ProductImageRole, ImageRoleState> {
   ])) as Record<ProductImageRole, ImageRoleState>;
 }
 
+function NumericInput({
+  value,
+  onCommit,
+  inputMode = "decimal"
+}: {
+  value: number;
+  onCommit: (value: number) => void;
+  inputMode?: "decimal" | "numeric";
+}) {
+  const [buffer, setBuffer] = useState(String(value));
+  const editingRef = useRef(false);
+  const committedRef = useRef(value);
+
+  useEffect(() => {
+    if (!editingRef.current && value !== committedRef.current) setBuffer(String(value));
+    committedRef.current = value;
+  }, [value]);
+
+  function commit() {
+    editingRef.current = false;
+    const parsed = buffer.trim() === "" ? 0 : Number(buffer);
+    if (!Number.isFinite(parsed)) {
+      setBuffer(String(value));
+      return;
+    }
+    committedRef.current = parsed;
+    onCommit(parsed);
+  }
+
+  return <input inputMode={inputMode} value={buffer}
+    onFocus={() => { editingRef.current = true; }}
+    onChange={(event) => setBuffer(event.target.value)}
+    onBlur={commit}
+    onKeyDown={(event) => {
+      if (event.key === "Enter") event.currentTarget.blur();
+    }} />;
+}
+
+function ImageRoleCard({ role, index, state, onRetry, onReplace }: {
+  role: ProductImageRole;
+  index: number;
+  state: ImageRoleState;
+  onRetry: (role: ProductImageRole) => void;
+  onReplace: (role: ProductImageRole, imageUrl: string) => void;
+}) {
+  const [replacementUrl, setReplacementUrl] = useState("");
+  const [replacementError, setReplacementError] = useState("");
+
+  function applyReplacement() {
+    const nextUrl = replacementUrl.trim();
+    if (!isHttpsUrl(nextUrl)) {
+      setReplacementError("请输入绝对 HTTPS URL");
+      return;
+    }
+    setReplacementError("");
+    setReplacementUrl("");
+    onReplace(role, nextUrl);
+  }
+
+  return (
+    <article data-testid={`image-role-${role}`} data-role={role} data-status={state.status}
+      aria-label={imageRoleLabels[role]} className="image-role-card">
+      <div className="image-role-head"><span>0{index + 1}</span><strong>{imageRoleLabels[role]}</strong></div>
+      <div className="image-preview">
+        {state.imageUrl
+          ? <img src={state.imageUrl} alt={`${imageRoleLabels[role]} generated preview`} />
+          : <span>{state.status === "loading" ? "Generating preview" : "No image generated"}</span>}
+      </div>
+      <div className="image-role-foot">
+        <span className="state-label">{statusLabel(state.status)}</span>
+        {state.error && <span className="inline-error" role="alert">{state.error}</span>}
+        {state.status === "error" && (
+          <button className="text-button" onClick={() => onRetry(role)}
+            aria-label={`重试图片 ${role}`}>Retry role</button>
+        )}
+        <label className="replacement-field">Replacement URL
+          <input aria-label={`Replacement URL for ${role}`} inputMode="url" value={replacementUrl}
+            onChange={(event) => { setReplacementUrl(event.target.value); setReplacementError(""); }} />
+        </label>
+        <button className="replacement-button" onClick={applyReplacement}
+          aria-label={`应用替换 ${role}`}>应用替换</button>
+        {replacementError && <span className="inline-error" role="alert">{replacementError}</span>}
+      </div>
+    </article>
+  );
+}
+
+function ImagesPanel({ imageRoles, onRetry, onReplace }: {
+  imageRoles: Record<ProductImageRole, ImageRoleState>;
+  onRetry: (role: ProductImageRole) => void;
+  onReplace: (role: ProductImageRole, imageUrl: string) => void;
+}) {
+  return (
+    <div className="image-role-grid" aria-label="Generated product images">
+      {PRODUCT_IMAGE_ROLES.map((role, index) => (
+        <ImageRoleCard key={role} role={role} index={index} state={imageRoles[role]}
+          onRetry={onRetry} onReplace={onReplace} />
+      ))}
+    </div>
+  );
+}
+
+type UpdateField = (field: keyof DszProductFields, value: string | number | boolean) => void;
+
+function TaskStatusCards({
+  copyTask,
+  uploadSourceTask,
+  imageRoles,
+  completedImageCount,
+  failedImageCount,
+  hasTaskError,
+  onRetryCopy
+}: {
+  copyTask: TaskState;
+  uploadSourceTask: TaskState;
+  imageRoles: Record<ProductImageRole, ImageRoleState>;
+  completedImageCount: number;
+  failedImageCount: number;
+  hasTaskError: boolean;
+  onRetryCopy: () => void;
+}) {
+  const imageStatus = statusTone(...PRODUCT_IMAGE_ROLES.map((role) => imageRoles[role].status));
+  return (
+    <section className="task-strip" aria-label="AI generation status">
+      <article className={`task-card task-${copyTask.status}`} data-testid="copy-task-status"
+        data-status={copyTask.status}>
+        <div className="task-title"><span>GPT-5.6 SOL</span><strong>Title & description</strong></div>
+        <span className="state-label">{statusLabel(copyTask.status)}</span>
+        <span className="sr-only">{copyTask.status}</span>
+        {uploadSourceTask.status === "loading" && <small>正在上传源图</small>}
+        {copyTask.error && <span className="inline-error" role="alert">{copyTask.error}</span>}
+        {copyTask.status === "error" && (
+          <button className="text-button" onClick={onRetryCopy}
+            aria-label="重试标题与描述">重试文案</button>
+        )}
+      </article>
+      <article data-testid="image-task-status" data-status={imageStatus}
+        className={`task-card task-${imageStatus}`}>
+        <div className="task-title"><span>GPT-Image-2</span><strong>5-role image set</strong></div>
+        <span className="state-label">{completedImageCount} / 5 已完成</span>
+        {failedImageCount > 0 && <span className="failed-count">{failedImageCount} 个失败</span>}
+        <small>{hasTaskError ? "失败角色可单独重试" : "各角色独立生成，可单独重试"}</small>
+      </article>
+    </section>
+  );
+}
+
+function DetailsPanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate: UpdateField }) {
+  return (
+    <div className="field-grid details-grid">
+      <label>Category<input value={fields.categories}
+        onChange={(event) => onUpdate("categories", event.target.value)} /></label>
+      <label data-ai-field="true">Product Name <span className="ai-marker">AI</span>
+        <input aria-label="Product Name" value={fields.product_name}
+          onChange={(event) => onUpdate("product_name", event.target.value)} /></label>
+      <label>SKU<input value={fields.sku}
+        onChange={(event) => onUpdate("sku", event.target.value)} /></label>
+      <label>Status<select value={fields.status}
+        onChange={(event) => onUpdate("status", Number(event.target.value))}>
+        <option value={1}>Active</option><option value={0}>Inactive</option>
+      </select></label>
+      <label>EAN Code<input value={fields.ean_code}
+        onChange={(event) => onUpdate("ean_code", event.target.value)} /></label>
+      <label>Quantity<NumericInput inputMode="numeric" value={fields.stock}
+        onCommit={(value) => onUpdate("stock", value)} /></label>
+      <label>Package Weight kg<NumericInput value={fields.weight}
+        onCommit={(value) => onUpdate("weight", value)} /></label>
+      <label>Length cm<NumericInput value={fields.length}
+        onCommit={(value) => onUpdate("length", value)} /></label>
+      <label>Width cm<NumericInput value={fields.width}
+        onCommit={(value) => onUpdate("width", value)} /></label>
+      <label>Height cm<NumericInput value={fields.height}
+        onCommit={(value) => onUpdate("height", value)} /></label>
+      <label>CBM m3 <span className="automatic-marker">Automatic</span>
+        <input aria-label="CBM m3" readOnly value={fields.cbm} /></label>
+      <label>Brand Name<input value={fields.brand_name}
+        onChange={(event) => onUpdate("brand_name", event.target.value)} /></label>
+      <label>Colour<input value={fields.colour}
+        onChange={(event) => onUpdate("colour", event.target.value)} /></label>
+      <label className="toggle-field">Enable Product <input type="checkbox" checked={fields.enabled}
+        onChange={(event) => onUpdate("enabled", event.target.checked)} /></label>
+      <label className="description-field" data-ai-field="true">
+        Vendor Product Description <span className="ai-marker">AI · HTML</span>
+        <textarea aria-label="Vendor Product Description" value={fields.description}
+          onChange={(event) => onUpdate("description", event.target.value)} rows={9} />
+      </label>
+    </div>
+  );
+}
+
+function PricePanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate: UpdateField }) {
+  return (
+    <div className="field-grid price-grid">
+      <label>Vendor Price<NumericInput value={fields.vendor_price}
+        onCommit={(value) => onUpdate("vendor_price", value)} /></label>
+      <label>Vendor RRP<NumericInput value={fields.rrp}
+        onCommit={(value) => onUpdate("rrp", value)} /></label>
+    </div>
+  );
+}
+
+function ShippingPanel({ billableWeight }: { billableWeight: number }) {
+  return <>
+    <div className="billable-weight"><span>Current billable weight</span>
+      <strong>{billableWeight.toFixed(2)} kg</strong></div>
+    <div className="shipping-summary">
+      <article><span>Australian zones</span><strong>Free</strong><small>All metro and regional zones</small></article>
+      <article><span>New Zealand · Below 3 kg</span><strong>AUD 20</strong><small>Incl. GST</small></article>
+      <article><span>New Zealand · 3 kg and above</span><strong>AUD 40</strong><small>Incl. GST</small></article>
+    </div>
+    <p className="formula-note">Billable weight = max(actual, L × W × H / 5000)</p>
+  </>;
+}
+
 export default function App() {
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sellingPoints, setSellingPoints] = useState("");
@@ -115,6 +325,8 @@ export default function App() {
   const [message, setMessage] = useState("等待上传原始产品图片");
   const [uploadResult, setUploadResult] = useState<unknown>(null);
   const [activeTab, setActiveTab] = useState<EditorTab>("details");
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealth | null>(null);
+  const [healthStatus, setHealthStatus] = useState<"loading" | "success" | "error">("loading");
   const copyOperationIdRef = useRef(0);
   const imageOperationIdRef = useRef(0);
   const copyControllersRef = useRef(new Set<AbortController>());
@@ -163,8 +375,12 @@ export default function App() {
   const pageSummary = uploadStatus !== "idle"
     ? message
     : hasTaskActivity ? taskSummary : message;
-  const volumetricWeight = fields.length * fields.width * fields.height / 5000;
-  const billableWeight = Math.max(fields.weight, volumetricWeight);
+  const billableWeight = calculateBillableWeightKg({
+    actualWeightKg: fields.weight,
+    lengthCm: fields.length,
+    widthCm: fields.width,
+    heightCm: fields.height
+  });
   const submitReason = submissionReason(fields, imageRoles, copyTask, workflowLoading, hasTaskError);
 
   useEffect(() => () => {
@@ -176,6 +392,19 @@ export default function App() {
     imageControllersRef.current.clear();
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    requestServiceHealth(controller.signal).then((health) => {
+      if (controller.signal.aborted) return;
+      setServiceHealth(health);
+      setHealthStatus("success");
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setHealthStatus("error");
+    });
+    return () => controller.abort();
   }, []);
 
   function clearUploadResult() {
@@ -349,6 +578,14 @@ export default function App() {
     await Promise.allSettled(PRODUCT_IMAGE_ROLES.map((role) => runImageRole(role, operationId)));
   }
 
+  function replaceImageRole(role: ProductImageRole, imageUrl: string) {
+    setImageRoles((current) => ({
+      ...current,
+      [role]: { status: "success", error: "", imageUrl }
+    }));
+    clearUploadResult();
+  }
+
   async function startGeneration() {
     if (sourceFiles.length === 0) {
       setMessage("请先上传至少一张原始产品图片");
@@ -394,7 +631,9 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell" id="main-content">
+    <>
+      <a className="skip-link" href="#main-content">Skip to product editor</a>
+      <main className="app-shell" id="main-content" tabIndex={-1}>
       <header className="topbar">
         <div className="brand-lockup">
           <span className="brand-mark" aria-hidden="true">DSZ</span>
@@ -403,9 +642,16 @@ export default function App() {
             <p>商品资料生成与提交流程工作台</p>
           </div>
         </div>
-        <div className="service-context">
-          <span>Workflow context</span>
-          <strong>Draft · AI-assisted · Human review</strong>
+        <div className={`service-context health-${healthStatus}`} aria-label="Service health">
+          {healthStatus === "loading" && <><span>Service health</span><strong>Checking services</strong></>}
+          {healthStatus === "error" && <><span>Service health</span><strong>Service status unavailable</strong></>}
+          {healthStatus === "success" && serviceHealth && (
+            serviceHealth.textConfigured && serviceHealth.imageConfigured
+              ? <><span>AI services configured</span><strong>{serviceHealth.textModel} · {serviceHealth.imageModel}</strong></>
+              : <><span>Service setup incomplete</span><strong>
+                Text {serviceHealth.textConfigured ? "ready" : "missing"} · Image {serviceHealth.imageConfigured ? "ready" : "missing"}
+              </strong></>
+          )}
         </div>
       </header>
 
@@ -472,26 +718,10 @@ export default function App() {
               role="status" aria-live="polite">{pageSummary}</div>
           </div>
 
-          <section className="task-strip" aria-label="AI generation status">
-            <article className={`task-card task-${copyTask.status}`} data-testid="copy-task-status"
-              data-status={copyTask.status}>
-              <div className="task-title"><span>GPT-5.6 SOL</span><strong>Title & description</strong></div>
-              <span className="state-label">{statusLabel(copyTask.status)}</span>
-              <span className="sr-only">{copyTask.status}</span>
-              {uploadSourceTask.status === "loading" && <small>正在上传源图</small>}
-              {copyTask.error && <span className="inline-error" role="alert">{copyTask.error}</span>}
-              {copyTask.status === "error" && (
-                <button className="text-button" onClick={() => runCopyTask()}
-                  aria-label="重试标题与描述">重试文案</button>
-              )}
-            </article>
-            <article className={`task-card task-${statusTone(...PRODUCT_IMAGE_ROLES.map((role) => imageRoles[role].status))}`}>
-              <div className="task-title"><span>GPT-Image-2</span><strong>5-role image set</strong></div>
-              <span className="state-label">{completedImageCount} / 5 已完成</span>
-              {failedImageCount > 0 && <span className="failed-count">{failedImageCount} 个失败</span>}
-              <small>{hasTaskError ? "失败角色可单独重试" : "各角色独立生成，可单独重试"}</small>
-            </article>
-          </section>
+          <TaskStatusCards copyTask={copyTask} uploadSourceTask={uploadSourceTask}
+            imageRoles={imageRoles} completedImageCount={completedImageCount}
+            failedImageCount={failedImageCount} hasTaskError={hasTaskError}
+            onRetryCopy={() => runCopyTask()} />
 
           <nav className="editor-tabs" role="tablist" aria-label="Product editor sections">
             {editorTabs.map((tab, index) => (
@@ -518,94 +748,22 @@ export default function App() {
           <div className="tab-stage">
             <section id="panel-details" role="tabpanel" aria-labelledby="tab-details"
               hidden={activeTab !== "details"} className="tab-panel">
-              <div className="field-grid details-grid">
-                <label>Category<input value={fields.categories}
-                  onChange={(event) => updateField("categories", event.target.value)} /></label>
-                <label data-ai-field="true">Product Name <span className="ai-marker">AI</span>
-                  <input aria-label="Product Name" value={fields.product_name}
-                    onChange={(event) => updateField("product_name", event.target.value)} /></label>
-                <label>SKU<input value={fields.sku}
-                  onChange={(event) => updateField("sku", event.target.value)} /></label>
-                <label>Status<select value={fields.status}
-                  onChange={(event) => updateField("status", Number(event.target.value))}>
-                  <option value={1}>Active</option><option value={0}>Inactive</option>
-                </select></label>
-                <label>EAN Code<input value={fields.ean_code}
-                  onChange={(event) => updateField("ean_code", event.target.value)} /></label>
-                <label>Quantity<input inputMode="numeric" value={fields.stock}
-                  onChange={(event) => updateField("stock", Number(event.target.value) || 0)} /></label>
-                <label>Package Weight kg<input inputMode="decimal" value={fields.weight}
-                  onChange={(event) => updateField("weight", Number(event.target.value) || 0)} /></label>
-                <label>Length cm<input inputMode="decimal" value={fields.length}
-                  onChange={(event) => updateField("length", Number(event.target.value) || 0)} /></label>
-                <label>Width cm<input inputMode="decimal" value={fields.width}
-                  onChange={(event) => updateField("width", Number(event.target.value) || 0)} /></label>
-                <label>Height cm<input inputMode="decimal" value={fields.height}
-                  onChange={(event) => updateField("height", Number(event.target.value) || 0)} /></label>
-                <label>CBM m3 <span className="automatic-marker">Automatic</span>
-                  <input aria-label="CBM m3" readOnly value={fields.cbm} /></label>
-                <label>Brand Name<input value={fields.brand_name}
-                  onChange={(event) => updateField("brand_name", event.target.value)} /></label>
-                <label>Colour<input value={fields.colour}
-                  onChange={(event) => updateField("colour", event.target.value)} /></label>
-                <label className="toggle-field">Enable Product <input type="checkbox" checked={fields.enabled}
-                  onChange={(event) => updateField("enabled", event.target.checked)} /></label>
-                <label className="description-field" data-ai-field="true">
-                  Vendor Product Description <span className="ai-marker">AI · HTML</span>
-                  <textarea aria-label="Vendor Product Description" value={fields.description}
-                    onChange={(event) => updateField("description", event.target.value)} rows={9} />
-                </label>
-              </div>
+              <DetailsPanel fields={fields} onUpdate={updateField} />
             </section>
 
             <section id="panel-price" role="tabpanel" aria-labelledby="tab-price"
               hidden={activeTab !== "price"} className="tab-panel">
-              <div className="field-grid price-grid">
-                <label>Vendor Price<input inputMode="decimal" value={fields.vendor_price}
-                  onChange={(event) => updateField("vendor_price", Number(event.target.value) || 0)} /></label>
-                <label>Vendor RRP<input inputMode="decimal" value={fields.rrp}
-                  onChange={(event) => updateField("rrp", Number(event.target.value) || 0)} /></label>
-              </div>
+              <PricePanel fields={fields} onUpdate={updateField} />
             </section>
 
             <section id="panel-shipping" role="tabpanel" aria-labelledby="tab-shipping"
               hidden={activeTab !== "shipping"} className="tab-panel shipping-panel">
-              <div className="billable-weight"><span>Current billable weight</span>
-                <strong>{billableWeight.toFixed(2)} kg</strong></div>
-              <div className="shipping-summary">
-                <article><span>Australian zones</span><strong>Free</strong><small>All metro and regional zones</small></article>
-                <article><span>New Zealand · Below 3 kg</span><strong>AUD 20</strong><small>Incl. GST</small></article>
-                <article><span>New Zealand · 3 kg and above</span><strong>AUD 40</strong><small>Incl. GST</small></article>
-              </div>
-              <p className="formula-note">Billable weight = max(actual, L × W × H / 5000)</p>
+              <ShippingPanel billableWeight={billableWeight} />
             </section>
 
             <section id="panel-images" role="tabpanel" aria-labelledby="tab-images"
               hidden={activeTab !== "images"} className="tab-panel">
-              <div className="image-role-grid" aria-label="Generated product images">
-                {PRODUCT_IMAGE_ROLES.map((role, index) => {
-                  const state = imageRoles[role];
-                  return (
-                    <article key={role} data-testid={`image-role-${role}`} data-role={role}
-                      data-status={state.status} aria-label={imageRoleLabels[role]} className="image-role-card">
-                      <div className="image-role-head"><span>0{index + 1}</span><strong>{imageRoleLabels[role]}</strong></div>
-                      <div className="image-preview">
-                        {state.imageUrl
-                          ? <img src={state.imageUrl} alt={`${imageRoleLabels[role]} generated preview`} />
-                          : <span>{state.status === "loading" ? "Generating preview" : "No image generated"}</span>}
-                      </div>
-                      <div className="image-role-foot">
-                        <span className="state-label">{statusLabel(state.status)}</span>
-                        {state.error && <span className="inline-error" role="alert">{state.error}</span>}
-                        {state.status === "error" && (
-                          <button className="text-button" onClick={() => runImageRole(role)}
-                            aria-label={`重试图片 ${role}`}>Retry role</button>
-                        )}
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
+              <ImagesPanel imageRoles={imageRoles} onRetry={runImageRole} onReplace={replaceImageRole} />
             </section>
           </div>
 
@@ -630,7 +788,8 @@ export default function App() {
         </button>
         <span id="submit-reason" className="sr-only">{submitReason}</span>
       </footer>
-    </main>
+      </main>
+    </>
   );
 }
 
@@ -644,8 +803,8 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 function statusTone(...statuses: Status[]): Status {
-  if (statuses.includes("error")) return "error";
   if (statuses.includes("loading")) return "loading";
+  if (statuses.includes("error")) return "error";
   if (statuses.includes("stale")) return "stale";
   if (statuses.includes("success")) return "success";
   return "idle";

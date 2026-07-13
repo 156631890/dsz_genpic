@@ -6,6 +6,28 @@ import type {
   DszProductFields
 } from "../shared/product";
 
+export interface ServiceHealth {
+  textConfigured: boolean;
+  imageConfigured: boolean;
+  textModel: string;
+  imageModel: string;
+}
+
+export async function requestServiceHealth(signal?: AbortSignal): Promise<ServiceHealth> {
+  const data = await requestJson("/api/health", { method: "GET", signal }, "服务状态不可用");
+  if (!isRecord(data) || typeof data.textConfigured !== "boolean" ||
+    typeof data.imageConfigured !== "boolean" || !isNonemptyString(data.textModel) ||
+    !isNonemptyString(data.imageModel)) {
+    throw new Error("服务状态不可用");
+  }
+  return {
+    textConfigured: data.textConfigured,
+    imageConfigured: data.imageConfigured,
+    textModel: data.textModel,
+    imageModel: data.imageModel
+  };
+}
+
 export async function uploadSourceImages(files: File[], signal?: AbortSignal): Promise<string[]> {
   const form = new FormData();
   files.forEach((file) => form.append("images", file));
