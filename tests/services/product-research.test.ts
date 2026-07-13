@@ -194,6 +194,7 @@ describe("product research request", () => {
         return new Response("", { status: 503 });
       }
 
+      expect(body.stream).toBe(false);
       expect(serialized).toContain(
         "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
       );

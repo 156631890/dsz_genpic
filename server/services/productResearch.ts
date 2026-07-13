@@ -245,7 +245,8 @@ function buildFocusedProductResearchRequest(
     options.input.categoryHint
   );
 
-  return buildResearchResponseRequest(options, [
+  return {
+    ...buildResearchResponseRequest(options, [
     "Identify the exact same product and variant shown in the supplied images.",
     "Use web search. Prefer exact manufacturer, supplier, 1688, or marketplace evidence.",
     "Similar products are not evidence and must have exactProductMatch false.",
@@ -260,8 +261,10 @@ function buildFocusedProductResearchRequest(
     "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
     "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
     "Use source.package null unless all four values are explicitly present on that source.",
-    "Emit every source URL with a web-search URL citation annotation."
-  ].join("\n"));
+      "Emit every source URL with a web-search URL citation annotation."
+    ].join("\n")),
+    stream: false
+  };
 }
 
 function selectCategoryCandidates(
