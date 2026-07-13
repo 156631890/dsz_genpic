@@ -188,7 +188,15 @@ describe("App independent AI workflow", () => {
     expect(screen.queryByText(/stale-/)).not.toBeInTheDocument();
   });
 
-  test("manual title and description edits made during copy generation are never overwritten", async () => {
+  test.each([
+    ["title", true, false],
+    ["description", false, true],
+    ["both", true, true]
+  ] as const)("applies copy fields independently when %s is edited during generation", async (
+    _case,
+    editTitle,
+    editDescription
+  ) => {
     const user = userEvent.setup();
     const copy = deferred<Response>();
     vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -205,13 +213,148 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
     await waitFor(() => expect(screen.getByTestId("copy-task-status")).toHaveTextContent("loading"));
-    await user.type(screen.getByLabelText("标题"), "Manual title");
-    await user.type(screen.getByLabelText("HTML Description"), "Manual description");
+    if (editTitle) await user.type(screen.getByLabelText("标题"), "Manual title");
+    if (editDescription) await user.type(screen.getByLabelText("HTML Description"), "Manual description");
     copy.resolve(response({ title: "Late title", description: "Late description" }));
 
-    await waitFor(() => expect(screen.getByTestId("copy-task-status")).toHaveTextContent("success"));
-    expect(screen.getByLabelText("标题")).toHaveValue("Manual title");
-    expect(screen.getByLabelText("HTML Description")).toHaveValue("Manual description");
+    const copyStatus = screen.getByTestId("copy-task-status");
+    await waitFor(() => expect(copyStatus).toHaveTextContent(
+      editTitle && editDescription ? "error" : "success"
+    ));
+    expect(screen.getByLabelText("标题")).toHaveValue(editTitle ? "Manual title" : "Late title");
+    expect(screen.getByLabelText("HTML Description")).toHaveValue(
+      editDescription ? "Manual description" : "Late description"
+    );
+    if (editTitle && editDescription) {
+      expect(within(copyStatus).getByRole("button", { name: "重试标题与描述" })).toBeVisible();
+    }
+  });
+
+  test.each([
+    ["类目提示", "Underwear", "all"],
+    ["采购价 CNY", "12.50", "copy"],
+    ["Weight kg", "2", "copy"],
+    ["Length cm", "20", "copy"],
+    ["Width cm", "15", "copy"],
+    ["Height cm", "10", "copy"]
+  ] as const)("completed outputs become stale after changing %s", async (label, value, scope) => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
+      if (url === "/api/generate-product-copy") return response({ title: "Title", description: "Description" });
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await fillSubmissionFields(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "上传到后台" })).toBeEnabled());
+
+    const input = screen.getByLabelText(label);
+    await user.clear(input);
+    await user.type(input, value);
+
+    expect(screen.getByRole("button", { name: "上传到后台" })).toBeDisabled();
+    expect(screen.getByTestId("copy-task-status")).toHaveTextContent("idle");
+    expect(screen.getAllByRole("img")).toHaveLength(5);
+    for (const role of PRODUCT_IMAGE_ROLES) {
+      expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute(
+        "data-status",
+        scope === "all" ? "idle" : "success"
+      );
+    }
+  });
+
+  test.each(["selling points", "source files"] as const)(
+    "completed copy and images become stale after changing %s",
+    async (dependency) => {
+      const user = userEvent.setup();
+      vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
+        if (url === "/api/generate-product-copy") return response({ title: "Title", description: "Description" });
+        if (url === "/api/generate-product-image-role") {
+          const role = roleFromRequest(init);
+          return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }));
+
+      render(<App />);
+      await fillRequiredInputs(user);
+      await fillSubmissionFields(user);
+      await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "上传到后台" })).toBeEnabled());
+
+      if (dependency === "selling points") {
+        await user.type(screen.getByLabelText("卖点"), " changed");
+      } else {
+        await user.upload(
+          screen.getByLabelText("原始产品图片"),
+          new File(["replacement"], "replacement.png", { type: "image/png" })
+        );
+      }
+
+      expect(screen.getByTestId("copy-task-status")).toHaveTextContent("idle");
+      expect(screen.getAllByRole("img")).toHaveLength(5);
+      for (const role of PRODUCT_IMAGE_ROLES) {
+        expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute("data-status", "idle");
+      }
+      expect(screen.getByRole("button", { name: "上传到后台" })).toBeDisabled();
+    }
+  );
+
+  test("a second run keeps prior role images and replaces only validated successes", async () => {
+    const user = userEvent.setup();
+    let generation = 1;
+    const secondRun = Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [role, deferred<Response>()])) as
+      Record<ProductImageRole, ReturnType<typeof deferred<Response>>>;
+    vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
+      if (url === "/api/generate-product-copy") return response({ title: `Title ${generation}`, description: `Description ${generation}` });
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return generation === 1
+          ? response({ role, imageUrl: `https://cdn.example.com/v1-${role}.png` })
+          : secondRun[role].promise;
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await fillSubmissionFields(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(5));
+
+    generation = 2;
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    expect(screen.getAllByRole("img").map((image) => image.getAttribute("src"))).toEqual(
+      PRODUCT_IMAGE_ROLES.map((role) => `https://cdn.example.com/v1-${role}.png`)
+    );
+    for (const role of PRODUCT_IMAGE_ROLES) {
+      secondRun[role].resolve(role === "detail"
+        ? response({ error: "second detail failed" }, 500)
+        : response({ role, imageUrl: `https://cdn.example.com/v2-${role}.png` }));
+    }
+
+    const detail = screen.getByTestId("image-role-detail");
+    await waitFor(() => expect(detail).toHaveAttribute("data-status", "error"));
+    expect(within(detail).getByRole("img")).toHaveAttribute(
+      "src",
+      "https://cdn.example.com/v1-detail.png"
+    );
+    for (const role of PRODUCT_IMAGE_ROLES.filter((item) => item !== "detail")) {
+      expect(within(screen.getByTestId(`image-role-${role}`)).getByRole("img")).toHaveAttribute(
+        "src",
+        `https://cdn.example.com/v2-${role}.png`
+      );
+    }
+    expect(screen.getByRole("button", { name: "上传到后台" })).toBeDisabled();
   });
 
   test("copy success and one image failure retain four images; role retry is isolated", async () => {
@@ -315,6 +458,7 @@ describe("App independent AI workflow", () => {
 
     render(<App />);
     await fillRequiredInputs(user);
+    await fillSubmissionFields(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
       url === "/api/generate-product-image-role")).toHaveLength(5));
@@ -327,7 +471,6 @@ describe("App independent AI workflow", () => {
       PRODUCT_IMAGE_ROLES.map((role) => `生成图片 ${role}`)
     );
 
-    await fillSubmissionFields(user);
     await user.click(screen.getByRole("button", { name: "上传到后台" }));
     await waitFor(() => expect(uploadedFields).toBeDefined());
     expect(uploadedFields?.images).toEqual(
@@ -350,11 +493,10 @@ describe("App independent AI workflow", () => {
     const submit = screen.getByRole("button", { name: "上传到后台" });
     expect(submit).toBeDisabled();
     await fillRequiredInputs(user);
-    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-    expect(submit).toBeDisabled();
-    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(5));
-    expect(submit).toBeDisabled();
     await fillSubmissionFields(user);
+    expect(submit).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(5));
     expect(submit).toBeEnabled();
   });
 

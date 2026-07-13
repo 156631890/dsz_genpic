@@ -32,6 +32,8 @@ interface ImageRoleState extends TaskState {
   imageUrl: string;
 }
 
+type GenerationScope = "copy" | "all";
+
 interface OptionalInputs {
   categoryHint: string;
   purchasePriceCny: string;
@@ -119,9 +121,12 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("等待上传原始产品图片");
   const [uploadResult, setUploadResult] = useState<unknown>(null);
-  const operationIdRef = useRef(0);
-  const controllersRef = useRef(new Set<AbortController>());
-  const aiFieldEditVersionRef = useRef(0);
+  const copyOperationIdRef = useRef(0);
+  const imageOperationIdRef = useRef(0);
+  const copyControllersRef = useRef(new Set<AbortController>());
+  const imageControllersRef = useRef(new Set<AbortController>());
+  const titleEditVersionRef = useRef(0);
+  const descriptionEditVersionRef = useRef(0);
   const uploadAttemptRef = useRef(0);
   const uploadControllerRef = useRef<AbortController | null>(null);
 
@@ -158,9 +163,13 @@ export default function App() {
     : hasTaskActivity ? taskSummary : message;
 
   useEffect(() => () => {
-    operationIdRef.current += 1;
-    controllersRef.current.forEach((controller) => controller.abort());
-    controllersRef.current.clear();
+    copyOperationIdRef.current += 1;
+    imageOperationIdRef.current += 1;
+    copyControllersRef.current.forEach((controller) => controller.abort());
+    imageControllersRef.current.forEach((controller) => controller.abort());
+    copyControllersRef.current.clear();
+    imageControllersRef.current.clear();
+    uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
   }, []);
 
@@ -172,44 +181,49 @@ export default function App() {
     setUploadStatus("idle");
   }
 
-  function invalidateOperation(clearGenerated = false) {
-    operationIdRef.current += 1;
-    controllersRef.current.forEach((controller) => controller.abort());
-    const hadActiveTasks = controllersRef.current.size > 0;
-    controllersRef.current.clear();
-    if (hadActiveTasks || clearGenerated) {
-      setCopyTask(idleTask);
-      setUploadSourceTask(idleTask);
-      setImageRoles(initialRoleStates());
+  function invalidateGeneration(scope: GenerationScope) {
+    copyOperationIdRef.current += 1;
+    copyControllersRef.current.forEach((controller) => controller.abort());
+    copyControllersRef.current.clear();
+    setCopyTask(idleTask);
+    setUploadSourceTask(idleTask);
+    if (scope === "all") {
+      imageOperationIdRef.current += 1;
+      imageControllersRef.current.forEach((controller) => controller.abort());
+      imageControllersRef.current.clear();
+      setImageRoles((current) => Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [
+        role,
+        { ...current[role], status: "idle", error: "" }
+      ])) as Record<ProductImageRole, ImageRoleState>);
     }
   }
 
-  function beginTask(operationId: number): AbortController | null {
-    if (operationId !== operationIdRef.current) return null;
+  function beginCopyTask(operationId: number): AbortController | null {
+    if (operationId !== copyOperationIdRef.current) return null;
     const controller = new AbortController();
-    controllersRef.current.add(controller);
+    copyControllersRef.current.add(controller);
     return controller;
   }
 
-  function endTask(controller: AbortController) {
-    controllersRef.current.delete(controller);
-  }
-
-  function isCurrent(operationId: number): boolean {
-    return operationId === operationIdRef.current;
+  function beginImageTask(operationId: number): AbortController | null {
+    if (operationId !== imageOperationIdRef.current) return null;
+    const controller = new AbortController();
+    imageControllersRef.current.add(controller);
+    return controller;
   }
 
   function updateOptionalInput(field: keyof OptionalInputs, value: string) {
-    invalidateOperation();
+    if (field === "categoryHint") invalidateGeneration("all");
+    if (field === "purchasePriceCny") invalidateGeneration("copy");
     setOptionalInputs((current) => ({ ...current, [field]: value }));
     clearUploadResult();
   }
 
   function updateField(field: keyof DszProductFields, value: string | number | boolean) {
-    if (field === "product_name" || field === "description") {
-      aiFieldEditVersionRef.current += 1;
-    } else {
-      invalidateOperation();
+    if (field === "product_name") titleEditVersionRef.current += 1;
+    if (field === "description") descriptionEditVersionRef.current += 1;
+    if (["weight", "length", "width", "height"].includes(String(field))) {
+      invalidateGeneration("copy");
     }
     clearUploadResult();
     setFields((current) => {
@@ -246,43 +260,48 @@ export default function App() {
     };
   }
 
-  async function runCopyTask(operationId = operationIdRef.current) {
-    const controller = beginTask(operationId);
+  async function runCopyTask(operationId = copyOperationIdRef.current) {
+    const controller = beginCopyTask(operationId);
     if (!controller) return;
     const filesSnapshot = [...sourceFiles];
     const fieldSnapshot = { ...fields };
-    const editVersion = aiFieldEditVersionRef.current;
+    const titleEditVersion = titleEditVersionRef.current;
+    const descriptionEditVersion = descriptionEditVersionRef.current;
     setCopyTask({ status: "loading", error: "" });
     setUploadSourceTask({ status: "loading", error: "" });
     try {
       const imageUrls = await uploadSourceImages(filesSnapshot, controller.signal);
-      if (!isCurrent(operationId)) return;
+      if (operationId !== copyOperationIdRef.current) return;
       setUploadSourceTask({ status: "success", error: "" });
       const copy = await requestProductCopy(productInput(imageUrls, fieldSnapshot), controller.signal);
-      if (!isCurrent(operationId)) return;
-      if (aiFieldEditVersionRef.current === editVersion) {
+      if (operationId !== copyOperationIdRef.current) return;
+      const applyTitle = titleEditVersionRef.current === titleEditVersion;
+      const applyDescription = descriptionEditVersionRef.current === descriptionEditVersion;
+      if (applyTitle || applyDescription) {
         setFields((current) => ({
           ...current,
-          product_name: copy.title,
-          description: copy.description
+          ...(applyTitle ? { product_name: copy.title } : {}),
+          ...(applyDescription ? { description: copy.description } : {})
         }));
         clearUploadResult();
       }
-      setCopyTask({ status: "success", error: "" });
+      setCopyTask(applyTitle || applyDescription
+        ? { status: "success", error: "" }
+        : { status: "error", error: "生成文案未应用：标题和描述已被手工修改" });
     } catch (error) {
-      if (!isCurrent(operationId) || controller.signal.aborted) return;
+      if (operationId !== copyOperationIdRef.current || controller.signal.aborted) return;
       const text = errorMessage(error, "商品文案生成失败");
       setUploadSourceTask((current) => current.status === "loading"
         ? { status: "error", error: text }
         : current);
       setCopyTask({ status: "error", error: text });
     } finally {
-      endTask(controller);
+      copyControllersRef.current.delete(controller);
     }
   }
 
-  async function runImageRole(role: ProductImageRole, operationId = operationIdRef.current) {
-    const controller = beginTask(operationId);
+  async function runImageRole(role: ProductImageRole, operationId = imageOperationIdRef.current) {
+    const controller = beginImageTask(operationId);
     if (!controller) return;
     const filesSnapshot = [...sourceFiles];
     const sellingPointsSnapshot = sellingPoints.trim();
@@ -298,14 +317,14 @@ export default function App() {
         productType: productTypeSnapshot,
         sellingPoints: sellingPointsSnapshot
       }, controller.signal);
-      if (!isCurrent(operationId)) return;
+      if (operationId !== imageOperationIdRef.current) return;
       setImageRoles((current) => ({
         ...current,
         [role]: { status: "success", error: "", imageUrl: result.imageUrl }
       }));
       clearUploadResult();
     } catch (error) {
-      if (!isCurrent(operationId) || controller.signal.aborted) return;
+      if (operationId !== imageOperationIdRef.current || controller.signal.aborted) return;
       setImageRoles((current) => ({
         ...current,
         [role]: {
@@ -315,8 +334,12 @@ export default function App() {
         }
       }));
     } finally {
-      endTask(controller);
+      imageControllersRef.current.delete(controller);
     }
+  }
+
+  async function runAllImageRoles(operationId: number) {
+    await Promise.allSettled(PRODUCT_IMAGE_ROLES.map((role) => runImageRole(role, operationId)));
   }
 
   async function startGeneration() {
@@ -329,12 +352,13 @@ export default function App() {
       return;
     }
 
-    invalidateOperation(true);
-    const operationId = operationIdRef.current;
+    invalidateGeneration("all");
+    const copyOperationId = copyOperationIdRef.current;
+    const imageOperationId = imageOperationIdRef.current;
     clearUploadResult();
     await Promise.allSettled([
-      runCopyTask(operationId),
-      ...PRODUCT_IMAGE_ROLES.map((role) => runImageRole(role, operationId))
+      runCopyTask(copyOperationId),
+      runAllImageRoles(imageOperationId)
     ]);
   }
 
@@ -349,7 +373,7 @@ export default function App() {
     setMessage("正在提交到 Dropshipzone 后台");
     try {
       const data = await uploadProductFields(fieldsForUpload, controller.signal);
-      if (uploadAttempt !== uploadAttemptRef.current) return;
+      if (uploadAttempt !== uploadAttemptRef.current || controller.signal.aborted) return;
       setUploadResult({ fields: fieldsForUpload, result: data });
       setUploadStatus("success");
       setMessage(isRecord(data) && data.mode === "mock" ? "已生成后台 payload" : "后台上传成功");
@@ -389,7 +413,7 @@ export default function App() {
               accept="image/png,image/jpeg,image/webp"
               multiple
               onChange={(event) => {
-                invalidateOperation(true);
+                invalidateGeneration("all");
                 setSourceFiles(Array.from(event.target.files || []));
                 clearUploadResult();
               }}
@@ -406,7 +430,7 @@ export default function App() {
             <textarea
               value={sellingPoints}
               onChange={(event) => {
-                invalidateOperation(true);
+                invalidateGeneration("all");
                 setSellingPoints(event.target.value);
                 clearUploadResult();
               }}
@@ -490,7 +514,7 @@ export default function App() {
             {PRODUCT_IMAGE_ROLES.map((role) => {
               const state = imageRoles[role];
               return (
-                <div key={role} data-testid={`image-role-${role}`}>
+                <div key={role} data-testid={`image-role-${role}`} data-status={state.status}>
                   <strong>{role}</strong>
                   {state.imageUrl && <img src={state.imageUrl} alt={`生成图片 ${role}`} />}
                   {state.status === "loading" && <span>生成中</span>}
