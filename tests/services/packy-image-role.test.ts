@@ -137,7 +137,7 @@ describe("Packy fixed-role product images", () => {
     expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
-  test("requires source images and PACKY_API_KEY without accepting the legacy image key", async () => {
+  test("requires source images and accepts the dedicated image key", async () => {
     await expect(
       generateProductImageRoleWithPacky({
         images: [],
@@ -148,18 +148,20 @@ describe("Packy fixed-role product images", () => {
       })
     ).rejects.toThrow("At least one source product image is required");
 
-    const fetchImpl = vi.fn();
-    await expect(
-      generateProductImageRoleWithPacky({
-        images,
-        productType: "Cotton underwear",
-        sellingPoints: "soft cotton",
-        role: "side",
-        env: { PACKY_IMAGE_API_KEY: "legacy-key" },
-        fetchImpl: fetchImpl as unknown as typeof fetch
-      })
-    ).rejects.toThrow("Missing PACKY_API_KEY");
-    expect(fetchImpl).not.toHaveBeenCalled();
+    const fetchImpl = vi.fn(async (_url, init) => {
+      expect(init?.headers).toEqual({ Authorization: "Bearer image-key" });
+      return new Response(JSON.stringify({
+        data: [{ url: "https://cdn.example.com/side.png" }]
+      }), { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(generateProductImageRoleWithPacky({
+      images,
+      productType: "Cotton underwear",
+      sellingPoints: "soft cotton",
+      role: "side",
+      env: { PACKY_API_KEY: "shared-key", PACKY_IMAGE_API_KEY: "image-key" },
+      fetchImpl
+    })).resolves.toEqual({ role: "side", imageUrl: "https://cdn.example.com/side.png" });
   });
 
   test.each([

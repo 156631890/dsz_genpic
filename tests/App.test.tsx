@@ -311,7 +311,7 @@ describe("browser product workflow helpers", () => {
 describe("App independent AI workflow", () => {
   test("one click runs one five-role image task with at most two requests in flight", async () => {
     const user = userEvent.setup();
-    const upload = deferred<Response>();
+    let copyInput: ProductInput | undefined;
     const imageRequests: Array<{
       role: ProductImageRole;
       resolve: () => void;
@@ -319,8 +319,8 @@ describe("App independent AI workflow", () => {
     let imageRequestsInFlight = 0;
     let maxImageRequestsInFlight = 0;
     const fetchMock = appFetch((url: RequestInfo | URL, init?: RequestInit) => {
-      if (url === "/api/upload-images") return upload.promise;
       if (url === "/api/generate-product-copy") {
+        copyInput = JSON.parse(String(init?.body)).input;
         return Promise.resolve(response({ title: "AI title", description: "AI description" }));
       }
       if (url === "/api/generate-product-image-role") {
@@ -353,8 +353,9 @@ describe("App independent AI workflow", () => {
 
     await waitFor(() => expect(imageRequests).toHaveLength(2));
     expect(maxImageRequestsInFlight).toBe(2);
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(1);
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(1);
+    expect(copyInput?.imageUrls).toEqual([]);
 
     for (let index = 0; index < PRODUCT_IMAGE_ROLES.length; index += 1) {
       imageRequests[index].resolve();
@@ -369,20 +370,15 @@ describe("App independent AI workflow", () => {
     expect(imageRequests.map(({ role }) => role)).toEqual(PRODUCT_IMAGE_ROLES);
     expect(maxImageRequestsInFlight).toBe(2);
 
-    upload.resolve(response({ imageUrls: ["https://cdn.example.com/source.png"] }));
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy"))
-        .toHaveLength(1);
-    });
   });
 
   test("input changes invalidate an active operation and ignore all stale responses", async () => {
     const user = userEvent.setup();
-    const upload = deferred<Response>();
+    const copy = deferred<Response>();
     const roles = Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [role, deferred<Response>()])) as
       Record<ProductImageRole, ReturnType<typeof deferred<Response>>>;
     const fetchMock = appFetch((url: RequestInfo | URL, init?: RequestInit) => {
-      if (url === "/api/upload-images") return upload.promise;
+      if (url === "/api/generate-product-copy") return copy.promise;
       if (url === "/api/generate-product-image-role") return roles[roleFromRequest(init)].promise;
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -392,13 +388,13 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
     await user.type(screen.getByLabelText("卖点"), " changed");
-    upload.resolve(response({ imageUrls: ["https://cdn.example.com/stale-source.png"] }));
+    copy.resolve(response({ title: "stale-title", description: "stale-description" }));
     for (const role of PRODUCT_IMAGE_ROLES) {
       roles[role].resolve(response({ role, imageUrl: `https://cdn.example.com/stale-${role}.png` }));
     }
 
     await waitFor(() => expect(screen.queryAllByRole("img")).toHaveLength(0));
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(1);
     expect(screen.queryByText(/stale-/)).not.toBeInTheDocument();
   });
 
@@ -617,7 +613,7 @@ describe("App independent AI workflow", () => {
     }
   });
 
-  test("copy failure preserves manual text; copy retry uploads and copies only", async () => {
+  test("copy failure preserves manual text; copy retry calls copy only", async () => {
     const user = userEvent.setup();
     let copyCalls = 0;
     const fetchMock = appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -654,7 +650,7 @@ describe("App independent AI workflow", () => {
 
     await user.click(within(copyStatus).getByRole("button", { name: "重试标题与描述" }));
     expect(await screen.findByDisplayValue("Retried title")).toBeInTheDocument();
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(0);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(2);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-image-role"))
       .toHaveLength(5);

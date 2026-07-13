@@ -242,10 +242,12 @@ export async function generateProductImageRoleWithPacky(input: {
   }
 
   const env = input.env || process.env;
-  const apiKey = env.PACKY_API_KEY;
+  const apiKey = env.PACKY_IMAGE_API_KEY || env.PACKY_API_KEY;
 
   if (!apiKey) {
-    throw new Error("Missing PACKY_API_KEY. Cannot generate product image role.");
+    throw new Error(
+      "Missing PACKY_IMAGE_API_KEY or PACKY_API_KEY. Cannot generate product image role."
+    );
   }
 
   const imageUrls = await requestPackyShopifyProductImageUrls({

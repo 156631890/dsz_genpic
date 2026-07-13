@@ -77,18 +77,8 @@ export function buildProductCopyMessages(
   input: ProductInput,
   systemPrompt: string
 ): ProductCopyMessage[] {
-  const facts = [
-    "Verified product facts:",
-    `Selling points: ${input.sellingPoints}`,
-    optionalFact("Category hint", input.categoryHint),
-    optionalFact("Purchase price CNY", input.purchasePriceCny),
-    optionalFact("Package weight kg", input.packageWeightKg),
-    optionalFact("Length cm", input.lengthCm),
-    optionalFact("Width cm", input.widthCm),
-    optionalFact("Height cm", input.heightCm)
-  ].filter((fact): fact is string => Boolean(fact));
   const content: Extract<ProductCopyMessage, { role: "user" }>["content"] = [
-    { type: "text", text: facts.join("\n") }
+    { type: "text", text: buildProductCopyInput(input) }
   ];
 
   for (const url of input.imageUrls) {
@@ -196,17 +186,19 @@ export async function generateProductCopyWithPacky(
 ): Promise<GeneratedProductCopy> {
   const { input } = options;
   const env = options.env || process.env;
-  const apiKey = env.PACKY_API_KEY;
+  const apiKey = env.PACKY_TEXT_API_KEY || env.PACKY_API_KEY;
 
   if (!apiKey) {
-    throw new Error("Missing PACKY_API_KEY. Cannot generate product copy.");
+    throw new Error(
+      "Missing PACKY_TEXT_API_KEY or PACKY_API_KEY. Cannot generate product copy."
+    );
   }
 
   const systemPrompt = await loadProductSystemPrompt();
   const canonicalFooter = extractCanonicalProductFooter(systemPrompt);
   const baseUrl = (env.PACKY_BASE_URL || "https://www.packyapi.com").replace(/\/+$/, "");
   const fetcher = options.fetchImpl || fetch;
-  const response = await fetcher(`${baseUrl}/v1/chat/completions`, {
+  const response = await fetcher(`${baseUrl}/v1/responses`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -214,7 +206,9 @@ export async function generateProductCopyWithPacky(
     },
     body: JSON.stringify({
       model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol",
-      messages: buildProductCopyMessages(input, systemPrompt)
+      instructions: systemPrompt,
+      input: buildProductCopyInput(input),
+      store: false
     })
   });
 
@@ -222,10 +216,7 @@ export async function generateProductCopyWithPacky(
     throw new Error(`Packy product copy API failed: ${response.status}`);
   }
 
-  const data = (await readJsonResponse(response)) as {
-    choices?: Array<{ message?: { content?: unknown } }>;
-  };
-  const content = data.choices?.[0]?.message?.content;
+  const content = extractResponsesText(await readJsonResponse(response));
 
   if (typeof content !== "string" || !content.trim()) {
     throw new Error("Packy product copy API returned empty content.");
@@ -242,6 +233,34 @@ export async function generateProductCopyWithPacky(
   }
 
   return copy;
+}
+
+function buildProductCopyInput(input: ProductInput): string {
+  return [
+    "Verified product facts:",
+    `Selling points: ${input.sellingPoints}`,
+    optionalFact("Category hint", input.categoryHint),
+    optionalFact("Purchase price CNY", input.purchasePriceCny),
+    optionalFact("Package weight kg", input.packageWeightKg),
+    optionalFact("Length cm", input.lengthCm),
+    optionalFact("Width cm", input.widthCm),
+    optionalFact("Height cm", input.heightCm)
+  ].filter((fact): fact is string => Boolean(fact)).join("\n");
+}
+
+function extractResponsesText(data: unknown): string | undefined {
+  if (!data || typeof data !== "object") return undefined;
+  const response = data as {
+    output_text?: unknown;
+    output?: Array<{ content?: Array<{ type?: unknown; text?: unknown }> }>;
+  };
+  if (typeof response.output_text === "string") return response.output_text;
+
+  const text = response.output
+    ?.flatMap((item) => item.content || [])
+    .find((item) => item.type === "output_text" && typeof item.text === "string")
+    ?.text;
+  return typeof text === "string" ? text : undefined;
 }
 
 function optionalFact(label: string, value: string | number | undefined): string | undefined {

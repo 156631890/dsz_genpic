@@ -589,48 +589,53 @@ describe("Packy product copy generation", () => {
     expect(hasSystemPromptOverride).toBe(false);
   });
 
-  test("posts exact-prompt multimodal messages to the default GPT-5.6 SOL endpoint", async () => {
+  test("posts the exact prompt and product facts to the Responses endpoint with the text key", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       void url;
       void init;
       return new Response(
-        JSON.stringify({ choices: [{ message: { content: `${validTitle}\n${validDescription}` } }] }),
+        JSON.stringify({ output_text: `${validTitle}\n${validDescription}` }),
         { status: 200, headers: { "content-type": "application/json" } }
       );
     });
     await expect(
       generateProductCopyWithPacky({
         input: productInput(),
-        env: { PACKY_API_KEY: "test-key" },
+        env: { PACKY_API_KEY: "shared-key", PACKY_TEXT_API_KEY: "text-key" },
         fetchImpl: fetchImpl as typeof fetch
       })
     ).resolves.toEqual({ title: validTitle, description: validDescription });
 
     expect(fetchImpl).toHaveBeenCalledOnce();
     const [url, init] = fetchImpl.mock.calls[0];
-    expect(url).toBe("https://www.packyapi.com/v1/chat/completions");
+    expect(url).toBe("https://www.packyapi.com/v1/responses");
     expect(init).toMatchObject({
       method: "POST",
       headers: {
-        Authorization: "Bearer test-key",
+        Authorization: "Bearer text-key",
         "Content-Type": "application/json"
       }
     });
     const body = JSON.parse(String(init?.body));
+    const expectedUserMessage = buildProductCopyMessages(productInput(), exactSystemPrompt)[1];
+    if (expectedUserMessage.role !== "user" || expectedUserMessage.content[0].type !== "text") {
+      throw new Error("Expected the product-copy user message to start with text.");
+    }
     expect(body).toEqual({
       model: "gpt-5.6-sol",
-      messages: buildProductCopyMessages(productInput(), exactSystemPrompt)
+      instructions: exactSystemPrompt,
+      input: expectedUserMessage.content[0].text,
+      store: false
     });
-    expect(body).not.toHaveProperty("response_format");
   });
 
-  test("requires PACKY_API_KEY without accepting another credential", async () => {
+  test("requires a text or shared Packy credential without accepting the image credential", async () => {
     await expect(
       generateProductCopyWithPacky({
         input: productInput(),
         env: { PACKY_IMAGE_API_KEY: "wrong-key" }
       })
-    ).rejects.toThrow("Missing PACKY_API_KEY");
+    ).rejects.toThrow("Missing PACKY_TEXT_API_KEY or PACKY_API_KEY");
   });
 
   test("reports only the status for a non-OK response", async () => {
@@ -653,7 +658,7 @@ describe("Packy product copy generation", () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       void url;
       void init;
-      return new Response(JSON.stringify({ choices: [{ message: { content: "" } }] }), {
+      return new Response(JSON.stringify({ output_text: "" }), {
         status: 200
       });
     });
@@ -665,5 +670,20 @@ describe("Packy product copy generation", () => {
         fetchImpl: fetchImpl as typeof fetch
       })
     ).rejects.toThrow(/empty content/i);
+  });
+
+  test("reads text from nested Responses output content", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
+      output: [{
+        type: "message",
+        content: [{ type: "output_text", text: `${validTitle}\n${validDescription}` }]
+      }]
+    }), { status: 200 }));
+
+    await expect(generateProductCopyWithPacky({
+      input: productInput(),
+      env: { PACKY_TEXT_API_KEY: "text-key" },
+      fetchImpl: fetchImpl as typeof fetch
+    })).resolves.toEqual({ title: validTitle, description: validDescription });
   });
 });

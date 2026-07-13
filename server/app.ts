@@ -126,8 +126,8 @@ export function createApp(dependencies: AppDependencies = {}) {
         env.PACKY_IMAGE_API_KEY
       ),
       sharedPackyConfigured,
-      textConfigured: sharedPackyConfigured,
-      imageConfigured: sharedPackyConfigured,
+      textConfigured: Boolean(env.PACKY_TEXT_API_KEY || env.PACKY_API_KEY),
+      imageConfigured: Boolean(env.PACKY_IMAGE_API_KEY || env.PACKY_API_KEY),
       legacyTextConfigured: Boolean(
         env.PACKY_FIELD_API_KEY || env.PACKY_TEXT_API_KEY || env.PACKY_API_KEY
       ),

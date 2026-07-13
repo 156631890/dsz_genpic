@@ -190,35 +190,24 @@ describe("API app", () => {
   });
 
   test.each([
-    ["shared only", { PACKY_API_KEY: "shared-secret" }, true, true, true, true, true],
+    ["shared only", { PACKY_API_KEY: "shared-secret" }, true, true, true, true, true, true],
     [
       "legacy only",
       { PACKY_FIELD_API_KEY: "field-secret", PACKY_IMAGE_API_KEY: "image-secret" },
-      true,
-      false,
-      false,
-      true,
-      true
+      true, false, false, true, true, true
     ],
     [
       "legacy text alias only",
       { PACKY_TEXT_API_KEY: "text-secret" },
-      true,
-      false,
-      false,
-      true,
-      false
+      true, false, true, false, true, false
     ],
     [
       "mixed",
       { PACKY_API_KEY: "shared-secret", PACKY_FIELD_API_KEY: "field-secret" },
-      true,
-      true,
-      true,
-      true,
-      true
+      true, true, true, true, true, true
     ],
-    ["empty", {}, false, false, false, false, false]
+    ["dedicated image only", { PACKY_IMAGE_API_KEY: "image-secret" }, true, false, false, true, false, true],
+    ["empty", {}, false, false, false, false, false, false]
   ])(
     "reports unambiguous %s Packy health state",
     async (
@@ -227,6 +216,7 @@ describe("API app", () => {
       packyConfigured,
       sharedPackyConfigured,
       textConfigured,
+      imageConfigured,
       legacyTextConfigured,
       legacyImageConfigured
     ) => {
@@ -238,7 +228,7 @@ describe("API app", () => {
         packyConfigured,
         sharedPackyConfigured,
         textConfigured,
-        imageConfigured: textConfigured,
+        imageConfigured,
         legacyTextConfigured,
         legacyImageConfigured
       });
@@ -406,11 +396,7 @@ describe("API app", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
         JSON.stringify({
-          choices: [{
-            message: {
-              content: `${validGeneratedTitle}\n${validGeneratedDescription}`
-            }
-          }]
+          output_text: `${validGeneratedTitle}\n${validGeneratedDescription}`
         }),
         { status: 200, headers: { "content-type": "application/json" } }
       )
@@ -435,20 +421,16 @@ describe("API app", () => {
       const [url, init] = fetchMock.mock.calls[0];
       const providerBody = JSON.parse(String(init?.body));
 
-      expect(url).toBe("https://www.packyapi.com/v1/chat/completions");
+      expect(url).toBe("https://www.packyapi.com/v1/responses");
       expect(init?.headers).toEqual({
         Authorization: "Bearer default-adapter-test-key",
         "Content-Type": "application/json"
       });
       expect(providerBody.model).toBe("default-adapter-test-model");
-      expect(providerBody.messages[1].content).toContainEqual({
-        type: "text",
-        text: expect.stringContaining(`Selling points: ${productInput.sellingPoints}`)
-      });
-      expect(providerBody.messages[1].content).toContainEqual({
-        type: "image_url",
-        image_url: { url: productInput.imageUrls[0] }
-      });
+      expect(providerBody.instructions).toBeTruthy();
+      expect(providerBody.input).toContain(`Selling points: ${productInput.sellingPoints}`);
+      expect(providerBody.store).toBe(false);
+      expect(providerBody.input).not.toContain(productInput.imageUrls[0]);
     } finally {
       fetchMock.mockRestore();
     }

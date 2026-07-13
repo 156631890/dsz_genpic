@@ -17,8 +17,7 @@ import {
   requestProductImageRole,
   requestServiceHealth,
   type ServiceHealth,
-  uploadProductFields,
-  uploadSourceImages
+  uploadProductFields
 } from "./productWorkflow";
 
 type Status = "idle" | "loading" | "success" | "error" | "stale";
@@ -510,17 +509,12 @@ export default function App() {
   async function runCopyTask(operationId = copyOperationIdRef.current) {
     const controller = beginCopyTask(operationId);
     if (!controller) return;
-    const filesSnapshot = [...sourceFiles];
     const fieldSnapshot = { ...fields };
     const titleEditVersion = titleEditVersionRef.current;
     const descriptionEditVersion = descriptionEditVersionRef.current;
     setCopyTask({ status: "loading", error: "" });
-    setUploadSourceTask({ status: "loading", error: "" });
     try {
-      const imageUrls = await uploadSourceImages(filesSnapshot, controller.signal);
-      if (operationId !== copyOperationIdRef.current) return;
-      setUploadSourceTask({ status: "success", error: "" });
-      const copy = await requestProductCopy(productInput(imageUrls, fieldSnapshot), controller.signal);
+      const copy = await requestProductCopy(productInput([], fieldSnapshot), controller.signal);
       if (operationId !== copyOperationIdRef.current) return;
       const applyTitle = titleEditVersionRef.current === titleEditVersion;
       const applyDescription = descriptionEditVersionRef.current === descriptionEditVersion;
@@ -538,9 +532,6 @@ export default function App() {
     } catch (error) {
       if (operationId !== copyOperationIdRef.current || controller.signal.aborted) return;
       const text = errorMessage(error, "商品文案生成失败");
-      setUploadSourceTask((current) => current.status === "loading"
-        ? { status: "error", error: text }
-        : current);
       setCopyTask({ status: "error", error: text });
     } finally {
       copyControllersRef.current.delete(controller);
