@@ -154,6 +154,22 @@ function researchStream(confidence: "high" | "medium" = "high"): Response {
   ]);
 }
 
+function researchReportStream(): Response {
+  return workflowSse([
+    {
+      type: "response.output_text.delta",
+      delta: "The exact supplier listing provides matching package measurements."
+    },
+    {
+      type: "response.output_text.annotation.added",
+      annotation: {
+        type: "url_citation",
+        url: "https://supplier.example.com/item"
+      }
+    }
+  ]);
+}
+
 function copyStream(): Response {
   return workflowSse([{
     type: "response.output_text.delta",
@@ -217,9 +233,16 @@ describe("complete DSZ field generation", () => {
   });
 
   test("researches, writes copy and calculates deterministic DSZ fields", async () => {
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(researchStream())
-      .mockResolvedValueOnce(copyStream()) as unknown as typeof fetch;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { instructions?: string };
+      if (body.instructions?.startsWith("Research exact-product facts")) {
+        return researchReportStream();
+      }
+      if (body.instructions?.startsWith("Convert the supplied evidence report")) {
+        return researchStream();
+      }
+      return copyStream();
+    }) as unknown as typeof fetch;
 
     const result = await generateDszFieldsWithPacky({
       productInput: {
@@ -263,13 +286,20 @@ describe("complete DSZ field generation", () => {
       purchasePriceCny: 20
     }));
     expect(result.fields.zone_rates.nz).toBe(20);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   test("does not estimate package measurements without exact evidence", async () => {
-    const fetchImpl = vi.fn()
-      .mockResolvedValueOnce(researchStream("medium"))
-      .mockResolvedValueOnce(copyStream()) as unknown as typeof fetch;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { instructions?: string };
+      if (body.instructions?.startsWith("Research exact-product facts")) {
+        return researchReportStream();
+      }
+      if (body.instructions?.startsWith("Convert the supplied evidence report")) {
+        return researchStream("medium");
+      }
+      return copyStream();
+    }) as unknown as typeof fetch;
     const result = await generateDszFieldsWithPacky({
       productInput: {
         sellingPoints: "Multicolour tourmaline style stone and pearl necklace",

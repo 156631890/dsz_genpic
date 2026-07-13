@@ -509,16 +509,23 @@ async function generateEvidenceBackedDszFields(input: {
 
   const ruleDocuments =
     input.ruleDocuments || await loadRuleDocuments(input.env);
-  const research = await generateProductResearchWithPacky({
-    input: input.productInput,
-    images: input.images,
-    fieldRules: ruleDocuments.fieldRules,
-    categoryMapping: ruleDocuments.categoryMapping,
-    uploadSop: ruleDocuments.uploadSop,
-    productUploadAu: ruleDocuments.productUploadAu,
-    env: input.env,
-    fetchImpl: input.fetchImpl
-  });
+  const [research, copy] = await Promise.all([
+    generateProductResearchWithPacky({
+      input: input.productInput,
+      images: input.images,
+      fieldRules: ruleDocuments.fieldRules,
+      categoryMapping: ruleDocuments.categoryMapping,
+      uploadSop: ruleDocuments.uploadSop,
+      productUploadAu: ruleDocuments.productUploadAu,
+      env: input.env,
+      fetchImpl: input.fetchImpl
+    }),
+    generateProductCopyWithPacky({
+      input: input.productInput,
+      env: input.env,
+      fetchImpl: input.fetchImpl
+    })
+  ]);
   const weight = research.package.weightKg || 0;
   const length = research.package.lengthCm || 0;
   const width = research.package.widthCm || 0;
@@ -540,23 +547,6 @@ async function generateEvidenceBackedDszFields(input: {
         purchasePriceCny: purchasePrice
       })
     : 0;
-  const verifiedResearchFacts = [
-    `Product type: ${research.evidence.productType}`,
-    `Variant: ${research.evidence.variant}`,
-    research.category.id > 0 ? `Category: ${research.category.name}` : "",
-    research.colour !== "N/A" ? `Colour: ${research.colour}` : "",
-    hasMeasurements ? `Package weight kg: ${weight}` : "",
-    hasMeasurements
-      ? `Package dimensions cm: ${length} x ${width} x ${height}`
-      : ""
-  ].filter(Boolean).join("\n");
-  const copy = await generateProductCopyWithPacky({
-    input: input.productInput,
-    images: input.images,
-    verifiedResearchFacts,
-    env: input.env,
-    fetchImpl: input.fetchImpl
-  });
   const issues = [...research.issues];
 
   if (!hasPriceInputs) {
