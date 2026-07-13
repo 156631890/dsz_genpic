@@ -195,6 +195,7 @@ describe("product research request", () => {
       }
 
       expect(body.stream).toBe(false);
+      expect(serialized).not.toContain("input_image");
       expect(serialized).toContain(
         "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
       );

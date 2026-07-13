@@ -262,7 +262,7 @@ function buildFocusedProductResearchRequest(
     "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
     "Use source.package null unless all four values are explicitly present on that source.",
       "Emit every source URL with a web-search URL citation annotation."
-    ].join("\n")),
+    ].join("\n"), false),
     stream: false
   };
 }
@@ -293,13 +293,16 @@ function selectCategoryCandidates(
 
 function buildResearchResponseRequest(
   options: ProductResearchRequestOptions,
-  prompt: string
+  prompt: string,
+  includeImages = true
 ) {
   const content = [
-    ...options.images.map((image) => ({
-      type: "input_image" as const,
-      image_url: `data:${image.mimeType};base64,${image.buffer.toString("base64")}`
-    })),
+    ...(includeImages
+      ? options.images.map((image) => ({
+          type: "input_image" as const,
+          image_url: `data:${image.mimeType};base64,${image.buffer.toString("base64")}`
+        }))
+      : []),
     {
       type: "input_text" as const,
       text: prompt
