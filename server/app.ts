@@ -19,6 +19,7 @@ import {
   resolvePackyImageConfig
 } from "./services/packyImages.js";
 import { generateProductCopyWithPacky } from "./services/productCopy.js";
+import type { ProductResearchImage } from "./services/productResearch.js";
 import {
   PRODUCT_IMAGE_ROLES,
   type DszProductFields,
@@ -26,6 +27,7 @@ import {
   type GeneratedProductImage,
   type ProductImageRole,
   type ProductGenerationResult,
+  type ProductIdentity,
   type ProductInput
 } from "../shared/product.js";
 
@@ -63,9 +65,11 @@ interface SafeGenerationError {
 export interface AppDependencies {
   env?: Record<string, string | undefined>;
   uploadImages?: (files: Express.Multer.File[]) => Promise<{ imageUrls: string[] }>;
-  generateProductFields?: (
-    input: ProductInput
-  ) => Promise<ProductGenerationResult>;
+  generateProductFields?: (input: {
+    productInput: ProductInput;
+    images: Express.Multer.File[];
+    identity: ProductIdentity;
+  }) => Promise<ProductGenerationResult>;
   generateProductCopy?: (
     input: ProductInput
   ) => Promise<GeneratedProductCopy>;
@@ -269,32 +273,51 @@ export function createApp(dependencies: AppDependencies = {}) {
     }
   });
 
-  app.post("/api/generate-product-fields", async (req, res) => {
-    try {
-      const productInput = req.body.input as ProductInput;
+  app.post(
+    "/api/generate-product-fields",
+    upload.array("images", MAX_SOURCE_IMAGES),
+    async (req, res) => {
+      try {
+        const files = (req.files || []) as Express.Multer.File[];
+        const productInput = parseMultipartProductInput(req.body.input);
+        const identity = parseProductIdentity(req.body.identity);
 
-      if (!productInput?.sellingPoints?.trim()) {
-        res.status(400).json({ error: "Selling points are required" });
-        return;
+        if (files.length === 0) {
+          res.status(400).json({
+            error: "At least one source image file is required"
+          });
+          return;
+        }
+
+        if (files.some((file) => !isSupportedImage(file))) {
+          res.status(400).json({ error: "Invalid source image file" });
+          return;
+        }
+
+        if (files.reduce((total, file) => total + file.size, 0) > 4_000_000) {
+          res.status(400).json({ error: "Source image batch is too large" });
+          return;
+        }
+
+        const result = dependencies.generateProductFields
+          ? await dependencies.generateProductFields({
+              productInput,
+              images: files,
+              identity
+            })
+          : await generateDszFieldsWithPacky({
+              productInput,
+              images: files.map(toResearchImage),
+              identity,
+              env
+            });
+
+        res.json({ result });
+      } catch (error) {
+        sendGenerationError(res, error, "fields");
       }
-
-      if (
-        !Array.isArray(productInput.imageUrls) ||
-        productInput.imageUrls.length === 0
-      ) {
-        res.status(400).json({ error: "Uploaded image URLs are required" });
-        return;
-      }
-
-      const result = dependencies.generateProductFields
-        ? await dependencies.generateProductFields(productInput)
-        : await generateDszFieldsWithPacky({ productInput, env });
-
-      res.json({ result });
-    } catch {
-      sendSafeError(res);
     }
-  });
+  );
 
   app.post("/api/generate-image", upload.single("image"), async (req, res) => {
     try {
@@ -458,6 +481,65 @@ function sendSafeError(res: express.Response) {
   res.status(500).json({ error: "Internal server error" });
 }
 
+class ProductFieldRequestError extends Error {}
+
+function parseMultipartProductInput(value: unknown): ProductInput {
+  if (typeof value !== "string") {
+    throw new ProductFieldRequestError("Product input is required");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new ProductFieldRequestError("Product input is invalid");
+  }
+
+  const validation = parseProductInput(parsed);
+  if (!validation.valid) {
+    throw new ProductFieldRequestError(validation.error);
+  }
+  return validation.input;
+}
+
+function parseProductIdentity(value: unknown): ProductIdentity {
+  if (typeof value !== "string") {
+    throw new ProductFieldRequestError("Product identity is required");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new ProductFieldRequestError("Product identity is invalid");
+  }
+
+  const skuMatch =
+    isRecord(parsed) && typeof parsed.sku === "string"
+      ? /^Elosung(\d{5})$/.exec(parsed.sku)
+      : null;
+  const skuNumber = skuMatch ? Number(skuMatch[1]) : 0;
+  if (
+    !isRecord(parsed) ||
+    typeof parsed.sku !== "string" ||
+    typeof parsed.eanCode !== "string" ||
+    skuNumber < 10000 ||
+    skuNumber > 19999 ||
+    !/^\d{10}$/.test(parsed.eanCode)
+  ) {
+    throw new ProductFieldRequestError("Product identity is invalid");
+  }
+
+  return { sku: parsed.sku, eanCode: parsed.eanCode };
+}
+
+function toResearchImage(file: Express.Multer.File): ProductResearchImage {
+  return {
+    mimeType: file.mimetype as ProductResearchImage["mimeType"],
+    buffer: file.buffer
+  };
+}
+
 function parseProductInput(value: unknown): ProductInputValidation {
   if (!isRecord(value)) {
     return { valid: false, error: "Selling points are required" };
@@ -499,6 +581,27 @@ function parseProductInput(value: unknown): ProductInputValidation {
     return { valid: false, error: "Category hint is invalid" };
   }
 
+  if (
+    value.categoryId !== undefined &&
+    (!Number.isInteger(value.categoryId) || Number(value.categoryId) <= 0)
+  ) {
+    return { valid: false, error: "Category ID is invalid" };
+  }
+
+  if (
+    value.categoryName !== undefined &&
+    (typeof value.categoryName !== "string" || value.categoryName.length > 500)
+  ) {
+    return { valid: false, error: "Category name is invalid" };
+  }
+
+  if (
+    value.colour !== undefined &&
+    (typeof value.colour !== "string" || value.colour.length > 100)
+  ) {
+    return { valid: false, error: "Colour is invalid" };
+  }
+
   const input: ProductInput = {
     sellingPoints,
     imageUrls: value.imageUrls,
@@ -507,6 +610,16 @@ function parseProductInput(value: unknown): ProductInputValidation {
 
   if (value.categoryHint !== undefined) {
     input.categoryHint = value.categoryHint as string;
+  }
+
+  if (value.categoryId !== undefined) {
+    input.categoryId = Number(value.categoryId);
+  }
+  if (value.categoryName !== undefined) {
+    input.categoryName = value.categoryName as string;
+  }
+  if (value.colour !== undefined) {
+    input.colour = value.colour as string;
   }
 
   for (const key of PRODUCT_INPUT_NUMERIC_KEYS) {
@@ -634,7 +747,7 @@ function isSupportedImage(file: Express.Multer.File): boolean {
 function sendGenerationError(
   res: express.Response,
   error: unknown,
-  kind: "copy" | "image"
+  kind: "copy" | "fields" | "image"
 ) {
   const safeError = mapGenerationError(error, kind);
   res.status(safeError.status).json({ error: safeError.message });
@@ -642,12 +755,41 @@ function sendGenerationError(
 
 function mapGenerationError(
   error: unknown,
-  kind: "copy" | "image"
+  kind: "copy" | "fields" | "image"
 ): SafeGenerationError {
   const fallback = { status: 500, message: "Internal server error" };
 
   if (!(error instanceof Error)) {
     return fallback;
+  }
+
+  if (kind === "fields" && error instanceof ProductFieldRequestError) {
+    return { status: 400, message: error.message };
+  }
+
+  if (kind === "fields" && error instanceof TypeError) {
+    return {
+      status: 503,
+      message: "Packy product field generation unavailable"
+    };
+  }
+
+  if (
+    kind === "fields" &&
+    (/^Packy product (research|copy) API /i.test(error.message) ||
+      /^Product copy response /i.test(error.message))
+  ) {
+    const statusMatch = error.message.match(/failed:\s*(\d{3})/);
+    const providerStatus = statusMatch ? Number(statusMatch[1]) : 502;
+    return {
+      status:
+        providerStatus === 429
+          ? 429
+          : providerStatus >= 500
+            ? 503
+            : 502,
+      message: "Packy product field generation failed"
+    };
   }
 
   if (
@@ -673,7 +815,9 @@ function mapGenerationError(
 
   const providerMessage = kind === "copy"
     ? "Packy copy generation failed"
-    : "Packy image generation failed";
+    : kind === "fields"
+      ? "Packy product field generation failed"
+      : "Packy image generation failed";
   const statusMatch = error.message.match(/Packy .*API failed:\s*(\d{3})/i);
 
   if (statusMatch) {

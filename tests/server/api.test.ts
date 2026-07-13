@@ -13,7 +13,8 @@ import {
   type DszProductFields,
   type GeneratedProductCopy,
   type GeneratedProductImage,
-  type ProductInput
+  type ProductInput,
+  type ProductResearchEvidence
 } from "../../shared/product";
 
 const productInput: ProductInput = {
@@ -953,28 +954,147 @@ describe("API app", () => {
     }
   );
 
-  test("generates Dropshipzone fields from uploaded image URLs and selling points", async () => {
-    const app = createApp({
-      generateProductFields: async (input) => ({
-        fields: {
-          ...fields,
-          images: input.imageUrls,
-          review_notes: [input.sellingPoints]
-        },
-        source: "ai"
-      })
-    });
+  test("passes validated source images, product facts and identity to full-field generation", async () => {
+    const evidence: ProductResearchEvidence = {
+      productType: "Cotton thong underwear",
+      variant: "Black / White / Beige",
+      matchSummary: "The uploaded image matches the cited supplier listing.",
+      confidence: "high",
+      sources: [{
+        url: "https://supplier.example.com/item",
+        title: "Supplier product listing",
+        matchedVariant: "Black / White / Beige",
+        evidence: "The listing supplies the same variant and package facts."
+      }]
+    };
+    const generateProductFields = vi.fn(async () => ({
+      fields,
+      source: "ai" as const,
+      evidence,
+      issues: []
+    }));
 
-    const response = await request(app)
+    const response = await request(createApp({ generateProductFields }))
       .post("/api/generate-product-fields")
-      .send({ input: productInput })
+      .field("input", JSON.stringify(productInput))
+      .field("identity", JSON.stringify({
+        sku: "Elosung10000",
+        eanCode: "4748549810"
+      }))
+      .attach("images", pngImage, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
       .expect(200);
 
-    expect(response.body.result.fields.sku).toBe("Elosung10001");
-    expect(response.body.result.fields.categories).toBe("947");
-    expect(response.body.result.fields.review_notes).toEqual([
-      productInput.sellingPoints
+    expect(generateProductFields).toHaveBeenCalledWith({
+      productInput,
+      images: [expect.objectContaining({ mimetype: "image/png" })],
+      identity: { sku: "Elosung10000", eanCode: "4748549810" }
+    });
+    expect(response.body.result.issues).toEqual([]);
+  });
+
+  test("rejects invalid full-field generation multipart inputs safely", async () => {
+    const validInput = JSON.stringify(productInput);
+    const validIdentity = JSON.stringify({
+      sku: "Elosung10000",
+      eanCode: "4748549810"
+    });
+    const app = createApp({
+      generateProductFields: vi.fn(async () => ({ fields, source: "ai" as const }))
+    });
+
+    await request(app)
+      .post("/api/generate-product-fields")
+      .field("input", validInput)
+      .field("identity", validIdentity)
+      .expect(400, { error: "At least one source image file is required" });
+    await request(app)
+      .post("/api/generate-product-fields")
+      .field("input", validInput)
+      .field("identity", validIdentity)
+      .attach("images", Buffer.from("not-a-png"), {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(400, { error: "Invalid source image file" });
+    await request(app)
+      .post("/api/generate-product-fields")
+      .field("input", "{invalid-json")
+      .field("identity", validIdentity)
+      .attach("images", pngImage, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(400, { error: "Product input is invalid" });
+    await request(app)
+      .post("/api/generate-product-fields")
+      .field("input", validInput)
+      .field("identity", JSON.stringify({
+        sku: "Wrong10000",
+        eanCode: "4748549810"
+      }))
+      .attach("images", pngImage, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(400, { error: "Product identity is invalid" });
+    await request(app)
+      .post("/api/generate-product-fields")
+      .field("input", validInput)
+      .field("identity", JSON.stringify({
+        sku: "Elosung10000",
+        eanCode: "123"
+      }))
+      .attach("images", pngImage, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(400, { error: "Product identity is invalid" });
+  });
+
+  test("rejects a full-field generation image batch above four million bytes", async () => {
+    const oversizedPng = Buffer.concat([
+      pngImage,
+      Buffer.alloc(4_000_001 - pngImage.length)
     ]);
+
+    await request(createApp())
+      .post("/api/generate-product-fields")
+      .field("input", JSON.stringify(productInput))
+      .field("identity", JSON.stringify({
+        sku: "Elosung10000",
+        eanCode: "4748549810"
+      }))
+      .attach("images", oversizedPng, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(400, { error: "Source image batch is too large" });
+  });
+
+  test.each([
+    ["category ID", { categoryId: 0 }, "Category ID is invalid"],
+    ["category name", { categoryName: 123 }, "Category name is invalid"],
+    ["colour", { colour: ["Black"] }, "Colour is invalid"]
+  ])("rejects an invalid manual %s in full-field generation", async (
+    _label,
+    override,
+    expectedError
+  ) => {
+    await request(createApp())
+      .post("/api/generate-product-fields")
+      .field("input", JSON.stringify({ ...productInput, ...override }))
+      .field("identity", JSON.stringify({
+        sku: "Elosung10000",
+        eanCode: "4748549810"
+      }))
+      .attach("images", pngImage, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(400, { error: expectedError });
   });
 
   test("generates 5 Shopify product images through injected Packy image service", async () => {
