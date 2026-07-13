@@ -113,6 +113,8 @@ describe("Packy fixed-role product images", () => {
       expect(form.get("n")).toBe("1");
       expect(form.get("size")).toBe("1024x1024");
       expect(form.get("quality")).toBe("high");
+      expect(form.get("response_format")).toBe("url");
+      expect(form.get("output_format")).toBe("png");
       expect(form.getAll("image")).toHaveLength(2);
       expect(String(form.get("prompt"))).toMatch(/feature main image/i);
       return new Response(

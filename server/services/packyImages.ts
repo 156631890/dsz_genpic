@@ -92,7 +92,9 @@ export function buildPackyEditRequest(input: PackyEditInput): PackyEditRequest {
       prompt,
       n: String(input.count || 1),
       size: input.size || "1024x1024",
-      quality: input.quality || "high"
+      quality: input.quality || "high",
+      response_format: "url",
+      output_format: "png"
     }
   };
 }
