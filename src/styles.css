@@ -201,6 +201,8 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 .task-loading { box-shadow: inset 3px 0 var(--violet); }
 .task-error { box-shadow: inset 3px 0 var(--error); background: var(--error-wash); }
 .task-success { box-shadow: inset 3px 0 var(--success); }
+.task-stale { border-left: 3px dashed var(--faint); background: #f0efed; }
+.failed-count { color: var(--error); font-size: 11px; font-weight: 750; text-align: right; }
 .inline-error { grid-column: 1 / -1; color: var(--error); font-size: 11px; line-height: 1.45; }
 .text-button { width: max-content; padding: 0; background: transparent; color: var(--violet); font-size: 11px; font-weight: 750; text-decoration: underline; text-underline-offset: 3px; }
 
@@ -235,6 +237,7 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 .image-role-card[data-status="loading"] { border-color: var(--violet); }
 .image-role-card[data-status="error"] { border-color: var(--error); }
 .image-role-card[data-status="success"] { border-color: var(--success); }
+.image-role-card[data-status="stale"] { border-top-style: dashed; border-color: var(--faint); }
 .image-role-head { align-items: baseline; gap: 7px; min-height: 34px; }
 .image-role-head span { color: var(--faint); font-family: "Cascadia Mono", Consolas, monospace; font-size: 9px; }
 .image-role-head strong { font-size: 11px; line-height: 1.25; }

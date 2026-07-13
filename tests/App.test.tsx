@@ -34,6 +34,28 @@ describe("DSZ product workbench layout", () => {
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
     expect(tabs.slice(1).every((tab) => tab.getAttribute("aria-selected") === "false")).toBe(true);
     expect(screen.getAllByRole("button", { name: "开始 AI 生成" })).toHaveLength(1);
+    expect(screen.queryByLabelText("包裹重量 kg")).not.toBeInTheDocument();
+  });
+
+  test("moves tab selection and focus with the standard keyboard pattern", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const tabs = within(screen.getByRole("tablist", { name: "Product editor sections" })).getAllByRole("tab");
+
+    tabs[0].focus();
+    await user.keyboard("{ArrowRight}");
+    expect(tabs[1]).toHaveFocus();
+    expect(tabs[1]).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{End}");
+    expect(tabs[3]).toHaveFocus();
+    expect(tabs[3]).toHaveAttribute("aria-selected", "true");
+    await user.keyboard("{ArrowRight}");
+    expect(tabs[0]).toHaveFocus();
+    await user.keyboard("{ArrowLeft}");
+    expect(tabs[3]).toHaveFocus();
+    await user.keyboard("{Home}");
+    expect(tabs[0]).toHaveFocus();
+    expect(tabs[0]).toHaveAttribute("aria-selected", "true");
   });
 
   test("owns the approved details fields and marks only AI-authored fields", () => {
@@ -336,12 +358,13 @@ describe("App independent AI workflow", () => {
     await user.type(input, value);
 
     expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
-    expect(screen.getByTestId("copy-task-status")).toHaveTextContent("idle");
+    expect(screen.getByTestId("copy-task-status")).toHaveTextContent("stale");
+    expect(screen.getByTestId("copy-task-status")).toHaveTextContent("已过期");
     expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
     for (const role of PRODUCT_IMAGE_ROLES) {
       expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute(
         "data-status",
-        scope === "all" ? "idle" : "success"
+        scope === "all" ? "stale" : "success"
       );
     }
   });
@@ -375,10 +398,11 @@ describe("App independent AI workflow", () => {
         );
       }
 
-      expect(screen.getByTestId("copy-task-status")).toHaveTextContent("idle");
+      expect(screen.getByTestId("copy-task-status")).toHaveTextContent("stale");
+      expect(screen.getByTestId("copy-task-status")).toHaveTextContent("已过期");
       expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
       for (const role of PRODUCT_IMAGE_ROLES) {
-        expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute("data-status", "idle");
+        expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute("data-status", "stale");
       }
       expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
     }
@@ -461,6 +485,9 @@ describe("App independent AI workflow", () => {
     expect(await screen.findByDisplayValue("Generated title")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Generated description")).toBeInTheDocument();
     await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(4));
+    expect(screen.getByText("4 / 5 已完成")).toBeVisible();
+    expect(screen.getByText("1 个失败")).toBeVisible();
+    expect(screen.queryByText("5 / 5 已完成")).not.toBeInTheDocument();
     await user.click(screen.getByRole("tab", { name: "Images" }));
     const detail = screen.getByTestId("image-role-detail");
     expect(detail).toHaveTextContent("detail failed");
@@ -602,7 +629,6 @@ describe("App independent AI workflow", () => {
       await user.clear(screen.getByLabelText(label));
       await user.type(screen.getByLabelText(label), value);
     }
-    await user.type(screen.getByLabelText("包裹重量 kg"), "99");
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
     await waitFor(() => expect(copyBody).toBeDefined());
     expect(copyBody).toMatchObject({ packageWeightKg: 2, lengthCm: 30, widthCm: 20, heightCm: 10 });

@@ -19,7 +19,7 @@ import {
   uploadSourceImages
 } from "./productWorkflow";
 
-type Status = "idle" | "loading" | "success" | "error";
+type Status = "idle" | "loading" | "success" | "error" | "stale";
 
 interface TaskState {
   status: Status;
@@ -36,7 +36,6 @@ type EditorTab = "details" | "price" | "shipping" | "images";
 interface OptionalInputs {
   categoryHint: string;
   purchasePriceCny: string;
-  packageWeightKg: string;
   lengthCm: string;
   widthCm: string;
   heightCm: string;
@@ -46,7 +45,6 @@ const idleTask: TaskState = { status: "idle", error: "" };
 const emptyOptionalInputs: OptionalInputs = {
   categoryHint: "",
   purchasePriceCny: "",
-  packageWeightKg: "",
   lengthCm: "",
   widthCm: "",
   heightCm: ""
@@ -125,6 +123,7 @@ export default function App() {
   const descriptionEditVersionRef = useRef(0);
   const uploadAttemptRef = useRef(0);
   const uploadControllerRef = useRef<AbortController | null>(null);
+  const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const generatedImages = useMemo(
     () => PRODUCT_IMAGE_ROLES
@@ -133,7 +132,10 @@ export default function App() {
     [imageRoles]
   );
   const completedImageCount = PRODUCT_IMAGE_ROLES.filter((role) =>
-    imageRoles[role].status === "success" || imageRoles[role].status === "error"
+    imageRoles[role].status === "success"
+  ).length;
+  const failedImageCount = PRODUCT_IMAGE_ROLES.filter((role) =>
+    imageRoles[role].status === "error"
   ).length;
   const workflowLoading = copyTask.status === "loading" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "loading"
@@ -141,12 +143,16 @@ export default function App() {
   const hasTaskError = copyTask.status === "error" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "error"
   );
+  const hasStaleOutput = copyTask.status === "stale" || PRODUCT_IMAGE_ROLES.some(
+    (role) => imageRoles[role].status === "stale"
+  );
   const taskSummary = useMemo(() => {
     if (workflowLoading) return `生成中：图片 ${completedImageCount}/5`;
-    if (hasTaskError) return `生成已结束，部分任务失败：图片 ${completedImageCount}/5`;
+    if (hasTaskError) return `生成已结束：图片 ${completedImageCount}/5，失败 ${failedImageCount}`;
+    if (hasStaleOutput) return `生成内容已过期：图片 ${completedImageCount}/5`;
     if (copyTask.status === "success" && completedImageCount === 5) return "AI 生成任务成功";
     return `等待生成：图片 ${completedImageCount}/5`;
-  }, [completedImageCount, copyTask.status, hasTaskError, workflowLoading]);
+  }, [completedImageCount, copyTask.status, failedImageCount, hasStaleOutput, hasTaskError, workflowLoading]);
   const isReadyToSubmit = copyTask.status === "success" && !workflowLoading && !hasTaskError &&
     PRODUCT_IMAGE_ROLES.every((role) => imageRoles[role].status === "success" &&
       isHttpsUrl(imageRoles[role].imageUrl)) &&
@@ -184,7 +190,9 @@ export default function App() {
     copyOperationIdRef.current += 1;
     copyControllersRef.current.forEach((controller) => controller.abort());
     copyControllersRef.current.clear();
-    setCopyTask(idleTask);
+    setCopyTask((current) => current.status === "success" || current.status === "stale"
+      ? { status: "stale", error: "" }
+      : idleTask);
     setUploadSourceTask(idleTask);
     if (scope === "all") {
       imageOperationIdRef.current += 1;
@@ -192,7 +200,7 @@ export default function App() {
       imageControllersRef.current.clear();
       setImageRoles((current) => Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [
         role,
-        { ...current[role], status: "idle", error: "" }
+        { ...current[role], status: current[role].imageUrl ? "stale" : "idle", error: "" }
       ])) as Record<ProductImageRole, ImageRoleState>);
     }
   }
@@ -450,9 +458,6 @@ export default function App() {
             </label>
             <label>采购价 CNY<input inputMode="decimal" value={optionalInputs.purchasePriceCny}
               onChange={(event) => updateOptionalInput("purchasePriceCny", event.target.value)} /></label>
-            <label className="legacy-calibration">包裹重量 kg<input inputMode="decimal"
-              value={optionalInputs.packageWeightKg}
-              onChange={(event) => updateOptionalInput("packageWeightKg", event.target.value)} /></label>
           </div>
           <button className="generate-button" onClick={startGeneration}>
             {workflowLoading ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
@@ -483,16 +488,29 @@ export default function App() {
             <article className={`task-card task-${statusTone(...PRODUCT_IMAGE_ROLES.map((role) => imageRoles[role].status))}`}>
               <div className="task-title"><span>GPT-Image-2</span><strong>5-role image set</strong></div>
               <span className="state-label">{completedImageCount} / 5 已完成</span>
-              <small>{hasTaskError ? "部分角色需要重试" : "各角色独立生成，可单独重试"}</small>
+              {failedImageCount > 0 && <span className="failed-count">{failedImageCount} 个失败</span>}
+              <small>{hasTaskError ? "失败角色可单独重试" : "各角色独立生成，可单独重试"}</small>
             </article>
           </section>
 
           <nav className="editor-tabs" role="tablist" aria-label="Product editor sections">
-            {editorTabs.map((tab) => (
+            {editorTabs.map((tab, index) => (
               <button key={tab.id} id={`tab-${tab.id}`} role="tab"
+                ref={(node) => { tabRefs.current[index] = node; }}
                 aria-selected={activeTab === tab.id}
                 aria-controls={`panel-${tab.id}`}
                 tabIndex={activeTab === tab.id ? 0 : -1}
+                onKeyDown={(event) => {
+                  let nextIndex: number | undefined;
+                  if (event.key === "ArrowRight") nextIndex = (index + 1) % editorTabs.length;
+                  if (event.key === "ArrowLeft") nextIndex = (index - 1 + editorTabs.length) % editorTabs.length;
+                  if (event.key === "Home") nextIndex = 0;
+                  if (event.key === "End") nextIndex = editorTabs.length - 1;
+                  if (nextIndex === undefined) return;
+                  event.preventDefault();
+                  setActiveTab(editorTabs[nextIndex].id);
+                  tabRefs.current[nextIndex]?.focus();
+                }}
                 onClick={() => setActiveTab(tab.id)}>{tab.label}</button>
             ))}
           </nav>
@@ -628,6 +646,7 @@ function errorMessage(error: unknown, fallback: string): string {
 function statusTone(...statuses: Status[]): Status {
   if (statuses.includes("error")) return "error";
   if (statuses.includes("loading")) return "loading";
+  if (statuses.includes("stale")) return "stale";
   if (statuses.includes("success")) return "success";
   return "idle";
 }
@@ -637,7 +656,8 @@ function statusLabel(status: Status): string {
     idle: "Waiting",
     loading: "In progress",
     success: "Complete",
-    error: "Needs attention"
+    error: "Needs attention",
+    stale: "已过期"
   }[status];
 }
 
@@ -650,6 +670,9 @@ function submissionReason(
 ): string {
   if (workflowLoading) return "AI generation is still in progress";
   if (hasTaskError) return "Resolve the failed generation task before submitting";
+  if (copyTask.status === "stale" || PRODUCT_IMAGE_ROLES.some((role) => imageRoles[role].status === "stale")) {
+    return "Regenerate stale AI content before submitting";
+  }
   if (copyTask.status !== "success") return "Generate and review the title and description";
   const completeImages = PRODUCT_IMAGE_ROLES.filter((role) =>
     imageRoles[role].status === "success" && isHttpsUrl(imageRoles[role].imageUrl)
