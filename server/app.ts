@@ -779,11 +779,16 @@ function mapGenerationError(
     };
   }
 
-  if (
-    kind === "fields" &&
-    (/^Packy product (research|copy) API /i.test(error.message) ||
-      /^Product copy response /i.test(error.message))
-  ) {
+  const fieldStageMatch = error.message.match(
+    /^Packy product (research|copy) API /i
+  );
+  const fieldStage = fieldStageMatch?.[1]?.toLowerCase() === "research"
+    ? "research"
+    : fieldStageMatch || /^Product copy response /i.test(error.message)
+      ? "copy"
+      : undefined;
+
+  if (kind === "fields" && fieldStage) {
     const statusMatch = error.message.match(/failed:\s*(\d{3})/);
     const providerStatus = statusMatch ? Number(statusMatch[1]) : 502;
     return {
@@ -793,7 +798,7 @@ function mapGenerationError(
           : providerStatus >= 500
             ? 503
             : 502,
-      message: "Packy product field generation failed"
+      message: `Packy product ${fieldStage} failed`
     };
   }
 

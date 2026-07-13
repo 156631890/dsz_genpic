@@ -958,6 +958,44 @@ describe("API app", () => {
     }
   );
 
+  test.each([
+    [
+      new Error("Packy product research API failed: 503 token-secret"),
+      503,
+      "Packy product research failed"
+    ],
+    [
+      new Error("Packy product copy API failed: 503 token-secret"),
+      503,
+      "Packy product copy failed"
+    ],
+    [
+      new Error("Product copy response must contain exactly two lines token-secret"),
+      503,
+      "Packy product copy failed"
+    ]
+  ])("reports the safe failing full-field stage", async (error, status, message) => {
+    const response = await request(createApp({
+      generateProductFields: async () => {
+        throw error;
+      }
+    }))
+      .post("/api/generate-product-fields")
+      .field("input", JSON.stringify(productInput))
+      .field("identity", JSON.stringify({
+        sku: "Elosung10000",
+        eanCode: "4748549810"
+      }))
+      .attach("images", pngImage, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(status);
+
+    expect(response.body).toEqual({ error: message });
+    expect(response.text).not.toContain("token-secret");
+  });
+
   test("passes validated source images, product facts and identity to full-field generation", async () => {
     const evidence: ProductResearchEvidence = {
       productType: "Cotton thong underwear",
