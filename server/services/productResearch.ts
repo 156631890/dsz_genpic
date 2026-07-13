@@ -183,34 +183,43 @@ export function buildProductResearchRequest(
 ) {
   const categoryCandidates = selectCategoryCandidates(
     options.categoryMapping,
-    options.input.categoryHint
+    options.input
   );
 
   return {
     model: options.model,
     instructions:
-      "Research exact-product facts with web search. Return a concise cited plain-text evidence report. Do not return JSON.",
+      "Generate complete DSZ product research JSON using the product input, source images and supplied category mapping. Return strict JSON only.",
     input: [{
       role: "user" as const,
-      content: [{
-        type: "input_text" as const,
-        text: [
-          "Research the exact product and variant described below.",
-          "Prefer exact manufacturer or supplier pages, then 1688, then exact marketplace listings.",
-          "Similar products are not evidence. Clearly label them as non-matches.",
-          "Report product type, variant, colour and the best category candidate.",
-          "Use at most three sources. For each, report URL, title, matched variant and why it is or is not exact.",
-          "Report package weight and L x W x H only when one exact-product source explicitly publishes all four values.",
-          "Cite every source URL with the web-search citation mechanism.",
-          "Stop searching after three useful sources. Do not return JSON. Keep the report under 300 words.",
-          "CATEGORY CANDIDATES:",
-          categoryCandidates || "No matching category candidate was found.",
-          "PRODUCT INPUT:",
-          JSON.stringify(options.input)
-        ].join("\n")
-      }]
+      content: [
+        ...options.images.map((image) => ({
+          type: "input_image" as const,
+          image_url: `data:${image.mimeType};base64,${image.buffer.toString("base64")}`
+        })),
+        {
+          type: "input_text" as const,
+          text: [
+            "Identify the most likely product and variant from the input and source images.",
+            "Choose exactly one most-specific category ID and path from CATEGORY CANDIDATES.",
+            "Return realistic conventional packed shipping estimates for one sellable unit: weightKg and lengthCm x widthCm x heightCm.",
+            "Estimates must include normal protective retail packaging, be positive numbers and must not be presented as verified measurements.",
+            "Use package confidence low for conventional estimates.",
+            "Use the DSZ colour Multicolor for a multicolour product; otherwise use N/A or one to three allowed colour names separated by ' / '.",
+            "Return keys identity, category, colour, package, sources, riskFlags and reviewNotes.",
+            "identity requires productType, variant and matchSummary strings.",
+            "category requires integer id and exact name from CATEGORY CANDIDATES.",
+            "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
+            "Set sources to [] because no web evidence is supplied. riskFlags and reviewNotes must be string arrays.",
+            "Return strict JSON only, without Markdown or commentary.",
+            "CATEGORY CANDIDATES:",
+            categoryCandidates,
+            "PRODUCT INPUT:",
+            JSON.stringify(options.input)
+          ].join("\n")
+        }
+      ]
     }],
-    tools: [{ type: "web_search" as const }],
     store: false,
     stream: true
   };
@@ -242,70 +251,27 @@ function normalizeStringList(value: unknown): string[] | undefined {
 
 function selectCategoryCandidates(
   categoryMapping: string,
-  categoryHint: string | undefined
+  input: ProductInput
 ): string {
-  const keywords = (categoryHint?.toLowerCase().match(/[a-z0-9]+/g) || [])
+  const keywords = (`${input.categoryHint || ""} ${input.sellingPoints}`
+    .toLowerCase().match(/[a-z0-9]+/g) || [])
     .filter((keyword) => keyword.length >= 4);
-
-  if (keywords.length === 0) return "";
-
-  return categoryMapping
+  const mappedLines = categoryMapping
     .split(/\r?\n/)
-    .filter((line) => /^\|\s*.+?\s*\|\s*\d+\s*\|$/.test(line))
+    .filter((line) => /^\|\s*.+?\s*\|\s*\d+\s*\|$/.test(line));
+  const ranked = mappedLines
     .map((line) => ({
       line,
       score: keywords.filter((keyword) => line.toLowerCase().includes(keyword))
         .length
     }))
     .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score)
-    .slice(0, 50)
-    .map((candidate) => candidate.line)
+    .sort((left, right) => right.score - left.score);
+
+  return (ranked.length > 0
+    ? ranked.slice(0, 50).map((candidate) => candidate.line)
+    : mappedLines)
     .join("\n");
-}
-
-function buildProductResearchStructuringRequest(
-  options: ProductResearchRequestOptions,
-  report: string,
-  annotatedUrls: string[]
-) {
-  const categoryCandidates = selectCategoryCandidates(
-    options.categoryMapping,
-    options.input.categoryHint
-  );
-
-  return {
-    model: options.model,
-    instructions:
-      "Convert the supplied evidence report into strict JSON only. Do not add facts, URLs, measurements or reasoning.",
-    input: [{
-      role: "user" as const,
-      content: [{
-        type: "input_text" as const,
-        text: [
-          "EVIDENCE REPORT:",
-          report,
-          "CITED HTTPS URLS ALLOWED IN sources:",
-          annotatedUrls.join("\n") || "None",
-          "CATEGORY CANDIDATES:",
-          categoryCandidates || "None. Use id 0 and name Needs review.",
-          "PRODUCT INPUT:",
-          JSON.stringify(options.input),
-          "Return keys identity, category, colour, package, sources, riskFlags and reviewNotes.",
-          "identity requires productType, variant and matchSummary strings.",
-          "category requires integer id and name from CATEGORY CANDIDATES.",
-          "package requires weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
-          "Use positive package numbers only when verified; otherwise use null for each unavailable value and confidence low.",
-          "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
-          "Use source.package null unless that exact cited source explicitly contains all four package values.",
-          "riskFlags and reviewNotes must each be JSON arrays of strings.",
-          "Use only cited URLs. Preserve conflicts. Similar products must have exactProductMatch false."
-        ].join("\n")
-      }]
-    }],
-    store: false,
-    stream: true
-  };
 }
 
 export function parseCategoryMapping(value: string): Map<number, string> {
@@ -395,7 +361,7 @@ export function validateProductResearch(options: {
     issues.push("Colour needs review.");
   }
 
-  const researched = evidenceValid && aggregatePackage
+  const researched = aggregatePackage
     ? {
         weightKg: aggregatePackage.weightKg,
         lengthCm: aggregatePackage.lengthCm,
@@ -412,7 +378,15 @@ export function validateProductResearch(options: {
   const completePackage = Object.values(packageFacts).every(
     (value) => value !== undefined
   );
-  if (!completePackage) {
+  const usesConventionalEstimate = !evidenceValid && [
+    options.input.packageWeightKg,
+    options.input.lengthCm,
+    options.input.widthCm,
+    options.input.heightCm
+  ].some((value) => positiveNumber(value) === undefined);
+  if (usesConventionalEstimate && completePackage) {
+    issues.push("Package weight and dimensions use conventional estimates.");
+  } else if (!completePackage) {
     issues.push("Package weight and dimensions need verified same-product evidence.");
   }
 
@@ -474,7 +448,7 @@ export async function generateProductResearchWithPacky(options: {
     "Content-Type": "application/json"
   };
   const fetcher = options.fetchImpl || fetch;
-  const reportResponse = await requestPackyResearchResponse({
+  const response = await requestPackyResearchResponse({
     url: `${baseUrl}/v1/responses`,
     request: {
       method: "POST",
@@ -483,26 +457,7 @@ export async function generateProductResearchWithPacky(options: {
     },
     fetcher
   });
-  const report = await readPackyResponses(reportResponse);
-
-  if (!report.text.trim()) {
-    throw new Error("Packy product research API returned empty content.");
-  }
-
-  const structureResponse = await requestPackyResearchResponse({
-    url: `${baseUrl}/v1/responses`,
-    request: {
-      method: "POST",
-      headers: requestHeaders,
-      body: JSON.stringify(buildProductResearchStructuringRequest(
-        requestOptions,
-        report.text.trim(),
-        report.annotatedUrls
-      ))
-    },
-    fetcher
-  });
-  const structured = await readPackyResponses(structureResponse);
+  const structured = await readPackyResponses(response);
 
   if (!structured.text.trim()) {
     throw new Error("Packy product research API returned empty content.");
@@ -519,7 +474,7 @@ export async function generateProductResearchWithPacky(options: {
 
   return validateProductResearch({
     raw,
-    annotatedUrls: report.annotatedUrls,
+    annotatedUrls: structured.annotatedUrls,
     categoryMapping: options.categoryMapping,
     input: options.input
   });

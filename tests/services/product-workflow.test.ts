@@ -154,22 +154,6 @@ function researchStream(confidence: "high" | "medium" = "high"): Response {
   ]);
 }
 
-function researchReportStream(): Response {
-  return workflowSse([
-    {
-      type: "response.output_text.delta",
-      delta: "The exact supplier listing provides matching package measurements."
-    },
-    {
-      type: "response.output_text.annotation.added",
-      annotation: {
-        type: "url_citation",
-        url: "https://supplier.example.com/item"
-      }
-    }
-  ]);
-}
-
 function copyStream(): Response {
   return workflowSse([{
     type: "response.output_text.delta",
@@ -235,10 +219,7 @@ describe("complete DSZ field generation", () => {
   test("researches, writes copy and calculates deterministic DSZ fields", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { instructions?: string };
-      if (body.instructions?.startsWith("Research exact-product facts")) {
-        return researchReportStream();
-      }
-      if (body.instructions?.startsWith("Convert the supplied evidence report")) {
+      if (body.instructions?.startsWith("Generate complete DSZ product research JSON")) {
         return researchStream();
       }
       return copyStream();
@@ -286,16 +267,13 @@ describe("complete DSZ field generation", () => {
       purchasePriceCny: 20
     }));
     expect(result.fields.zone_rates.nz).toBe(20);
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  test("does not estimate package measurements without exact evidence", async () => {
+  test("uses conventional package defaults without exact evidence", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { instructions?: string };
-      if (body.instructions?.startsWith("Research exact-product facts")) {
-        return researchReportStream();
-      }
-      if (body.instructions?.startsWith("Convert the supplied evidence report")) {
+      if (body.instructions?.startsWith("Generate complete DSZ product research JSON")) {
         return researchStream("medium");
       }
       return copyStream();
@@ -316,16 +294,16 @@ describe("complete DSZ field generation", () => {
     });
 
     expect(result.fields).toMatchObject({
-      weight: 0,
-      length: 0,
-      width: 0,
-      height: 0,
-      cbm: 0
+      weight: 0.12,
+      length: 12,
+      width: 8,
+      height: 3,
+      cbm: calculateCbm(12, 8, 3)
     });
     expect(result.issues).toContain(
-      "Package weight and dimensions need verified same-product evidence."
+      "Package weight and dimensions use conventional estimates."
     );
-    expect(result.issues).toContain(
+    expect(result.issues).not.toContain(
       "Verified package measurements are required to calculate Vendor Price and RRP."
     );
     expect(result.issues).not.toContain(

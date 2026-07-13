@@ -19,6 +19,7 @@ function researchFixture(options: {
   confidence?: "high" | "medium" | "low";
   exactProductMatch?: boolean;
   sourcePackageAvailable?: boolean;
+  includeSources?: boolean;
   secondSourcePackage?: {
     weightKg: number;
     lengthCm: number;
@@ -33,7 +34,7 @@ function researchFixture(options: {
     widthCm: 8,
     heightCm: 3
   };
-  const sources = [{
+  const sources = options.includeSources === false ? [] : [{
     url: sourceUrl,
     title: "Supplier necklace listing",
     matchedVariant: "Multicolour",
@@ -124,36 +125,18 @@ describe("product research request", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  test("separates cited web evidence from JSON structuring", async () => {
-    const sourceUrl = "https://supplier.example.com/item";
-    let callCount = 0;
+  test("generates conventional defaults in one structured request", async () => {
     const fetchImpl = vi.fn(async (_url, init) => {
-      callCount += 1;
       const body = JSON.parse(String(init?.body));
       const serialized = JSON.stringify(body);
-
-      if (callCount === 1) {
-        expect(body.tools).toEqual([{ type: "web_search" }]);
-        expect(serialized).not.toContain("input_image");
-        return new Response([
-          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Verified supplier report." })}`,
-          `data: ${JSON.stringify({
-            type: "response.output_text.annotation.added",
-            annotation: { type: "url_citation", url: sourceUrl }
-          })}`,
-          "data: [DONE]",
-          ""
-        ].join("\n\n"), {
-          status: 200,
-          headers: { "content-type": "text/event-stream" }
-        });
-      }
-
       expect(body.tools).toBeUndefined();
-      expect(serialized).toContain("Verified supplier report.");
-      expect(serialized).toContain(sourceUrl);
+      expect(serialized).toContain("input_image");
+      expect(serialized).toContain("conventional packed shipping estimates");
       return new Response(JSON.stringify({
-        output_text: JSON.stringify(researchFixture({ sourceUrl }))
+        output_text: JSON.stringify(researchFixture({
+          confidence: "low",
+          includeSources: false
+        }))
       }), {
         status: 200,
         headers: { "content-type": "application/json" }
@@ -180,7 +163,7 @@ describe("product research request", () => {
       fetchImpl
     });
 
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.package).toEqual({
       weightKg: 0.12,
       lengthCm: 12,
@@ -189,7 +172,7 @@ describe("product research request", () => {
     });
   });
 
-  test("builds a text-only web evidence request for GPT-5.6 SOL", () => {
+  test("builds a vision-assisted conventional default request for GPT-5.6 SOL", () => {
     const body = buildProductResearchRequest({
       input: {
         sellingPoints: "Multicolour stone and pearl necklace",
@@ -209,11 +192,12 @@ describe("product research request", () => {
     expect(body).toMatchObject({
       model: "gpt-5.6-sol",
       stream: true,
-      store: false,
-      tools: [{ type: "web_search" }]
+      store: false
     });
-    expect(JSON.stringify(body)).not.toContain("input_image");
-    expect(JSON.stringify(body)).toContain("Do not return JSON");
+    expect(body).not.toHaveProperty("tools");
+    expect(JSON.stringify(body)).toContain("input_image");
+    expect(JSON.stringify(body)).toContain("strict JSON");
+    expect(JSON.stringify(body)).toContain("conventional packed shipping estimates");
     expect(JSON.stringify(body)).toContain(
       "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
     );
@@ -260,7 +244,7 @@ describe("product research request", () => {
       confidence: "high" as const,
       sourcePackageAvailable: false
     }
-  ])("does not accept package measurements from $name", ({
+  ])("uses conventional package defaults for $name", ({
     annotatedUrls,
     sourceUrl,
     exactProductMatch,
@@ -279,9 +263,14 @@ describe("product research request", () => {
       input: { sellingPoints: "necklace", images: [], imageUrls: [] }
     });
 
-    expect(result.package).toEqual({});
+    expect(result.package).toEqual({
+      weightKg: 0.12,
+      lengthCm: 12,
+      widthCm: 8,
+      heightCm: 3
+    });
     expect(result.issues).toContain(
-      "Package weight and dimensions need verified same-product evidence."
+      "Package weight and dimensions use conventional estimates."
     );
   });
 
@@ -303,35 +292,38 @@ describe("product research request", () => {
       input: { sellingPoints: "necklace", images: [], imageUrls: [] }
     });
 
-    expect(result.package).toEqual({});
+    expect(result.package).toEqual({
+      weightKg: 0.12,
+      lengthCm: 12,
+      widthCm: 8,
+      heightCm: 3
+    });
     expect(result.issues).toContain("Package sources conflict and need review.");
+    expect(result.issues).toContain(
+      "Package weight and dimensions use conventional estimates."
+    );
   });
 
-  test("accepts unavailable package facts without inventing measurements", () => {
-    const raw = researchFixture({ sourcePackageAvailable: false });
+  test("accepts low-confidence conventional package defaults without sources", () => {
+    const raw = researchFixture({
+      confidence: "low",
+      includeSources: false
+    });
     const result = validateProductResearch({
-      raw: {
-        ...raw,
-        package: {
-          weightKg: null,
-          lengthCm: null,
-          widthCm: null,
-          heightCm: null,
-          confidence: "low"
-        },
-        reviewNotes: "No exact source publishes complete package measurements."
-      },
-      annotatedUrls: ["https://supplier.example.com/item"],
+      raw,
+      annotatedUrls: [],
       categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
       input: { sellingPoints: "necklace", images: [], imageUrls: [] }
     });
 
-    expect(result.package).toEqual({});
-    expect(result.reviewNotes).toEqual([
-      "No exact source publishes complete package measurements."
-    ]);
+    expect(result.package).toEqual({
+      weightKg: 0.12,
+      lengthCm: 12,
+      widthCm: 8,
+      heightCm: 3
+    });
     expect(result.issues).toContain(
-      "Package weight and dimensions need verified same-product evidence."
+      "Package weight and dimensions use conventional estimates."
     );
   });
 
@@ -365,6 +357,9 @@ describe("product research request", () => {
       widthCm: 10,
       heightCm: 4
     });
+    expect(result.issues).not.toContain(
+      "Package weight and dimensions use conventional estimates."
+    );
   });
 
   test("preserves a mapped manual category and valid manual colour", () => {
