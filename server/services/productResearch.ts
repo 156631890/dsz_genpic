@@ -57,7 +57,7 @@ interface ResearchDocument {
   };
   category: { id: number; name: string };
   colour: string;
-  package: ResearchPackage & {
+  package: Partial<ResearchPackage> & {
     confidence: "high" | "medium" | "low";
   };
   sources: ResearchSourceDocument[];
@@ -89,15 +89,15 @@ function parseResearchDocument(value: unknown): ResearchDocument {
     !isRecord(value.identity) ||
     !isRecord(value.category) ||
     !isRecord(value.package) ||
-    !Array.isArray(value.sources) ||
-    !Array.isArray(value.riskFlags) ||
-    !Array.isArray(value.reviewNotes)
+    !Array.isArray(value.sources)
   ) {
     throw new Error("Packy product research API returned invalid content.");
   }
 
   const confidence = value.package.confidence;
   const sources = value.sources.filter(isResearchSource);
+  const riskFlags = normalizeStringList(value.riskFlags);
+  const reviewNotes = normalizeStringList(value.reviewNotes);
   if (
     !isNonemptyString(value.identity.productType) ||
     !isNonemptyString(value.identity.variant) ||
@@ -107,13 +107,9 @@ function parseResearchDocument(value: unknown): ResearchDocument {
     !isNonemptyString(value.category.name) ||
     !isNonemptyString(value.colour) ||
     !["high", "medium", "low"].includes(String(confidence)) ||
-    positiveNumber(value.package.weightKg) === undefined ||
-    positiveNumber(value.package.lengthCm) === undefined ||
-    positiveNumber(value.package.widthCm) === undefined ||
-    positiveNumber(value.package.heightCm) === undefined ||
     sources.length !== value.sources.length ||
-    !value.riskFlags.every(isNonemptyString) ||
-    !value.reviewNotes.every(isNonemptyString)
+    riskFlags === undefined ||
+    reviewNotes === undefined
   ) {
     throw new Error("Packy product research API returned invalid content.");
   }
@@ -130,15 +126,12 @@ function parseResearchDocument(value: unknown): ResearchDocument {
     },
     colour: value.colour,
     package: {
-      weightKg: value.package.weightKg as number,
-      lengthCm: value.package.lengthCm as number,
-      widthCm: value.package.widthCm as number,
-      heightCm: value.package.heightCm as number,
+      ...optionalPackageFacts(value.package),
       confidence: confidence as ResearchDocument["package"]["confidence"]
     },
     sources,
-    riskFlags: value.riskFlags,
-    reviewNotes: value.reviewNotes
+    riskFlags,
+    reviewNotes
   };
 }
 
@@ -223,6 +216,30 @@ export function buildProductResearchRequest(
   };
 }
 
+function optionalPackageFacts(value: Record<string, unknown>): Partial<ResearchPackage> {
+  return Object.fromEntries(
+    ["weightKg", "lengthCm", "widthCm", "heightCm"]
+      .map((key) => [key, positiveNumber(value[key])] as const)
+      .filter((entry): entry is readonly [string, number] => entry[1] !== undefined)
+  );
+}
+
+function isCompleteResearchPackage(
+  value: Partial<ResearchPackage>
+): value is ResearchPackage {
+  return positiveNumber(value.weightKg) !== undefined &&
+    positiveNumber(value.lengthCm) !== undefined &&
+    positiveNumber(value.widthCm) !== undefined &&
+    positiveNumber(value.heightCm) !== undefined;
+}
+
+function normalizeStringList(value: unknown): string[] | undefined {
+  if (isNonemptyString(value)) return [value];
+  return Array.isArray(value) && value.every(isNonemptyString)
+    ? value
+    : undefined;
+}
+
 function selectCategoryCandidates(
   categoryMapping: string,
   categoryHint: string | undefined
@@ -277,9 +294,11 @@ function buildProductResearchStructuringRequest(
           "Return keys identity, category, colour, package, sources, riskFlags and reviewNotes.",
           "identity requires productType, variant and matchSummary strings.",
           "category requires integer id and name from CATEGORY CANDIDATES.",
-          "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
+          "package requires weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
+          "Use positive package numbers only when verified; otherwise use null for each unavailable value and confidence low.",
           "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
           "Use source.package null unless that exact cited source explicitly contains all four package values.",
+          "riskFlags and reviewNotes must each be JSON arrays of strings.",
           "Use only cited URLs. Preserve conflicts. Similar products must have exactProductMatch false."
         ].join("\n")
       }]
@@ -337,9 +356,11 @@ export function validateProductResearch(options: {
     measuredExactSources.map((source) => packageSignature(source.package))
   );
   const sourcesConflict = sourceSignatures.size > 1;
-  const aggregateMatchesSources = sourceSignatures.has(
-    packageSignature(document.package)
-  );
+  const aggregatePackage = isCompleteResearchPackage(document.package)
+    ? document.package
+    : undefined;
+  const aggregateMatchesSources = aggregatePackage !== undefined &&
+    sourceSignatures.has(packageSignature(aggregatePackage));
   const evidenceValid =
     document.package.confidence === "high" &&
     measuredExactSources.length > 0 &&
@@ -371,12 +392,12 @@ export function validateProductResearch(options: {
     issues.push("Colour needs review.");
   }
 
-  const researched = evidenceValid
+  const researched = evidenceValid && aggregatePackage
     ? {
-        weightKg: positiveNumber(document.package.weightKg),
-        lengthCm: positiveNumber(document.package.lengthCm),
-        widthCm: positiveNumber(document.package.widthCm),
-        heightCm: positiveNumber(document.package.heightCm)
+        weightKg: aggregatePackage.weightKg,
+        lengthCm: aggregatePackage.lengthCm,
+        widthCm: aggregatePackage.widthCm,
+        heightCm: aggregatePackage.heightCm
       }
     : {};
   const packageFacts = {

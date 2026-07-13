@@ -307,6 +307,34 @@ describe("product research request", () => {
     expect(result.issues).toContain("Package sources conflict and need review.");
   });
 
+  test("accepts unavailable package facts without inventing measurements", () => {
+    const raw = researchFixture({ sourcePackageAvailable: false });
+    const result = validateProductResearch({
+      raw: {
+        ...raw,
+        package: {
+          weightKg: null,
+          lengthCm: null,
+          widthCm: null,
+          heightCm: null,
+          confidence: "low"
+        },
+        reviewNotes: "No exact source publishes complete package measurements."
+      },
+      annotatedUrls: ["https://supplier.example.com/item"],
+      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      input: { sellingPoints: "necklace", images: [], imageUrls: [] }
+    });
+
+    expect(result.package).toEqual({});
+    expect(result.reviewNotes).toEqual([
+      "No exact source publishes complete package measurements."
+    ]);
+    expect(result.issues).toContain(
+      "Package weight and dimensions need verified same-product evidence."
+    );
+  });
+
   test("accepts a category only when ID and path match the mapping", () => {
     expect(parseCategoryMapping(
       "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
