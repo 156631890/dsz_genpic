@@ -5,6 +5,8 @@ import type {
 } from "../../shared/product.js";
 import { readPackyResponses } from "./packyResponses.js";
 
+const PACKY_PRODUCT_RESEARCH_MAX_ATTEMPTS = 3;
+
 export interface ProductResearchImage {
   mimeType: "image/png" | "image/jpeg" | "image/webp";
   buffer: Buffer;
@@ -377,7 +379,7 @@ export async function generateProductResearchWithPacky(options: {
     /\/+$/,
     ""
   );
-  const response = await (options.fetchImpl || fetch)(`${baseUrl}/v1/responses`, {
+  const request = {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -392,10 +394,42 @@ export async function generateProductResearchWithPacky(options: {
       productUploadAu: options.productUploadAu,
       model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
     }))
-  });
+  };
+  const fetcher = options.fetchImpl || fetch;
+  let response: Response | undefined;
+  let transportError: TypeError | undefined;
 
-  if (!response.ok) {
-    throw new Error(`Packy product research API failed: ${response.status}`);
+  for (
+    let attempt = 1;
+    attempt <= PACKY_PRODUCT_RESEARCH_MAX_ATTEMPTS;
+    attempt += 1
+  ) {
+    try {
+      response = await fetcher(`${baseUrl}/v1/responses`, request);
+    } catch (error) {
+      if (
+        !(error instanceof TypeError) ||
+        attempt === PACKY_PRODUCT_RESEARCH_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+      transportError = error;
+      continue;
+    }
+    if (response.ok) break;
+
+    const transient =
+      response.status === 408 ||
+      response.status === 429 ||
+      response.status >= 500;
+    if (!transient || attempt === PACKY_PRODUCT_RESEARCH_MAX_ATTEMPTS) {
+      throw new Error(`Packy product research API failed: ${response.status}`);
+    }
+  }
+
+  if (!response?.ok) {
+    if (transportError) throw transportError;
+    throw new Error("Packy product research API failed: 503");
   }
 
   const output = await readPackyResponses(response);

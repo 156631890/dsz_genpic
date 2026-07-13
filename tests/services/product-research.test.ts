@@ -1,8 +1,9 @@
 // @vitest-environment node
 
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import {
   buildProductResearchRequest,
+  generateProductResearchWithPacky,
   parseCategoryMapping,
   validateProductResearch,
   type ProductResearchImage
@@ -71,6 +72,58 @@ function researchFixture(options: {
 }
 
 describe("product research request", () => {
+  test("retries transient Packy failures before surfacing the error", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response("", { status: 503 })
+    );
+
+    await expect(generateProductResearchWithPacky({
+      input: {
+        sellingPoints: "Multicolour stone and pearl necklace",
+        images: [],
+        imageUrls: []
+      },
+      images: [png],
+      fieldRules: "Current DSZ field rules.",
+      categoryMapping:
+        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      uploadSop: "Current full upload SOP.",
+      productUploadAu: "Current Australian upload rules.",
+      env: {
+        PACKY_TEXT_API_KEY: "text-key",
+        PACKY_TEXT_MODEL: "gpt-5.6-sol"
+      },
+      fetchImpl
+    })).rejects.toThrow("Packy product research API failed: 503");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  test("retries transient Packy transport failures", async () => {
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+
+    await expect(generateProductResearchWithPacky({
+      input: {
+        sellingPoints: "Multicolour stone and pearl necklace",
+        images: [],
+        imageUrls: []
+      },
+      images: [png],
+      fieldRules: "Current DSZ field rules.",
+      categoryMapping:
+        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      uploadSop: "Current full upload SOP.",
+      productUploadAu: "Current Australian upload rules.",
+      env: {
+        PACKY_TEXT_API_KEY: "text-key",
+        PACKY_TEXT_MODEL: "gpt-5.6-sol"
+      },
+      fetchImpl
+    })).rejects.toThrow("fetch failed");
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
   test("sends source images, current rules and web search to GPT-5.6 SOL", () => {
     const body = buildProductResearchRequest({
       input: {
