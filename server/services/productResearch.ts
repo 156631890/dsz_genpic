@@ -262,8 +262,7 @@ function buildFocusedProductResearchRequest(
     "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
     "Use source.package null unless all four values are explicitly present on that source.",
       "Emit every source URL with a web-search URL citation annotation."
-    ].join("\n"), false),
-    stream: false
+    ].join("\n"), false)
   };
 }
 
