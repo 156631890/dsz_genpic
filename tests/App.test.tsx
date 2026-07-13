@@ -19,6 +19,82 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("DSZ product workbench layout", () => {
+  test("presents the studio heading, four accessible tabs, and one generation action", () => {
+    render(<App />);
+
+    expect(screen.getByRole("heading", { name: "DSZ Product Studio", level: 1 })).toBeVisible();
+    const tabs = within(screen.getByRole("tablist", { name: "Product editor sections" })).getAllByRole("tab");
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      "Details",
+      "Price",
+      "Shipping (Incl. GST)",
+      "Images"
+    ]);
+    expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+    expect(tabs.slice(1).every((tab) => tab.getAttribute("aria-selected") === "false")).toBe(true);
+    expect(screen.getAllByRole("button", { name: "开始 AI 生成" })).toHaveLength(1);
+  });
+
+  test("owns the approved details fields and marks only AI-authored fields", () => {
+    render(<App />);
+
+    for (const label of [
+      "Category", "Product Name", "SKU", "Status", "EAN Code", "Quantity",
+      "Package Weight kg", "Length cm", "Width cm", "Height cm", "CBM m3",
+      "Brand Name", "Colour", "Enable Product", "Vendor Product Description"
+    ]) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+    const aiFields = document.querySelectorAll('[data-ai-field="true"]');
+    expect(Array.from(aiFields, (field) => field.textContent?.trim())).toEqual([
+      expect.stringContaining("Product Name"),
+      expect.stringContaining("Vendor Product Description")
+    ]);
+    expect(screen.getByLabelText("Colour").closest("label")).not.toHaveAttribute("data-ai-field");
+    expect(screen.getByLabelText("CBM m3")).toHaveAttribute("readonly");
+  });
+
+  test("switches tabs and exposes price and approved shipping ownership", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: "Price" }));
+    expect(screen.getByRole("tab", { name: "Price" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tabpanel", { name: "Price" })).toBeVisible();
+    expect(screen.getByLabelText("Vendor Price")).toBeInTheDocument();
+    expect(screen.getByLabelText("Vendor RRP")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("tab", { name: "Shipping (Incl. GST)" }));
+    const panel = screen.getByRole("tabpanel", { name: "Shipping (Incl. GST)" });
+    expect(panel).toHaveTextContent("Australian zones");
+    expect(panel).toHaveTextContent("Free");
+    expect(panel).toHaveTextContent("Below 3 kg");
+    expect(panel).toHaveTextContent("AUD 20");
+    expect(panel).toHaveTextContent("3 kg and above");
+    expect(panel).toHaveTextContent("AUD 40");
+    expect(panel).toHaveTextContent("max(actual, L × W × H / 5000)");
+    expect(panel).not.toHaveTextContent("166");
+  });
+
+  test("keeps five fixed image roles in order with meaningful empty-state labels", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+
+    await user.click(screen.getByRole("tab", { name: "Images" }));
+    const cards = within(screen.getByRole("tabpanel", { name: "Images" }))
+      .getAllByTestId(/^image-role-/);
+    expect(cards.map((card) => card.getAttribute("data-role"))).toEqual(PRODUCT_IMAGE_ROLES);
+    expect(cards.map((card) => card.getAttribute("aria-label"))).toEqual([
+      "Main product image",
+      "Side product image",
+      "Product detail image",
+      "Lifestyle image 1",
+      "Lifestyle image 2"
+    ]);
+  });
+});
+
 function response(body: unknown, status = 200): Response {
   return new Response(body === undefined ? "" : JSON.stringify(body), {
     status,
@@ -45,14 +121,14 @@ async function fillRequiredInputs(user: ReturnType<typeof userEvent.setup>) {
 async function fillSubmissionFields(user: ReturnType<typeof userEvent.setup>) {
   const values = [
     ["SKU", "Elosung10001"],
-    ["Categories", "947"],
+    ["Category", "947"],
     ["EAN Code", "1234567890"],
-    ["Weight kg", "1"],
+    ["Package Weight kg", "1"],
     ["Length cm", "10"],
     ["Width cm", "10"],
     ["Height cm", "10"],
     ["Vendor Price", "10"],
-    ["RRP", "20"]
+    ["Vendor RRP", "20"]
   ] as const;
   for (const [label, value] of values) {
     await user.clear(screen.getByLabelText(label));
@@ -213,16 +289,16 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
     await waitFor(() => expect(screen.getByTestId("copy-task-status")).toHaveTextContent("loading"));
-    if (editTitle) await user.type(screen.getByLabelText("标题"), "Manual title");
-    if (editDescription) await user.type(screen.getByLabelText("HTML Description"), "Manual description");
+    if (editTitle) await user.type(screen.getByLabelText("Product Name"), "Manual title");
+    if (editDescription) await user.type(screen.getByLabelText("Vendor Product Description"), "Manual description");
     copy.resolve(response({ title: "Late title", description: "Late description" }));
 
     const copyStatus = screen.getByTestId("copy-task-status");
     await waitFor(() => expect(copyStatus).toHaveTextContent(
       editTitle && editDescription ? "error" : "success"
     ));
-    expect(screen.getByLabelText("标题")).toHaveValue(editTitle ? "Manual title" : "Late title");
-    expect(screen.getByLabelText("HTML Description")).toHaveValue(
+    expect(screen.getByLabelText("Product Name")).toHaveValue(editTitle ? "Manual title" : "Late title");
+    expect(screen.getByLabelText("Vendor Product Description")).toHaveValue(
       editDescription ? "Manual description" : "Late description"
     );
     if (editTitle && editDescription) {
@@ -233,7 +309,7 @@ describe("App independent AI workflow", () => {
   test.each([
     ["类目提示", "Underwear", "all"],
     ["采购价 CNY", "12.50", "copy"],
-    ["Weight kg", "2", "copy"],
+    ["Package Weight kg", "2", "copy"],
     ["Length cm", "20", "copy"],
     ["Width cm", "15", "copy"],
     ["Height cm", "10", "copy"]
@@ -253,15 +329,15 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await fillSubmissionFields(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "上传到后台" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeEnabled());
 
     const input = screen.getByLabelText(label);
     await user.clear(input);
     await user.type(input, value);
 
-    expect(screen.getByRole("button", { name: "上传到后台" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
     expect(screen.getByTestId("copy-task-status")).toHaveTextContent("idle");
-    expect(screen.getAllByRole("img")).toHaveLength(5);
+    expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
     for (const role of PRODUCT_IMAGE_ROLES) {
       expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute(
         "data-status",
@@ -288,7 +364,7 @@ describe("App independent AI workflow", () => {
       await fillRequiredInputs(user);
       await fillSubmissionFields(user);
       await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-      await waitFor(() => expect(screen.getByRole("button", { name: "上传到后台" })).toBeEnabled());
+      await waitFor(() => expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeEnabled());
 
       if (dependency === "selling points") {
         await user.type(screen.getByLabelText("卖点"), " changed");
@@ -300,11 +376,11 @@ describe("App independent AI workflow", () => {
       }
 
       expect(screen.getByTestId("copy-task-status")).toHaveTextContent("idle");
-      expect(screen.getAllByRole("img")).toHaveLength(5);
+      expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
       for (const role of PRODUCT_IMAGE_ROLES) {
         expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute("data-status", "idle");
       }
-      expect(screen.getByRole("button", { name: "上传到后台" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
     }
   );
 
@@ -329,11 +405,11 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await fillSubmissionFields(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
 
     generation = 2;
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-    expect(screen.getAllByRole("img").map((image) => image.getAttribute("src"))).toEqual(
+    expect(screen.getAllByRole("img", { hidden: true }).map((image) => image.getAttribute("src"))).toEqual(
       PRODUCT_IMAGE_ROLES.map((role) => `https://cdn.example.com/v1-${role}.png`)
     );
     for (const role of PRODUCT_IMAGE_ROLES) {
@@ -344,17 +420,17 @@ describe("App independent AI workflow", () => {
 
     const detail = screen.getByTestId("image-role-detail");
     await waitFor(() => expect(detail).toHaveAttribute("data-status", "error"));
-    expect(within(detail).getByRole("img")).toHaveAttribute(
+    expect(within(detail).getByRole("img", { hidden: true })).toHaveAttribute(
       "src",
       "https://cdn.example.com/v1-detail.png"
     );
     for (const role of PRODUCT_IMAGE_ROLES.filter((item) => item !== "detail")) {
-      expect(within(screen.getByTestId(`image-role-${role}`)).getByRole("img")).toHaveAttribute(
+      expect(within(screen.getByTestId(`image-role-${role}`)).getByRole("img", { hidden: true })).toHaveAttribute(
         "src",
         `https://cdn.example.com/v2-${role}.png`
       );
     }
-    expect(screen.getByRole("button", { name: "上传到后台" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
   });
 
   test("copy success and one image failure retain four images; role retry is isolated", async () => {
@@ -384,12 +460,13 @@ describe("App independent AI workflow", () => {
 
     expect(await screen.findByDisplayValue("Generated title")).toBeInTheDocument();
     expect(screen.getByDisplayValue("Generated description")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(4));
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(4));
+    await user.click(screen.getByRole("tab", { name: "Images" }));
     const detail = screen.getByTestId("image-role-detail");
     expect(detail).toHaveTextContent("detail failed");
 
     await user.click(within(detail).getByRole("button", { name: "重试图片 detail" }));
-    expect(await within(detail).findByAltText("生成图片 detail")).toBeInTheDocument();
+    expect(await within(detail).findByAltText("Product detail image generated preview")).toBeInTheDocument();
     expect(roleCounts.get("detail")).toBe(2);
     for (const role of PRODUCT_IMAGE_ROLES.filter((item) => item !== "detail")) {
       expect(roleCounts.get(role)).toBe(1);
@@ -418,14 +495,14 @@ describe("App independent AI workflow", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     render(<App />);
-    const title = screen.getByLabelText("标题");
-    const description = screen.getByLabelText("HTML Description");
+    const title = screen.getByLabelText("Product Name");
+    const description = screen.getByLabelText("Vendor Product Description");
     await user.type(title, "Manual title");
     await user.type(description, "Manual description");
     await fillRequiredInputs(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
 
-    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
     expect(title).toHaveValue("Manual title");
     expect(description).toHaveValue("Manual description");
     const copyStatus = screen.getByTestId("copy-task-status");
@@ -466,12 +543,16 @@ describe("App independent AI workflow", () => {
     for (const role of ["lifestyle_2", "detail", "side", "lifestyle_1", "main"] as ProductImageRole[]) {
       pending[role].resolve(response({ role, imageUrl: `https://cdn.example.com/${role}.png` }));
     }
-    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(5));
-    expect(screen.getAllByRole("img").map((image) => image.getAttribute("alt"))).toEqual(
-      PRODUCT_IMAGE_ROLES.map((role) => `生成图片 ${role}`)
-    );
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
+    expect(screen.getAllByRole("img", { hidden: true }).map((image) => image.getAttribute("alt"))).toEqual([
+      "Main product image generated preview",
+      "Side product image generated preview",
+      "Product detail image generated preview",
+      "Lifestyle image 1 generated preview",
+      "Lifestyle image 2 generated preview"
+    ]);
 
-    await user.click(screen.getByRole("button", { name: "上传到后台" }));
+    await user.click(screen.getByRole("button", { name: "验证并提交审核" }));
     await waitFor(() => expect(uploadedFields).toBeDefined());
     expect(uploadedFields?.images).toEqual(
       PRODUCT_IMAGE_ROLES.map((role) => `https://cdn.example.com/${role}.png`)
@@ -490,13 +571,13 @@ describe("App independent AI workflow", () => {
       throw new Error(`Unexpected request: ${url}`);
     }));
     render(<App />);
-    const submit = screen.getByRole("button", { name: "上传到后台" });
+    const submit = screen.getByRole("button", { name: "验证并提交审核" });
     expect(submit).toBeDisabled();
     await fillRequiredInputs(user);
     await fillSubmissionFields(user);
     expect(submit).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-    await waitFor(() => expect(screen.getAllByRole("img")).toHaveLength(5));
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
     expect(submit).toBeEnabled();
   });
 
@@ -517,7 +598,7 @@ describe("App independent AI workflow", () => {
     }));
     render(<App />);
     await fillRequiredInputs(user);
-    for (const [label, value] of [["Weight kg", "2"], ["Length cm", "30"], ["Width cm", "20"], ["Height cm", "10"]]) {
+    for (const [label, value] of [["Package Weight kg", "2"], ["Length cm", "30"], ["Width cm", "20"], ["Height cm", "10"]]) {
       await user.clear(screen.getByLabelText(label));
       await user.type(screen.getByLabelText(label), value);
     }
@@ -530,7 +611,7 @@ describe("App independent AI workflow", () => {
   test("category text keeps numeric category metadata synchronized", async () => {
     const user = userEvent.setup();
     render(<App />);
-    const categories = screen.getByLabelText("Categories");
+    const categories = screen.getByLabelText("Category");
     await user.type(categories, "947");
     expect(screen.getByText((_, node) => node?.tagName === "PRE" &&
       node.textContent?.includes('"category": 947') === true)).toBeInTheDocument();
@@ -560,6 +641,7 @@ describe("App independent AI workflow", () => {
     render(<App />);
     await fillRequiredInputs(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await user.click(screen.getByRole("tab", { name: "Images" }));
     const detail = await screen.findByTestId("image-role-detail");
     await waitFor(() => expect(within(detail).getByRole("button", { name: "重试图片 detail" })).toBeVisible());
     await user.click(within(detail).getByRole("button", { name: "重试图片 detail" }));
@@ -590,15 +672,15 @@ describe("App independent AI workflow", () => {
     const user = userEvent.setup();
     render(<App />);
 
-    await user.clear(screen.getByLabelText("Weight kg"));
-    await user.type(screen.getByLabelText("Weight kg"), "1");
+    await user.clear(screen.getByLabelText("Package Weight kg"));
+    await user.type(screen.getByLabelText("Package Weight kg"), "1");
     await user.clear(screen.getByLabelText("Length cm"));
     await user.type(screen.getByLabelText("Length cm"), "50");
     await user.clear(screen.getByLabelText("Width cm"));
     await user.type(screen.getByLabelText("Width cm"), "40");
     await user.clear(screen.getByLabelText("Height cm"));
     await user.type(screen.getByLabelText("Height cm"), "30");
-    await user.click(screen.getByLabelText("Enabled"));
+    await user.click(screen.getByLabelText("Enable Product"));
 
     const payload = screen.getByText((_, element) =>
       element?.tagName === "PRE" && element.textContent?.includes('"cbm": 0.06') === true

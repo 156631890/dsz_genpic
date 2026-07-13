@@ -1,6 +1,4 @@
 import {
-  CheckCircle2,
-  FileText,
   Loader2,
   Send,
   Sparkles,
@@ -33,6 +31,7 @@ interface ImageRoleState extends TaskState {
 }
 
 type GenerationScope = "copy" | "all";
+type EditorTab = "details" | "price" | "shipping" | "images";
 
 interface OptionalInputs {
   categoryHint: string;
@@ -84,24 +83,20 @@ const initialFields: DszProductFields = {
   review_notes: []
 };
 
-const editableTextFields: Array<{ key: keyof DszProductFields; label: string }> = [
-  { key: "product_name", label: "标题" },
-  { key: "sku", label: "SKU" },
-  { key: "categories", label: "Categories" },
-  { key: "ean_code", label: "EAN Code" },
-  { key: "brand_name", label: "Brand" },
-  { key: "colour", label: "Colour" }
+const editorTabs: Array<{ id: EditorTab; label: string }> = [
+  { id: "details", label: "Details" },
+  { id: "price", label: "Price" },
+  { id: "shipping", label: "Shipping (Incl. GST)" },
+  { id: "images", label: "Images" }
 ];
 
-const editableNumberFields: Array<{ key: keyof DszProductFields; label: string }> = [
-  { key: "stock", label: "Stock" },
-  { key: "weight", label: "Weight kg" },
-  { key: "length", label: "Length cm" },
-  { key: "width", label: "Width cm" },
-  { key: "height", label: "Height cm" },
-  { key: "vendor_price", label: "Vendor Price" },
-  { key: "rrp", label: "RRP" }
-];
+const imageRoleLabels: Record<ProductImageRole, string> = {
+  main: "Main product image",
+  side: "Side product image",
+  detail: "Product detail image",
+  lifestyle_1: "Lifestyle image 1",
+  lifestyle_2: "Lifestyle image 2"
+};
 
 function initialRoleStates(): Record<ProductImageRole, ImageRoleState> {
   return Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [
@@ -121,6 +116,7 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("等待上传原始产品图片");
   const [uploadResult, setUploadResult] = useState<unknown>(null);
+  const [activeTab, setActiveTab] = useState<EditorTab>("details");
   const copyOperationIdRef = useRef(0);
   const imageOperationIdRef = useRef(0);
   const copyControllersRef = useRef(new Set<AbortController>());
@@ -161,6 +157,9 @@ export default function App() {
   const pageSummary = uploadStatus !== "idle"
     ? message
     : hasTaskActivity ? taskSummary : message;
+  const volumetricWeight = fields.length * fields.width * fields.height / 5000;
+  const billableWeight = Math.max(fields.weight, volumetricWeight);
+  const submitReason = submissionReason(fields, imageRoles, copyTask, workflowLoading, hasTaskError);
 
   useEffect(() => () => {
     copyOperationIdRef.current += 1;
@@ -387,26 +386,29 @@ export default function App() {
   }
 
   return (
-    <main className="app-shell">
+    <main className="app-shell" id="main-content">
       <header className="topbar">
-        <div>
-          <h1>商品上传工作台</h1>
-          <p>上传原始图和卖点，AI 文案与五张角色图片独立生成，人工校对后提交后台。</p>
+        <div className="brand-lockup">
+          <span className="brand-mark" aria-hidden="true">DSZ</span>
+          <div>
+            <h1>DSZ Product Studio</h1>
+            <p>商品资料生成与提交流程工作台</p>
+          </div>
         </div>
-        <div
-          className={`status status-${statusTone(copyTask.status, uploadStatus)}`}
-          role="status"
-          aria-live="polite"
-        >
-          {pageSummary}
+        <div className="service-context">
+          <span>Workflow context</span>
+          <strong>Draft · AI-assisted · Human review</strong>
         </div>
       </header>
 
-      <section className="workspace" aria-label="商品上传工作区">
-        <section className="panel input-panel">
-          <div className="panel-heading"><Upload size={18} /><h2>原始信息</h2></div>
+      <section className="workspace" aria-label="DSZ product workspace">
+        <aside className="source-rail" aria-labelledby="source-heading">
+          <div className="section-heading">
+            <span className="section-index">01</span>
+            <div><h2 id="source-heading">Source</h2><p>生成依据</p></div>
+          </div>
           <label className="file-picker">
-            <span>原始产品图片</span>
+            <span><Upload size={17} aria-hidden="true" /> 原始产品图片</span>
             <input
               aria-label="原始产品图片"
               type="file"
@@ -419,6 +421,7 @@ export default function App() {
               }}
             />
             <strong>{sourceFiles.length ? `已选择 ${sourceFiles.length} 张` : "选择 JPG / PNG / WebP"}</strong>
+            <small>支持多图，AI 将识别产品主体与细节</small>
           </label>
           <div className="selected-files" aria-label="已选图片">
             {sourceFiles.length
@@ -438,108 +441,177 @@ export default function App() {
               placeholder="例如：亲肤柔软，高弹不勒，多尺码多配色..."
             />
           </label>
-          <div className="optional-block">
-            <h3>可选校准字段</h3>
+          <div className="source-context">
+            <h3>生成校准</h3>
             <label>
               类目提示
               <input value={optionalInputs.categoryHint} onChange={(event) =>
                 updateOptionalInput("categoryHint", event.target.value)} />
             </label>
-            <div className="field-grid">
-              <label>采购价 CNY<input inputMode="decimal" value={optionalInputs.purchasePriceCny}
-                onChange={(event) => updateOptionalInput("purchasePriceCny", event.target.value)} /></label>
-              <label>包裹重量 kg<input inputMode="decimal" value={optionalInputs.packageWeightKg}
-                onChange={(event) => updateOptionalInput("packageWeightKg", event.target.value)} /></label>
-            </div>
-            <div className="field-grid three">
-              <label>长 cm<input inputMode="decimal" value={optionalInputs.lengthCm}
-                onChange={(event) => updateOptionalInput("lengthCm", event.target.value)} /></label>
-              <label>宽 cm<input inputMode="decimal" value={optionalInputs.widthCm}
-                onChange={(event) => updateOptionalInput("widthCm", event.target.value)} /></label>
-              <label>高 cm<input inputMode="decimal" value={optionalInputs.heightCm}
-                onChange={(event) => updateOptionalInput("heightCm", event.target.value)} /></label>
-            </div>
+            <label>采购价 CNY<input inputMode="decimal" value={optionalInputs.purchasePriceCny}
+              onChange={(event) => updateOptionalInput("purchasePriceCny", event.target.value)} /></label>
+            <label className="legacy-calibration">包裹重量 kg<input inputMode="decimal"
+              value={optionalInputs.packageWeightKg}
+              onChange={(event) => updateOptionalInput("packageWeightKg", event.target.value)} /></label>
           </div>
-          <button onClick={startGeneration}>
+          <button className="generate-button" onClick={startGeneration}>
             {workflowLoading ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
             开始 AI 生成
           </button>
-          <div data-testid="copy-task-status">
-            文案：{copyTask.status}
-            {uploadSourceTask.status === "loading" && "（正在上传源图）"}
-            {copyTask.error && <span role="alert">{copyTask.error}</span>}
-            {copyTask.status === "error" && (
-              <button onClick={() => runCopyTask()} aria-label="重试标题与描述">重试</button>
-            )}
-          </div>
-          <div>图片进度 {completedImageCount}/5</div>
-        </section>
+        </aside>
 
-        <section className="panel fields-panel">
-          <div className="panel-heading"><FileText size={18} /><h2>DSZ 生成字段</h2></div>
-          <div className="field-grid">
-            {editableTextFields.map((item) => (
-              <label key={String(item.key)}>{item.label}
-                <input value={String(fields[item.key] ?? "")}
-                  onChange={(event) => updateField(item.key, event.target.value)} />
-              </label>
-            ))}
+        <section className="editor" aria-labelledby="editor-heading">
+          <div className="editor-intro">
+            <div><span className="section-index">02</span><h2 id="editor-heading">Product record</h2></div>
+            <div className={`status status-${statusTone(copyTask.status, uploadStatus)}`}
+              role="status" aria-live="polite">{pageSummary}</div>
           </div>
-          <div className="field-grid">
-            {editableNumberFields.map((item) => (
-              <label key={String(item.key)}>{item.label}
-                <input inputMode="decimal" value={String(fields[item.key] ?? "")}
-                  onChange={(event) => updateField(item.key, Number(event.target.value) || 0)} />
-              </label>
-            ))}
-          </div>
-          <label>Enabled <input type="checkbox" checked={fields.enabled}
-            onChange={(event) => updateField("enabled", event.target.checked)} /></label>
-          <label>
-            HTML Description
-            <textarea value={fields.description}
-              onChange={(event) => updateField("description", event.target.value)} rows={9} />
-          </label>
-        </section>
 
-        <section className="panel preview-panel">
-          <div className="panel-heading"><CheckCircle2 size={18} /><h2>上传预览</h2></div>
-          <dl className="readiness">
-            <div><dt>图片</dt><dd>{generatedImages.length} 张</dd></div>
-            <div><dt>SKU</dt><dd>{fields.sku || "待填写"}</dd></div>
-            <div><dt>类目</dt><dd>{fields.categories || "待填写"}</dd></div>
-            <div><dt>RRP</dt><dd>{fields.rrp || "待填写"}</dd></div>
-          </dl>
-          <div className="url-list" aria-label="生成图片">
-            {PRODUCT_IMAGE_ROLES.map((role) => {
-              const state = imageRoles[role];
-              return (
-                <div key={role} data-testid={`image-role-${role}`} data-status={state.status}>
-                  <strong>{role}</strong>
-                  {state.imageUrl && <img src={state.imageUrl} alt={`生成图片 ${role}`} />}
-                  {state.status === "loading" && <span>生成中</span>}
-                  {state.error && <span role="alert">{state.error}</span>}
-                  {state.status === "error" && (
-                    <button onClick={() => runImageRole(role)} aria-label={`重试图片 ${role}`}>重试</button>
-                  )}
-                </div>
-              );
-            })}
+          <section className="task-strip" aria-label="AI generation status">
+            <article className={`task-card task-${copyTask.status}`} data-testid="copy-task-status"
+              data-status={copyTask.status}>
+              <div className="task-title"><span>GPT-5.6 SOL</span><strong>Title & description</strong></div>
+              <span className="state-label">{statusLabel(copyTask.status)}</span>
+              <span className="sr-only">{copyTask.status}</span>
+              {uploadSourceTask.status === "loading" && <small>正在上传源图</small>}
+              {copyTask.error && <span className="inline-error" role="alert">{copyTask.error}</span>}
+              {copyTask.status === "error" && (
+                <button className="text-button" onClick={() => runCopyTask()}
+                  aria-label="重试标题与描述">重试文案</button>
+              )}
+            </article>
+            <article className={`task-card task-${statusTone(...PRODUCT_IMAGE_ROLES.map((role) => imageRoles[role].status))}`}>
+              <div className="task-title"><span>GPT-Image-2</span><strong>5-role image set</strong></div>
+              <span className="state-label">{completedImageCount} / 5 已完成</span>
+              <small>{hasTaskError ? "部分角色需要重试" : "各角色独立生成，可单独重试"}</small>
+            </article>
+          </section>
+
+          <nav className="editor-tabs" role="tablist" aria-label="Product editor sections">
+            {editorTabs.map((tab) => (
+              <button key={tab.id} id={`tab-${tab.id}`} role="tab"
+                aria-selected={activeTab === tab.id}
+                aria-controls={`panel-${tab.id}`}
+                tabIndex={activeTab === tab.id ? 0 : -1}
+                onClick={() => setActiveTab(tab.id)}>{tab.label}</button>
+            ))}
+          </nav>
+
+          <div className="tab-stage">
+            <section id="panel-details" role="tabpanel" aria-labelledby="tab-details"
+              hidden={activeTab !== "details"} className="tab-panel">
+              <div className="field-grid details-grid">
+                <label>Category<input value={fields.categories}
+                  onChange={(event) => updateField("categories", event.target.value)} /></label>
+                <label data-ai-field="true">Product Name <span className="ai-marker">AI</span>
+                  <input aria-label="Product Name" value={fields.product_name}
+                    onChange={(event) => updateField("product_name", event.target.value)} /></label>
+                <label>SKU<input value={fields.sku}
+                  onChange={(event) => updateField("sku", event.target.value)} /></label>
+                <label>Status<select value={fields.status}
+                  onChange={(event) => updateField("status", Number(event.target.value))}>
+                  <option value={1}>Active</option><option value={0}>Inactive</option>
+                </select></label>
+                <label>EAN Code<input value={fields.ean_code}
+                  onChange={(event) => updateField("ean_code", event.target.value)} /></label>
+                <label>Quantity<input inputMode="numeric" value={fields.stock}
+                  onChange={(event) => updateField("stock", Number(event.target.value) || 0)} /></label>
+                <label>Package Weight kg<input inputMode="decimal" value={fields.weight}
+                  onChange={(event) => updateField("weight", Number(event.target.value) || 0)} /></label>
+                <label>Length cm<input inputMode="decimal" value={fields.length}
+                  onChange={(event) => updateField("length", Number(event.target.value) || 0)} /></label>
+                <label>Width cm<input inputMode="decimal" value={fields.width}
+                  onChange={(event) => updateField("width", Number(event.target.value) || 0)} /></label>
+                <label>Height cm<input inputMode="decimal" value={fields.height}
+                  onChange={(event) => updateField("height", Number(event.target.value) || 0)} /></label>
+                <label>CBM m3 <span className="automatic-marker">Automatic</span>
+                  <input aria-label="CBM m3" readOnly value={fields.cbm} /></label>
+                <label>Brand Name<input value={fields.brand_name}
+                  onChange={(event) => updateField("brand_name", event.target.value)} /></label>
+                <label>Colour<input value={fields.colour}
+                  onChange={(event) => updateField("colour", event.target.value)} /></label>
+                <label className="toggle-field">Enable Product <input type="checkbox" checked={fields.enabled}
+                  onChange={(event) => updateField("enabled", event.target.checked)} /></label>
+                <label className="description-field" data-ai-field="true">
+                  Vendor Product Description <span className="ai-marker">AI · HTML</span>
+                  <textarea aria-label="Vendor Product Description" value={fields.description}
+                    onChange={(event) => updateField("description", event.target.value)} rows={9} />
+                </label>
+              </div>
+            </section>
+
+            <section id="panel-price" role="tabpanel" aria-labelledby="tab-price"
+              hidden={activeTab !== "price"} className="tab-panel">
+              <div className="field-grid price-grid">
+                <label>Vendor Price<input inputMode="decimal" value={fields.vendor_price}
+                  onChange={(event) => updateField("vendor_price", Number(event.target.value) || 0)} /></label>
+                <label>Vendor RRP<input inputMode="decimal" value={fields.rrp}
+                  onChange={(event) => updateField("rrp", Number(event.target.value) || 0)} /></label>
+              </div>
+            </section>
+
+            <section id="panel-shipping" role="tabpanel" aria-labelledby="tab-shipping"
+              hidden={activeTab !== "shipping"} className="tab-panel shipping-panel">
+              <div className="billable-weight"><span>Current billable weight</span>
+                <strong>{billableWeight.toFixed(2)} kg</strong></div>
+              <div className="shipping-summary">
+                <article><span>Australian zones</span><strong>Free</strong><small>All metro and regional zones</small></article>
+                <article><span>New Zealand · Below 3 kg</span><strong>AUD 20</strong><small>Incl. GST</small></article>
+                <article><span>New Zealand · 3 kg and above</span><strong>AUD 40</strong><small>Incl. GST</small></article>
+              </div>
+              <p className="formula-note">Billable weight = max(actual, L × W × H / 5000)</p>
+            </section>
+
+            <section id="panel-images" role="tabpanel" aria-labelledby="tab-images"
+              hidden={activeTab !== "images"} className="tab-panel">
+              <div className="image-role-grid" aria-label="Generated product images">
+                {PRODUCT_IMAGE_ROLES.map((role, index) => {
+                  const state = imageRoles[role];
+                  return (
+                    <article key={role} data-testid={`image-role-${role}`} data-role={role}
+                      data-status={state.status} aria-label={imageRoleLabels[role]} className="image-role-card">
+                      <div className="image-role-head"><span>0{index + 1}</span><strong>{imageRoleLabels[role]}</strong></div>
+                      <div className="image-preview">
+                        {state.imageUrl
+                          ? <img src={state.imageUrl} alt={`${imageRoleLabels[role]} generated preview`} />
+                          : <span>{state.status === "loading" ? "Generating preview" : "No image generated"}</span>}
+                      </div>
+                      <div className="image-role-foot">
+                        <span className="state-label">{statusLabel(state.status)}</span>
+                        {state.error && <span className="inline-error" role="alert">{state.error}</span>}
+                        {state.status === "error" && (
+                          <button className="text-button" onClick={() => runImageRole(role)}
+                            aria-label={`重试图片 ${role}`}>Retry role</button>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
           </div>
-          <button
-            className="primary-submit"
-            onClick={uploadProduct}
-            disabled={!isReadyToSubmit || uploadStatus === "loading"}
-          >
-            {uploadStatus === "loading" ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
-            上传到后台
-          </button>
-          <h2 className="preview-title">Payload</h2>
-          <pre className="preview-json">{JSON.stringify(uploadResult || {
-            fields: { ...fields, images: generatedImages }
-          }, null, 2)}</pre>
+
+          <details className="payload-disclosure">
+            <summary>Review generated payload</summary>
+            <pre>{JSON.stringify(uploadResult || { fields: { ...fields, images: generatedImages } }, null, 2)}</pre>
+          </details>
         </section>
       </section>
+
+      <footer className="submit-bar">
+        <div>
+          <span className={isReadyToSubmit ? "readiness-dot ready" : "readiness-dot"} aria-hidden="true" />
+          <p><strong>{isReadyToSubmit ? "Ready for review" : "Not ready for review"}</strong>
+            <span>{isReadyToSubmit ? "All required fields and five roles are complete" : submitReason}</span></p>
+        </div>
+        <button className="primary-submit" onClick={uploadProduct}
+          disabled={!isReadyToSubmit || uploadStatus === "loading"}
+          aria-describedby="submit-reason">
+          {uploadStatus === "loading" ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
+          验证并提交审核
+        </button>
+        <span id="submit-reason" className="sr-only">{submitReason}</span>
+      </footer>
     </main>
   );
 }
@@ -558,6 +630,33 @@ function statusTone(...statuses: Status[]): Status {
   if (statuses.includes("loading")) return "loading";
   if (statuses.includes("success")) return "success";
   return "idle";
+}
+
+function statusLabel(status: Status): string {
+  return {
+    idle: "Waiting",
+    loading: "In progress",
+    success: "Complete",
+    error: "Needs attention"
+  }[status];
+}
+
+function submissionReason(
+  fields: DszProductFields,
+  imageRoles: Record<ProductImageRole, ImageRoleState>,
+  copyTask: TaskState,
+  workflowLoading: boolean,
+  hasTaskError: boolean
+): string {
+  if (workflowLoading) return "AI generation is still in progress";
+  if (hasTaskError) return "Resolve the failed generation task before submitting";
+  if (copyTask.status !== "success") return "Generate and review the title and description";
+  const completeImages = PRODUCT_IMAGE_ROLES.filter((role) =>
+    imageRoles[role].status === "success" && isHttpsUrl(imageRoles[role].imageUrl)
+  ).length;
+  if (completeImages !== 5) return `Complete all five image roles (${completeImages}/5 ready)`;
+  if (!hasRequiredDszFields(fields)) return "Complete the required product, package, and price fields";
+  return "Ready to validate and submit";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
