@@ -206,7 +206,8 @@ export async function generateProductCopyWithPacky(
       role: "user",
       content: [{ type: "input_text", text: buildProductCopyInput(input) }]
     }],
-    store: false
+    store: false,
+    stream: true
   });
   let lastContentError: Error | undefined;
 
@@ -224,7 +225,7 @@ export async function generateProductCopyWithPacky(
       throw new Error(`Packy product copy API failed: ${response.status}`);
     }
 
-    const content = extractResponsesText(await readJsonResponse(response));
+    const content = await readResponsesText(response);
     if (typeof content !== "string" || !content.trim()) continue;
 
     let copy: GeneratedProductCopy;
@@ -465,4 +466,33 @@ async function readJsonResponse(response: Response): Promise<unknown> {
   } catch {
     throw new Error("Packy product copy API returned an invalid response.");
   }
+}
+
+async function readResponsesText(response: Response): Promise<string | undefined> {
+  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+    return extractResponsesText(await readJsonResponse(response));
+  }
+
+  const deltas: string[] = [];
+
+  for (const line of (await response.text()).split(/\r?\n/)) {
+    if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+
+    try {
+      const event = JSON.parse(line.slice(6)) as {
+        type?: unknown;
+        delta?: unknown;
+      };
+      if (
+        event.type === "response.output_text.delta" &&
+        typeof event.delta === "string"
+      ) {
+        deltas.push(event.delta);
+      }
+    } catch {
+      throw new Error("Packy product copy API returned an invalid response.");
+    }
+  }
+
+  return deltas.join("") || undefined;
 }

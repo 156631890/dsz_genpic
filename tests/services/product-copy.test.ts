@@ -628,7 +628,8 @@ describe("Packy product copy generation", () => {
         role: "user",
         content: [{ type: "input_text", text: expectedUserMessage.content[0].text }]
       }],
-      store: false
+      store: false,
+      stream: true
     });
   });
 
@@ -712,6 +713,40 @@ describe("Packy product copy generation", () => {
       fetchImpl: fetchImpl as typeof fetch
     })).resolves.toEqual({ title: validTitle, description: validDescription });
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("uses streaming Responses deltas for Packy copy", async () => {
+    const fetchImpl = vi.fn(async (
+      url: string | URL | Request,
+      init?: RequestInit
+    ) => {
+      void url;
+      void init;
+      return new Response([
+        `data: ${JSON.stringify({
+          type: "response.output_text.delta",
+          delta: `${validTitle}\n`
+        })}`,
+        `data: ${JSON.stringify({
+          type: "response.output_text.delta",
+          delta: validDescription
+        })}`,
+        "data: [DONE]",
+        ""
+      ].join("\n\n"), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      });
+    });
+
+    await expect(generateProductCopyWithPacky({
+      input: productInput(),
+      env: { PACKY_TEXT_API_KEY: "text-key" },
+      fetchImpl: fetchImpl as typeof fetch
+    })).resolves.toEqual({ title: validTitle, description: validDescription });
+
+    const [, init] = fetchImpl.mock.calls[0];
+    expect(JSON.parse(String(init?.body))).toMatchObject({ stream: true });
   });
 
   test("reads text from nested Responses output content", async () => {
