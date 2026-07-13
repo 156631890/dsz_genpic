@@ -68,7 +68,7 @@ interface PackyImageResult {
   b64_json?: string;
 }
 
-class PackyImageTransportError extends Error {
+export class PackyImageTransportError extends Error {
   constructor() {
     super("Packy image generation request failed");
     this.name = "PackyImageTransportError";

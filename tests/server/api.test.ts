@@ -422,6 +422,25 @@ describe("API app", () => {
     });
   });
 
+  test.each([
+    ["undefined", undefined],
+    ["an array", ["title", "description"]],
+    ["a non-string title", { title: 7, description: "Public description" }],
+    ["a blank title", { title: "   ", description: "Public description" }],
+    ["a non-string description", { title: "Public title", description: false }],
+    ["a blank description", { title: "Public title", description: "   " }]
+  ])("rejects %s from the product copy adapter", async (_label, result) => {
+    const generateProductCopy = vi.fn(async () =>
+      result as unknown as GeneratedProductCopy
+    );
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .send({ input: productInput })
+      .expect(502);
+
+    expect(response.body).toEqual({ error: "Invalid copy generation response" });
+  });
+
   test("returns a safe status when default product copy generation fails", async () => {
     const response = await request(createApp({ env: {} }))
       .post("/api/generate-product-copy")
@@ -535,7 +554,7 @@ describe("API app", () => {
     [pngImage, "image/png", "one.png"],
     [jpegImage, "image/jpeg", "one.jpg"],
     [webpImage, "image/webp", "one.webp"]
-  ])("accepts an authentic supported image signature", async (data, contentType, filename) => {
+  ])("accepts recognized supported image magic bytes", async (data, contentType, filename) => {
     const generateProductImageRole = vi.fn(async (input) => ({
       role: input.role,
       imageUrl: "https://cdn.example.com/result.png"
@@ -655,6 +674,54 @@ describe("API app", () => {
       role: "main",
       imageUrl: "https://cdn.example.com/main.png"
     });
+  });
+
+  test.each([
+    ["undefined", undefined],
+    ["a mismatched role", { role: "side", imageUrl: "https://cdn.example.com/main.png" }],
+    ["a javascript URL", { role: "main", imageUrl: "javascript:alert(1)" }],
+    ["a file URL", { role: "main", imageUrl: "file:///private/result.png" }],
+    ["a relative URL", { role: "main", imageUrl: "/result.png" }],
+    ["a malformed URL", { role: "main", imageUrl: "not a url" }],
+    ["a non-string URL", { role: "main", imageUrl: 7 }]
+  ])("rejects %s from the product image role adapter", async (_label, result) => {
+    const generateProductImageRole = vi.fn(async () =>
+      result as unknown as GeneratedProductImage
+    );
+    const response = await request(createApp({ generateProductImageRole }))
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+      .expect(502);
+
+    expect(response.body).toEqual({ error: "Invalid image generation response" });
+  });
+
+  test("maps default Packy image transport failures to a safe unavailable response", async () => {
+    const secret = "provider-secret C:\\private\\token.txt";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockRejectedValue(
+      new TypeError(`fetch failed ${secret}`)
+    );
+
+    try {
+      const response = await request(createApp({
+        env: { PACKY_API_KEY: "image-transport-test-key" }
+      }))
+        .post("/api/generate-product-image-role")
+        .field("role", "main")
+        .field("sellingPoints", "valid")
+        .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+        .expect(503);
+
+      expect(response.body).toEqual({
+        error: "Packy image generation unavailable"
+      });
+      expect(response.text).not.toMatch(/provider-secret|private|token|fetch failed/i);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   test("a copy failure does not affect a later image role request", async () => {

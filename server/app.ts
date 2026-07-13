@@ -10,6 +10,7 @@ import {
 import { generateDszFieldsWithPacky } from "./services/dszRules.js";
 import { uploadImagesToImgbb } from "./services/imageUploader.js";
 import {
+  PackyImageTransportError,
   generateShopifyProductImagesWithPacky,
   generateImageWithPacky,
   generateProductImageRoleWithPacky,
@@ -137,7 +138,7 @@ export function createApp(dependencies: AppDependencies = {}) {
       const result = dependencies.generateProductCopy
         ? await dependencies.generateProductCopy(productInput)
         : await generateProductCopyWithPacky({ input: productInput, env });
-      const { title, description } = result;
+      const { title, description } = validateGeneratedProductCopy(result);
 
       res.json({ title, description });
     } catch (error) {
@@ -210,7 +211,10 @@ export function createApp(dependencies: AppDependencies = {}) {
         const result = dependencies.generateProductImageRole
           ? await dependencies.generateProductImageRole(input)
           : await generateProductImageRoleWithPacky({ ...input, env });
-        const { role: generatedRole, imageUrl } = result;
+        const { role: generatedRole, imageUrl } = validateGeneratedProductImage(
+          result,
+          role
+        );
 
         res.json({ role: generatedRole, imageUrl });
       } catch (error) {
@@ -507,6 +511,48 @@ function isAbsoluteHttpsUrl(value: unknown): value is string {
   }
 }
 
+function validateGeneratedProductCopy(value: unknown): GeneratedProductCopy {
+  if (
+    !isRecord(value) ||
+    typeof value.title !== "string" ||
+    !value.title.trim() ||
+    typeof value.description !== "string" ||
+    !value.description.trim()
+  ) {
+    throw new Error("Invalid copy generation response");
+  }
+
+  return { title: value.title, description: value.description };
+}
+
+function validateGeneratedProductImage(
+  value: unknown,
+  requestedRole: ProductImageRole
+): GeneratedProductImage {
+  if (
+    !isRecord(value) ||
+    value.role !== requestedRole ||
+    !isAbsoluteWebUrl(value.imageUrl)
+  ) {
+    throw new Error("Invalid image generation response");
+  }
+
+  return { role: requestedRole, imageUrl: value.imageUrl };
+}
+
+function isAbsoluteWebUrl(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+
+  try {
+    const protocol = new URL(value).protocol;
+    return protocol === "http:" || protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 function isSupportedImage(file: Express.Multer.File): boolean {
   const buffer = file.buffer;
 
@@ -546,6 +592,20 @@ function mapGenerationError(
 
   if (!(error instanceof Error)) {
     return fallback;
+  }
+
+  if (
+    error.message === "Invalid copy generation response" ||
+    error.message === "Invalid image generation response"
+  ) {
+    return { status: 502, message: error.message };
+  }
+
+  if (kind === "image" && error instanceof PackyImageTransportError) {
+    return {
+      status: 503,
+      message: "Packy image generation unavailable"
+    };
   }
 
   if (kind === "copy" && error instanceof TypeError) {
