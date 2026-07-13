@@ -1,7 +1,13 @@
+// @vitest-environment node
+
 import request from "supertest";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { createApp, type AppDependencies } from "../../server/app";
 import { standardZoneRates } from "../../server/services/dszRules";
+import {
+  extractCanonicalProductFooter,
+  loadProductSystemPrompt
+} from "../../server/services/productCopy";
 import {
   PRODUCT_IMAGE_ROLES,
   type DszProductFields,
@@ -34,6 +40,12 @@ const webpImage = Buffer.concat([
   Buffer.alloc(4),
   Buffer.from("WEBP")
 ]);
+const canonicalProductFooter = extractCanonicalProductFooter(
+  await loadProductSystemPrompt()
+);
+const validGeneratedTitle = "Compact Storage Organiser - Practical Space Saving Design, Easy Everyday Access, Versatile Home and Travel Use";
+const validGeneratedDescription =
+  `<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p>${canonicalProductFooter}`;
 
 const fields: DszProductFields = {
   category: 947,
@@ -339,6 +351,77 @@ describe("API app", () => {
     expect(generateProductImageRole).not.toHaveBeenCalled();
   });
 
+  test("uses the default Packy copy adapter with the validated product input", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          choices: [{
+            message: {
+              content: `${validGeneratedTitle}\n${validGeneratedDescription}`
+            }
+          }]
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      )
+    );
+
+    try {
+      const response = await request(createApp({
+        env: {
+          PACKY_API_KEY: "default-adapter-test-key",
+          PACKY_TEXT_MODEL: "default-adapter-test-model"
+        }
+      }))
+        .post("/api/generate-product-copy")
+        .send({ input: productInput })
+        .expect(200);
+
+      expect(response.body).toEqual({
+        title: validGeneratedTitle,
+        description: validGeneratedDescription
+      });
+      expect(fetchMock).toHaveBeenCalledOnce();
+      const [url, init] = fetchMock.mock.calls[0];
+      const providerBody = JSON.parse(String(init?.body));
+
+      expect(url).toBe("https://www.packyapi.com/v1/chat/completions");
+      expect(init?.headers).toEqual({
+        Authorization: "Bearer default-adapter-test-key",
+        "Content-Type": "application/json"
+      });
+      expect(providerBody.model).toBe("default-adapter-test-model");
+      expect(providerBody.messages[1].content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(`Selling points: ${productInput.sellingPoints}`)
+      });
+      expect(providerBody.messages[1].content).toContainEqual({
+        type: "image_url",
+        image_url: { url: productInput.imageUrls[0] }
+      });
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  test("returns only whitelisted product copy fields", async () => {
+    const generateProductCopy = vi.fn(async () => ({
+      title: "Public title",
+      description: "Public description",
+      secret: "provider-token",
+      internal: { traceId: "private-trace" },
+      debug: true
+    }));
+    const response = await request(createApp({ generateProductCopy }))
+      .post("/api/generate-product-copy")
+      .send({ input: productInput })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      title: "Public title",
+      description: "Public description"
+    });
+  });
+
   test("returns a safe status when default product copy generation fails", async () => {
     const response = await request(createApp({ env: {} }))
       .post("/api/generate-product-copy")
@@ -552,6 +635,27 @@ describe("API app", () => {
       expect(generateProductCopy).not.toHaveBeenCalled();
     }
   );
+
+  test("returns only whitelisted product image role fields", async () => {
+    const generateProductImageRole = vi.fn(async () => ({
+      role: "main" as const,
+      imageUrl: "https://cdn.example.com/main.png",
+      secret: "provider-token",
+      internal: { traceId: "private-trace" },
+      debug: true
+    }));
+    const response = await request(createApp({ generateProductImageRole }))
+      .post("/api/generate-product-image-role")
+      .field("role", "main")
+      .field("sellingPoints", "valid")
+      .attach("images", pngImage, { filename: "one.png", contentType: "image/png" })
+      .expect(200);
+
+    expect(response.body).toEqual({
+      role: "main",
+      imageUrl: "https://cdn.example.com/main.png"
+    });
+  });
 
   test("a copy failure does not affect a later image role request", async () => {
     const generateProductCopy = vi.fn(async () => {

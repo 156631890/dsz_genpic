@@ -136,9 +136,10 @@ export function createApp(dependencies: AppDependencies = {}) {
       const productInput = validation.input;
       const result = dependencies.generateProductCopy
         ? await dependencies.generateProductCopy(productInput)
-        : await generateProductCopyWithPacky({ ...productInput, env });
+        : await generateProductCopyWithPacky({ input: productInput, env });
+      const { title, description } = result;
 
-      res.json(result);
+      res.json({ title, description });
     } catch (error) {
       sendGenerationError(res, error, "copy");
     }
@@ -209,8 +210,9 @@ export function createApp(dependencies: AppDependencies = {}) {
         const result = dependencies.generateProductImageRole
           ? await dependencies.generateProductImageRole(input)
           : await generateProductImageRoleWithPacky({ ...input, env });
+        const { role: generatedRole, imageUrl } = result;
 
-        res.json(result);
+        res.json({ role: generatedRole, imageUrl });
       } catch (error) {
         sendGenerationError(res, error, "image");
       }

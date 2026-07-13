@@ -600,7 +600,7 @@ describe("Packy product copy generation", () => {
     });
     await expect(
       generateProductCopyWithPacky({
-        ...productInput(),
+        input: productInput(),
         env: { PACKY_API_KEY: "test-key" },
         fetchImpl: fetchImpl as typeof fetch
       })
@@ -627,7 +627,7 @@ describe("Packy product copy generation", () => {
   test("requires PACKY_API_KEY without accepting another credential", async () => {
     await expect(
       generateProductCopyWithPacky({
-        ...productInput(),
+        input: productInput(),
         env: { PACKY_IMAGE_API_KEY: "wrong-key" }
       })
     ).rejects.toThrow("Missing PACKY_API_KEY");
@@ -642,7 +642,7 @@ describe("Packy product copy generation", () => {
 
     await expect(
       generateProductCopyWithPacky({
-        ...productInput(),
+        input: productInput(),
         env: { PACKY_API_KEY: "secret-key" },
         fetchImpl: fetchImpl as typeof fetch
       })
@@ -660,7 +660,7 @@ describe("Packy product copy generation", () => {
 
     await expect(
       generateProductCopyWithPacky({
-        ...productInput(),
+        input: productInput(),
         env: { PACKY_API_KEY: "test-key" },
         fetchImpl: fetchImpl as typeof fetch
       })

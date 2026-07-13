@@ -188,12 +188,14 @@ export function validateProductCopy(
 }
 
 export async function generateProductCopyWithPacky(
-  input: ProductInput & {
+  options: {
+    input: ProductInput;
     env?: Record<string, string | undefined>;
     fetchImpl?: typeof fetch;
   }
 ): Promise<GeneratedProductCopy> {
-  const env = input.env || process.env;
+  const { input } = options;
+  const env = options.env || process.env;
   const apiKey = env.PACKY_API_KEY;
 
   if (!apiKey) {
@@ -203,7 +205,7 @@ export async function generateProductCopyWithPacky(
   const systemPrompt = await loadProductSystemPrompt();
   const canonicalFooter = extractCanonicalProductFooter(systemPrompt);
   const baseUrl = (env.PACKY_BASE_URL || "https://www.packyapi.com").replace(/\/+$/, "");
-  const fetcher = input.fetchImpl || fetch;
+  const fetcher = options.fetchImpl || fetch;
   const response = await fetcher(`${baseUrl}/v1/chat/completions`, {
     method: "POST",
     headers: {
