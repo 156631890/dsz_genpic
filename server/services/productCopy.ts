@@ -208,7 +208,7 @@ export async function generateProductCopyWithPacky(
     }],
     store: false
   });
-  let content: string | undefined;
+  let lastContentError: Error | undefined;
 
   for (let attempt = 0; attempt < PACKY_PRODUCT_COPY_MAX_ATTEMPTS; attempt += 1) {
     const response = await fetcher(`${baseUrl}/v1/responses`, {
@@ -224,25 +224,30 @@ export async function generateProductCopyWithPacky(
       throw new Error(`Packy product copy API failed: ${response.status}`);
     }
 
-    content = extractResponsesText(await readJsonResponse(response));
-    if (typeof content === "string" && content.trim()) break;
+    const content = extractResponsesText(await readJsonResponse(response));
+    if (typeof content !== "string" || !content.trim()) continue;
+
+    let copy: GeneratedProductCopy;
+    try {
+      copy = parseProductCopy(content);
+    } catch (error) {
+      lastContentError = error instanceof Error ? error : new Error(String(error));
+      continue;
+    }
+
+    const validationErrors = validateProductCopy(copy, canonicalFooter);
+    if (validationErrors.length > 0) {
+      lastContentError = new Error(
+        `Packy product copy API returned invalid content: ${validationErrors.join(" ")}`
+      );
+      continue;
+    }
+
+    return copy;
   }
 
-  if (typeof content !== "string" || !content.trim()) {
-    throw new Error("Packy product copy API returned empty content.");
-  }
-
-  const copy = parseProductCopy(content);
-  const validationErrors = validateProductCopy(
-    copy,
-    canonicalFooter
-  );
-
-  if (validationErrors.length > 0) {
-    throw new Error(`Packy product copy API returned invalid content: ${validationErrors.join(" ")}`);
-  }
-
-  return copy;
+  if (lastContentError) throw lastContentError;
+  throw new Error("Packy product copy API returned empty content.");
 }
 
 function buildProductCopyInput(input: ProductInput): string {

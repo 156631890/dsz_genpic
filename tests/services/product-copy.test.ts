@@ -695,6 +695,25 @@ describe("Packy product copy generation", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  test("retries Responses whose copy does not satisfy the system prompt", async () => {
+    let attempt = 0;
+    const fetchImpl = vi.fn(async () => {
+      attempt += 1;
+      return new Response(JSON.stringify({
+        output_text: attempt === 1
+          ? `${validTitle}\n<p>Missing the canonical footer.</p>`
+          : `${validTitle}\n${validDescription}`
+      }), { status: 200 });
+    });
+
+    await expect(generateProductCopyWithPacky({
+      input: productInput(),
+      env: { PACKY_TEXT_API_KEY: "text-key" },
+      fetchImpl: fetchImpl as typeof fetch
+    })).resolves.toEqual({ title: validTitle, description: validDescription });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   test("reads text from nested Responses output content", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({
       output: [{
