@@ -433,14 +433,16 @@ async function resolvePackyImageUrls(
         fetchImpl: fetcher
       });
     } catch (error) {
-      if (validateBase64 && error instanceof TypeError) {
-        throw new Error(`Packy generated image delivery failed: ${error.message}`);
+      if (validateBase64) {
+        throw new Error("Generated image delivery failed");
       }
       throw error;
     }
 
     uploaded.imageUrls.forEach((url, index) => {
-      imageUrls[uploadIndexes[index]] = url;
+      imageUrls[uploadIndexes[index]] = validateBase64
+        ? parseAbsoluteWebImageUrl(url, "Generated image delivery failed")
+        : url;
     });
   }
 
@@ -550,7 +552,11 @@ function parsePackyImageResults(
   value: unknown,
   context: string
 ): PackyImageResult[] {
-  if (!isRecord(value) || !Array.isArray(value.data)) {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.data) ||
+    value.data.length !== 1
+  ) {
     throw new Error(`${context} returned malformed response.`);
   }
 
@@ -565,18 +571,10 @@ function parsePackyImageResults(
     let url: string | undefined;
 
     if (rawUrl) {
-      try {
-        const parsedUrl = new URL(rawUrl);
-        if (
-          (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") ||
-          !parsedUrl.hostname
-        ) {
-          throw new Error("unsupported image URL");
-        }
-        url = parsedUrl.toString();
-      } catch {
-        throw new Error(`${context} returned malformed response.`);
-      }
+      url = parseAbsoluteWebImageUrl(
+        rawUrl,
+        `${context} returned malformed response.`
+      );
     }
     const b64Json = typeof entry.b64_json === "string" && entry.b64_json.trim()
       ? entry.b64_json.trim()
@@ -588,6 +586,21 @@ function parsePackyImageResults(
 
     return { url, b64_json: b64Json };
   });
+}
+
+function parseAbsoluteWebImageUrl(value: string, errorMessage: string): string {
+  try {
+    const parsedUrl = new URL(value);
+    if (
+      (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") ||
+      !parsedUrl.hostname
+    ) {
+      throw new Error("unsupported image URL");
+    }
+    return parsedUrl.toString();
+  } catch {
+    throw new Error(errorMessage);
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

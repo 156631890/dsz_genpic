@@ -222,6 +222,68 @@ describe("Packy fixed-role product images", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  test("rejects an empty strict provider result array as malformed", async () => {
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ data: [] }),
+      { status: 200 }
+    )) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "detail",
+        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "must-not-be-used" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Packy Shopify product image API returned malformed response");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  test.each([
+    [
+      "URL",
+      [
+        { url: "https://cdn.example.com/one.png" },
+        { url: "https://cdn.example.com/two.png" }
+      ]
+    ],
+    [
+      "base64",
+      [
+        { b64_json: Buffer.from("one").toString("base64") },
+        { b64_json: Buffer.from("two").toString("base64") }
+      ]
+    ]
+  ])("rejects multiple strict provider %s results without uploading extras", async (_name, data) => {
+    let imgbbCalls = 0;
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        return new Response(JSON.stringify({ data }), { status: 200 });
+      }
+
+      imgbbCalls += 1;
+      return new Response(
+        JSON.stringify({ data: { display_url: "https://i.ibb.co/unexpected.png" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "main",
+        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-key" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Packy Shopify product image API returned malformed response");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(imgbbCalls).toBe(0);
+  });
+
   test.each([
     "http://cdn.example.com/generated.png",
     "https://cdn.example.com/generated.png"
@@ -410,6 +472,77 @@ describe("Packy fixed-role product images", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  test.each([
+    ["relative", "/generated/product.png"],
+    ["malformed", "not a url"],
+    ["javascript", "javascript:alert(1)"],
+    ["file", "file:///tmp/product.png"]
+  ])("rejects a %s ImgBB delivery URL on the strict role path", async (_name, displayUrl) => {
+    const base64 = Buffer.from("valid-image-bytes").toString("base64");
+    let packyCalls = 0;
+    let imgbbCalls = 0;
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        packyCalls += 1;
+        return new Response(
+          JSON.stringify({ data: [{ b64_json: base64 }] }),
+          { status: 200 }
+        );
+      }
+
+      imgbbCalls += 1;
+      return new Response(
+        JSON.stringify({ data: { display_url: displayUrl } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "detail",
+        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-key" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Generated image delivery failed");
+    expect(packyCalls).toBe(1);
+    expect(imgbbCalls).toBe(1);
+  });
+
+  test.each([
+    "https://i.ibb.co/generated.png",
+    "http://i.ibb.co/generated.png"
+  ])("accepts an absolute web ImgBB delivery URL: %s", async (displayUrl) => {
+    const base64 = Buffer.from("valid-image-bytes").toString("base64");
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        return new Response(
+          JSON.stringify({ data: [{ b64_json: base64 }] }),
+          { status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ data: { display_url: displayUrl } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "detail",
+        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-key" },
+        fetchImpl
+      })
+    ).resolves.toEqual({ role: "detail", imageUrl: displayUrl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
   test("rejects malformed base64 with a stable provider error after retries", async () => {
     const fetchImpl = vi.fn(async (url) => {
       expect(String(url)).toBe("https://www.packyapi.com/v1/images/edits");
@@ -435,7 +568,7 @@ describe("Packy fixed-role product images", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  test("does not regenerate when ImgBB delivery throws a TypeError", async () => {
+  test("sanitizes ImgBB transport errors without regenerating the role", async () => {
     const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
     let packyCalls = 0;
     let imgbbCalls = 0;
@@ -449,19 +582,29 @@ describe("Packy fixed-role product images", () => {
       }
 
       imgbbCalls += 1;
-      throw new TypeError("delivery connection failed");
+      throw new TypeError(
+        "fetch failed for https://api.imgbb.com/1/upload?key=imgbb-secret"
+      );
     }) as unknown as typeof fetch;
 
-    await expect(
-      generateProductImageRoleWithPacky({
+    let thrown: unknown;
+    try {
+      await generateProductImageRoleWithPacky({
         images,
         productType: "Cotton underwear",
         sellingPoints: "soft cotton",
         role: "detail",
-        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-key" },
+        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-secret" },
         fetchImpl
-      })
-    ).rejects.toThrow("Packy generated image delivery failed: delivery connection failed");
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe("Generated image delivery failed");
+    expect((thrown as Error).message).not.toContain("imgbb-secret");
+    expect((thrown as Error).message).not.toContain("https://api.imgbb.com");
     expect(packyCalls).toBe(1);
     expect(imgbbCalls).toBe(1);
   });
