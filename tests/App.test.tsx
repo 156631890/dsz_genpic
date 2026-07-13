@@ -155,6 +155,8 @@ describe("service health presentation", () => {
     const health = deferred<Response>();
     vi.stubGlobal("fetch", vi.fn(() => health.promise));
     render(<App />);
+    const healthStatus = screen.getByRole("status", { name: "Service health" });
+    expect(healthStatus).toHaveAttribute("aria-live", "polite");
     expect(screen.getByText("Checking services")).toBeVisible();
 
     health.resolve(response({
@@ -732,6 +734,48 @@ describe("App independent AI workflow", () => {
     expect(within(detail).getByRole("img")).toHaveAttribute("src", oldPreview);
   });
 
+  test.each([
+    ["completion", response({ role: "detail", imageUrl: "https://cdn.example.com/detail.png" }), "success"],
+    ["failure", response({ error: "detail failed" }, 502), "error"]
+  ] as const)("keeps role replacement disabled during generation and enables it after %s",
+    async (_outcome, deferredResponse, terminalStatus) => {
+      const user = userEvent.setup();
+      const detailResponse = deferred<Response>();
+      vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
+        if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
+        if (url === "/api/generate-product-copy") return response({ title: "Title", description: "Description" });
+        if (url === "/api/generate-product-image-role") {
+          const role = roleFromRequest(init);
+          if (role === "detail") return detailResponse.promise;
+          return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      }));
+
+      render(<App />);
+      await fillRequiredInputs(user);
+      await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+      await user.click(screen.getByRole("tab", { name: "Images" }));
+      const detail = screen.getByTestId("image-role-detail");
+      await waitFor(() => expect(detail).toHaveAttribute("data-status", "loading"));
+      const input = within(detail).getByLabelText("Replacement URL for detail");
+      const apply = within(detail).getByRole("button", { name: "应用替换 detail" });
+      expect(input).toBeDisabled();
+      expect(apply).toBeDisabled();
+      expect(within(detail).getByText("生成完成后可应用替换 URL")).toBeVisible();
+
+      detailResponse.resolve(deferredResponse);
+      await waitFor(() => expect(detail).toHaveAttribute("data-status", terminalStatus));
+      expect(input).toBeEnabled();
+      expect(apply).toBeEnabled();
+
+      const replacement = "https://operator.example.com/final-detail.png";
+      await user.type(input, replacement);
+      await user.click(apply);
+      expect(detail).toHaveAttribute("data-status", "success");
+      expect(within(detail).getByRole("img")).toHaveAttribute("src", replacement);
+    });
+
   test("submit remains disabled until all DSZ fields and five role images are ready", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -819,9 +863,9 @@ describe("App independent AI workflow", () => {
     expect(screen.getByTestId("image-task-status")).toHaveAttribute("data-status", "loading");
     expect(screen.getByTestId("image-task-status")).toHaveTextContent("1 个失败");
     await user.click(within(detail).getByRole("button", { name: "重试图片 detail" }));
-    expect(screen.getByRole("status")).toHaveTextContent("生成中");
+    expect(screen.getByRole("status", { name: "Workflow status" })).toHaveTextContent("生成中");
     detailRetry.resolve(response({ role: "detail", imageUrl: "https://cdn.example.com/detail.png" }));
-    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("生成中"));
+    await waitFor(() => expect(screen.getByRole("status", { name: "Workflow status" })).toHaveTextContent("生成中"));
     lifestyle.resolve(response({ role: "lifestyle_2", imageUrl: "https://cdn.example.com/lifestyle_2.png" }));
   });
 

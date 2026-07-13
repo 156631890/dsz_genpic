@@ -146,8 +146,11 @@ function ImageRoleCard({ role, index, state, onRetry, onReplace }: {
 }) {
   const [replacementUrl, setReplacementUrl] = useState("");
   const [replacementError, setReplacementError] = useState("");
+  const replacementDisabled = state.status === "loading";
+  const replacementStatusId = `replacement-${role}-status`;
 
   function applyReplacement() {
+    if (replacementDisabled) return;
     const nextUrl = replacementUrl.trim();
     if (!isHttpsUrl(nextUrl)) {
       setReplacementError("请输入绝对 HTTPS URL");
@@ -176,10 +179,15 @@ function ImageRoleCard({ role, index, state, onRetry, onReplace }: {
         )}
         <label className="replacement-field">Replacement URL
           <input aria-label={`Replacement URL for ${role}`} inputMode="url" value={replacementUrl}
+            disabled={replacementDisabled} aria-describedby={replacementStatusId}
             onChange={(event) => { setReplacementUrl(event.target.value); setReplacementError(""); }} />
         </label>
         <button className="replacement-button" onClick={applyReplacement}
+          disabled={replacementDisabled} aria-describedby={replacementStatusId}
           aria-label={`应用替换 ${role}`}>应用替换</button>
+        <span id={replacementStatusId} className="replacement-note">
+          {replacementDisabled ? "生成完成后可应用替换 URL" : "仅接受绝对 HTTPS URL"}
+        </span>
         {replacementError && <span className="inline-error" role="alert">{replacementError}</span>}
       </div>
     </article>
@@ -642,7 +650,8 @@ export default function App() {
             <p>商品资料生成与提交流程工作台</p>
           </div>
         </div>
-        <div className={`service-context health-${healthStatus}`} aria-label="Service health">
+        <div className={`service-context health-${healthStatus}`} aria-label="Service health"
+          role="status" aria-live="polite">
           {healthStatus === "loading" && <><span>Service health</span><strong>Checking services</strong></>}
           {healthStatus === "error" && <><span>Service health</span><strong>Service status unavailable</strong></>}
           {healthStatus === "success" && serviceHealth && (
@@ -715,7 +724,7 @@ export default function App() {
           <div className="editor-intro">
             <div><span className="section-index">02</span><h2 id="editor-heading">Product record</h2></div>
             <div className={`status status-${statusTone(copyTask.status, uploadStatus)}`}
-              role="status" aria-live="polite">{pageSummary}</div>
+              role="status" aria-label="Workflow status" aria-live="polite">{pageSummary}</div>
           </div>
 
           <TaskStatusCards copyTask={copyTask} uploadSourceTask={uploadSourceTask}

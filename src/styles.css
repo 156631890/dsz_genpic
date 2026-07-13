@@ -264,6 +264,7 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 .replacement-field input { min-height: 34px; padding: 0 8px; font-size: 11px; }
 .replacement-button { min-height: 32px; border: 1px solid var(--line-strong); border-radius: 4px; background: #fff; color: var(--violet); font-size: 10px; font-weight: 750; }
 .replacement-button:hover { border-color: var(--violet); background: var(--violet-wash); }
+.replacement-note { color: var(--muted); font-size: 9px; line-height: 1.35; }
 
 .payload-disclosure { margin-top: 5px; border-top: 1px solid var(--line); padding-top: 14px; }
 .payload-disclosure summary { width: max-content; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 650; }
