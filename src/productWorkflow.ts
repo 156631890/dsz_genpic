@@ -3,8 +3,14 @@ import type {
   GeneratedProductImage,
   ProductImageRole,
   ProductInput,
-  DszProductFields
+  DszProductFields,
+  ProductGenerationResult,
+  ProductIdentity,
+  ProductResearchEvidence
 } from "../shared/product";
+import { AU_ZONE_KEYS } from "../shared/shipping";
+
+const DSZ_ZONE_KEYS = [...AU_ZONE_KEYS, "nz"] as const;
 
 export interface ServiceHealth {
   textConfigured: boolean;
@@ -58,6 +64,28 @@ export async function requestProductCopy(
     throw new Error("商品文案生成失败");
   }
   return { title: data.title, description: data.description };
+}
+
+export async function requestProductFields(input: {
+  input: ProductInput;
+  files: File[];
+  identity: ProductIdentity;
+}, signal?: AbortSignal): Promise<ProductGenerationResult> {
+  const form = new FormData();
+  input.files.forEach((file) => form.append("images", file));
+  form.append("input", JSON.stringify(input.input));
+  form.append("identity", JSON.stringify(input.identity));
+
+  const data = await requestJson("/api/generate-product-fields", {
+    method: "POST",
+    body: form,
+    signal
+  }, "完整商品资料生成失败");
+
+  if (!isRecord(data) || !isProductGenerationResult(data.result)) {
+    throw new Error("完整商品资料生成失败");
+  }
+  return toPublicGenerationResult(data.result);
 }
 
 export async function requestProductImageRole(input: {
@@ -122,7 +150,158 @@ async function requestJson(
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isProductGenerationResult(
+  value: unknown
+): value is ProductGenerationResult {
+  if (
+    !isRecord(value) ||
+    !isDszProductFields(value.fields) ||
+    value.source !== "ai"
+  ) {
+    return false;
+  }
+  if (
+    value.issues !== undefined &&
+    (!Array.isArray(value.issues) || !value.issues.every(isNonemptyString))
+  ) {
+    return false;
+  }
+  return value.evidence === undefined || isResearchEvidence(value.evidence);
+}
+
+function isDszProductFields(value: unknown): value is DszProductFields {
+  if (!isRecord(value) || !isRecord(value.zone_rates)) return false;
+
+  const zoneRates = value.zone_rates;
+  const strings = [
+    "categories",
+    "categoryName",
+    "product_name",
+    "sku",
+    "ean_code",
+    "brand_name",
+    "colour",
+    "description"
+  ];
+  const numbers = [
+    "category",
+    "status",
+    "stock",
+    "weight",
+    "length",
+    "width",
+    "height",
+    "cbm",
+    "vendor_price",
+    "rrp"
+  ];
+
+  return (
+    strings.every((key) => typeof value[key] === "string") &&
+    numbers.every(
+      (key) =>
+        typeof value[key] === "number" &&
+        Number.isFinite(value[key]) &&
+        Number(value[key]) >= 0
+    ) &&
+    Number.isInteger(Number(value.category)) &&
+    value.status === 1 &&
+    value.stock === 1000 &&
+    (value.category === 0
+      ? value.categories === "" && value.categoryName === ""
+      : value.categories === String(value.category) &&
+        isNonemptyString(value.categoryName)) &&
+    /^Elosung1\d{4}$/.test(value.sku as string) &&
+    /^\d{10}$/.test(value.ean_code as string) &&
+    value.brand_name === "Elosung" &&
+    value.enabled === true &&
+    DSZ_ZONE_KEYS.every(
+      (key) =>
+        typeof zoneRates[key] === "number" &&
+        Number.isFinite(zoneRates[key])
+    ) &&
+    Array.isArray(value.images) &&
+    value.images.every((url) => typeof url === "string") &&
+    Array.isArray(value.risk_flags) &&
+    value.risk_flags.every(isNonemptyString) &&
+    Array.isArray(value.review_notes) &&
+    value.review_notes.every(isNonemptyString)
+  );
+}
+
+function isResearchEvidence(value: unknown): value is ProductResearchEvidence {
+  return (
+    isRecord(value) &&
+    typeof value.productType === "string" &&
+    typeof value.variant === "string" &&
+    typeof value.matchSummary === "string" &&
+    ["high", "medium", "low"].includes(String(value.confidence)) &&
+    Array.isArray(value.sources) &&
+    value.sources.every(
+      (source) =>
+        isRecord(source) &&
+        isHttpsUrl(String(source.url)) &&
+        [source.title, source.matchedVariant, source.evidence].every(
+          (item) => typeof item === "string"
+        )
+    )
+  );
+}
+
+function toPublicGenerationResult(
+  value: ProductGenerationResult
+): ProductGenerationResult {
+  const sourceFields = value.fields;
+  const fields: DszProductFields = {
+    category: sourceFields.category,
+    categories: sourceFields.categories,
+    categoryName: sourceFields.categoryName,
+    product_name: sourceFields.product_name,
+    sku: sourceFields.sku,
+    status: sourceFields.status,
+    ean_code: sourceFields.ean_code,
+    stock: sourceFields.stock,
+    weight: sourceFields.weight,
+    length: sourceFields.length,
+    width: sourceFields.width,
+    height: sourceFields.height,
+    cbm: sourceFields.cbm,
+    brand_name: sourceFields.brand_name,
+    colour: sourceFields.colour,
+    enabled: sourceFields.enabled,
+    description: sourceFields.description,
+    vendor_price: sourceFields.vendor_price,
+    rrp: sourceFields.rrp,
+    zone_rates: Object.fromEntries(
+      DSZ_ZONE_KEYS.map((key) => [key, sourceFields.zone_rates[key]])
+    ),
+    images: [...sourceFields.images],
+    risk_flags: [...sourceFields.risk_flags],
+    review_notes: [...sourceFields.review_notes]
+  };
+
+  return {
+    fields,
+    source: "ai",
+    ...(value.evidence ? {
+      evidence: {
+        productType: value.evidence.productType,
+        variant: value.evidence.variant,
+        matchSummary: value.evidence.matchSummary,
+        confidence: value.evidence.confidence,
+        sources: value.evidence.sources.map((source) => ({
+          url: source.url,
+          title: source.title,
+          matchedVariant: source.matchedVariant,
+          evidence: source.evidence
+        }))
+      }
+    } : {}),
+    ...(value.issues ? { issues: [...value.issues] } : {})
+  };
 }
 
 function isNonemptyString(value: unknown): value is string {

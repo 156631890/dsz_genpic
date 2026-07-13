@@ -33,7 +33,12 @@ import {
   generateImageWithPacky
 } from "../../server/services/packyImages";
 import { buildImgbbUploadRequest } from "../../server/services/imageUploader";
-import type { DszProductFields, ProductInput } from "../../shared/product";
+import { requestProductFields } from "../../src/productWorkflow";
+import type {
+  DszProductFields,
+  ProductInput,
+  ProductResearchEvidence
+} from "../../shared/product";
 
 const input: ProductInput = {
   sellingPoints:
@@ -157,6 +162,56 @@ function copyStream(): Response {
 }
 
 describe("complete DSZ field generation", () => {
+  test("posts source files, facts and identity to the full-field endpoint", async () => {
+    const evidence: ProductResearchEvidence = {
+      productType: "Cotton thong underwear",
+      variant: "Black / White / Beige",
+      matchSummary: "The source image matches the cited supplier listing.",
+      confidence: "high",
+      sources: [{
+        url: "https://supplier.example.com/item",
+        title: "Supplier product listing",
+        matchedVariant: "Black / White / Beige",
+        evidence: "The listing supplies the same variant and package facts."
+      }]
+    };
+    const sourceFile = new File([
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    ], "product.png", { type: "image/png" });
+    const fetchMock = vi.fn(async (
+      _url: string | URL | Request,
+      _init?: RequestInit
+    ) => new Response(JSON.stringify({
+      result: {
+        fields: { ...fields, providerDebug: "discard-me" },
+        source: "ai",
+        evidence,
+        issues: [],
+        providerDebug: "discard-me"
+      }
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await requestProductFields({
+      input,
+      files: [sourceFile],
+      identity: { sku: "Elosung10000", eanCode: "4748549810" }
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/generate-product-fields");
+    const body = fetchMock.mock.calls[0][1]?.body as FormData;
+    expect(body.getAll("images")).toHaveLength(1);
+    expect(JSON.parse(String(body.get("identity")))).toEqual({
+      sku: "Elosung10000",
+      eanCode: "4748549810"
+    });
+    expect(result).not.toHaveProperty("providerDebug");
+    expect(result.fields).not.toHaveProperty("providerDebug");
+  });
+
   test("researches, writes copy and calculates deterministic DSZ fields", async () => {
     const fetchImpl = vi.fn()
       .mockResolvedValueOnce(researchStream())
