@@ -207,7 +207,10 @@ export async function generateProductCopyWithPacky(
     body: JSON.stringify({
       model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol",
       instructions: systemPrompt,
-      input: buildProductCopyInput(input),
+      input: [{
+        role: "user",
+        content: [{ type: "input_text", text: buildProductCopyInput(input) }]
+      }],
       store: false
     })
   });

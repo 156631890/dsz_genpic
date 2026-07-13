@@ -624,7 +624,10 @@ describe("Packy product copy generation", () => {
     expect(body).toEqual({
       model: "gpt-5.6-sol",
       instructions: exactSystemPrompt,
-      input: expectedUserMessage.content[0].text,
+      input: [{
+        role: "user",
+        content: [{ type: "input_text", text: expectedUserMessage.content[0].text }]
+      }],
       store: false
     });
   });

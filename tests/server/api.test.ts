@@ -431,9 +431,15 @@ describe("API app", () => {
       });
       expect(providerBody.model).toBe("default-adapter-test-model");
       expect(providerBody.instructions).toBeTruthy();
-      expect(providerBody.input).toContain(`Selling points: ${productInput.sellingPoints}`);
+      expect(providerBody.input).toEqual([{
+        role: "user",
+        content: [{
+          type: "input_text",
+          text: expect.stringContaining(`Selling points: ${productInput.sellingPoints}`)
+        }]
+      }]);
       expect(providerBody.store).toBe(false);
-      expect(providerBody.input).not.toContain(productInput.imageUrls[0]);
+      expect(JSON.stringify(providerBody.input)).not.toContain(productInput.imageUrls[0]);
     } finally {
       fetchMock.mockRestore();
     }
