@@ -26,6 +26,7 @@ const ALLOWED_HTML_TAGS = new Set([
   "</li>",
   "<br />"
 ]);
+const PACKY_PRODUCT_COPY_MAX_ATTEMPTS = 3;
 
 export async function loadProductSystemPrompt(): Promise<string> {
   return readFile(PRODUCT_PROMPT_URL, "utf8");
@@ -198,28 +199,34 @@ export async function generateProductCopyWithPacky(
   const canonicalFooter = extractCanonicalProductFooter(systemPrompt);
   const baseUrl = (env.PACKY_BASE_URL || "https://www.packyapi.com").replace(/\/+$/, "");
   const fetcher = options.fetchImpl || fetch;
-  const response = await fetcher(`${baseUrl}/v1/responses`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol",
-      instructions: systemPrompt,
-      input: [{
-        role: "user",
-        content: [{ type: "input_text", text: buildProductCopyInput(input) }]
-      }],
-      store: false
-    })
+  const requestBody = JSON.stringify({
+    model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol",
+    instructions: systemPrompt,
+    input: [{
+      role: "user",
+      content: [{ type: "input_text", text: buildProductCopyInput(input) }]
+    }],
+    store: false
   });
+  let content: string | undefined;
 
-  if (!response.ok) {
-    throw new Error(`Packy product copy API failed: ${response.status}`);
+  for (let attempt = 0; attempt < PACKY_PRODUCT_COPY_MAX_ATTEMPTS; attempt += 1) {
+    const response = await fetcher(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: requestBody
+    });
+
+    if (!response.ok) {
+      throw new Error(`Packy product copy API failed: ${response.status}`);
+    }
+
+    content = extractResponsesText(await readJsonResponse(response));
+    if (typeof content === "string" && content.trim()) break;
   }
-
-  const content = extractResponsesText(await readJsonResponse(response));
 
   if (typeof content !== "string" || !content.trim()) {
     throw new Error("Packy product copy API returned empty content.");

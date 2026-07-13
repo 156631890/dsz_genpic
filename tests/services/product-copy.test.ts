@@ -655,6 +655,7 @@ describe("Packy product copy generation", () => {
         fetchImpl: fetchImpl as typeof fetch
       })
     ).rejects.toThrow(/^Packy product copy API failed: 503$/);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   test("rejects an empty assistant content response", async () => {
@@ -673,6 +674,25 @@ describe("Packy product copy generation", () => {
         fetchImpl: fetchImpl as typeof fetch
       })
     ).rejects.toThrow(/empty content/i);
+  });
+
+  test("retries completed Responses that contain no output text", async () => {
+    let attempt = 0;
+    const fetchImpl = vi.fn(async () => {
+      attempt += 1;
+      return new Response(JSON.stringify(
+        attempt < 3
+          ? { status: "completed", output: [] }
+          : { output_text: `${validTitle}\n${validDescription}` }
+      ), { status: 200 });
+    });
+
+    await expect(generateProductCopyWithPacky({
+      input: productInput(),
+      env: { PACKY_TEXT_API_KEY: "text-key" },
+      fetchImpl: fetchImpl as typeof fetch
+    })).resolves.toEqual({ title: validTitle, description: validDescription });
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   test("reads text from nested Responses output content", async () => {
