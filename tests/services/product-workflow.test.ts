@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,8 +19,13 @@ import {
   generateDszFieldsWithPacky,
   loadRuleDocuments,
   parseGeneratedFields,
-  standardZoneRates
+  standardZoneRates,
+  type RuleDocuments
 } from "../../server/services/dszRules";
+import {
+  extractCanonicalProductFooter,
+  loadProductSystemPrompt
+} from "../../server/services/productCopy";
 import { generateCopyWithPacky } from "../../server/services/copyGenerator";
 import {
   buildPackyEditRequest,
@@ -73,6 +80,164 @@ const fields: DszProductFields = {
   risk_flags: [],
   review_notes: []
 };
+
+const workflowPng = Buffer.from("89504e470d0a1a0a", "hex");
+const workflowTitle =
+  "Multicolour Tourmaline and Pearl Necklace - Layered Statement Design, Adjustable Everyday Styling, Gift Ready Jewellery";
+const workflowFooter = extractCanonicalProductFooter(await loadProductSystemPrompt());
+const workflowDescription =
+  `<p><strong>Product Overview</strong></p><p>A multicolour necklace for everyday styling.</p>${workflowFooter}`;
+const workflowRules: RuleDocuments = {
+  fieldRules: "Current DSZ field rules.",
+  productPrompt: await loadProductSystemPrompt(),
+  categoryMapping:
+    "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+  uploadSop: "Current full product upload SOP.",
+  productUploadAu: "Current Australian upload rules."
+};
+
+function workflowSse(events: unknown[]): Response {
+  return new Response([
+    ...events.map((event) => `data: ${JSON.stringify(event)}`),
+    "data: [DONE]",
+    ""
+  ].join("\n\n"), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" }
+  });
+}
+
+function researchStream(confidence: "high" | "medium" = "high"): Response {
+  const sourceUrl = "https://supplier.example.com/item";
+  return workflowSse([
+    {
+      type: "response.output_text.delta",
+      delta: JSON.stringify({
+        identity: {
+          productType: "Tourmaline style stone and pearl necklace",
+          variant: "Multicolour",
+          matchSummary: "The image and listing show the same necklace and colourway."
+        },
+        category: {
+          id: 950,
+          name: "Fashion / Women's Fashion / Women's Jewellery"
+        },
+        colour: "Multicolor",
+        package: {
+          weightKg: 0.12,
+          lengthCm: 12,
+          widthCm: 8,
+          heightCm: 3,
+          confidence
+        },
+        sources: [{
+          url: sourceUrl,
+          title: "Supplier necklace listing",
+          matchedVariant: "Multicolour",
+          evidence: "The listing supplies the retail package measurements.",
+          exactProductMatch: true,
+          package: { weightKg: 0.12, lengthCm: 12, widthCm: 8, heightCm: 3 }
+        }],
+        riskFlags: [],
+        reviewNotes: []
+      })
+    },
+    {
+      type: "response.output_text.annotation.added",
+      annotation: { type: "url_citation", url: sourceUrl }
+    }
+  ]);
+}
+
+function copyStream(): Response {
+  return workflowSse([{
+    type: "response.output_text.delta",
+    delta: `${workflowTitle}\n${workflowDescription}`
+  }]);
+}
+
+describe("complete DSZ field generation", () => {
+  test("researches, writes copy and calculates deterministic DSZ fields", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(researchStream())
+      .mockResolvedValueOnce(copyStream()) as unknown as typeof fetch;
+
+    const result = await generateDszFieldsWithPacky({
+      productInput: {
+        sellingPoints: "Multicolour tourmaline style stone and pearl necklace",
+        categoryHint: "Women's Jewellery",
+        purchasePriceCny: 20,
+        images: ["source.png"],
+        imageUrls: []
+      },
+      images: [{ mimeType: "image/png", buffer: workflowPng }],
+      identity: { sku: "Elosung10000", eanCode: "4748549810" },
+      env: { PACKY_TEXT_API_KEY: "text-key" },
+      fetchImpl,
+      ruleDocuments: workflowRules
+    });
+
+    expect(result.fields).toMatchObject({
+      category: 950,
+      categories: "950",
+      categoryName: "Fashion / Women's Fashion / Women's Jewellery",
+      product_name: workflowTitle,
+      sku: "Elosung10000",
+      status: 1,
+      ean_code: "4748549810",
+      stock: 1000,
+      weight: 0.12,
+      length: 12,
+      width: 8,
+      height: 3,
+      brand_name: "Elosung",
+      colour: "Multicolor",
+      enabled: true,
+      description: workflowDescription
+    });
+    expect(result.fields.cbm).toBe(calculateCbm(12, 8, 3));
+    expect(result.fields.vendor_price).toBe(calculateVendorPrice({
+      weightKg: 0.12,
+      lengthCm: 12,
+      widthCm: 8,
+      heightCm: 3,
+      purchasePriceCny: 20
+    }));
+    expect(result.fields.zone_rates.nz).toBe(20);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("does not estimate package measurements without exact evidence", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce(researchStream("medium"))
+      .mockResolvedValueOnce(copyStream()) as unknown as typeof fetch;
+    const result = await generateDszFieldsWithPacky({
+      productInput: {
+        sellingPoints: "Multicolour tourmaline style stone and pearl necklace",
+        categoryHint: "Women's Jewellery",
+        purchasePriceCny: 20,
+        images: ["source.png"],
+        imageUrls: []
+      },
+      images: [{ mimeType: "image/png", buffer: workflowPng }],
+      identity: { sku: "Elosung10000", eanCode: "4748549810" },
+      env: { PACKY_TEXT_API_KEY: "text-key" },
+      fetchImpl,
+      ruleDocuments: workflowRules
+    });
+
+    expect(result.fields).toMatchObject({
+      weight: 0,
+      length: 0,
+      width: 0,
+      height: 0,
+      cbm: 0
+    });
+    expect(result.issues).toContain(
+      "Package weight and dimensions need verified same-product evidence."
+    );
+  });
+});
 
 describe("DSZ field rules", () => {
   test("builds Packy messages with uploaded image URLs and rule snippets", () => {

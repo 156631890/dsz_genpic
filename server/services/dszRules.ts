@@ -4,12 +4,18 @@ import { fileURLToPath } from "node:url";
 import type {
   DszProductFields,
   ProductGenerationResult,
+  ProductIdentity,
   ProductInput
 } from "../../shared/product.js";
 import {
   buildShippingZoneRates,
   type ShippingMeasurements
 } from "../../shared/shipping.js";
+import { generateProductCopyWithPacky } from "./productCopy.js";
+import {
+  generateProductResearchWithPacky,
+  type ProductResearchImage
+} from "./productResearch.js";
 
 export interface RuleDocuments {
   fieldRules: string;
@@ -394,10 +400,20 @@ export function parseGeneratedFields(rawContent: string): DszProductFields {
 
 export async function generateDszFieldsWithPacky(input: {
   productInput: ProductInput;
+  images?: ProductResearchImage[];
+  identity?: ProductIdentity;
   env?: Record<string, string | undefined>;
   fetchImpl?: typeof fetch;
   ruleDocuments?: RuleDocuments;
 }): Promise<ProductGenerationResult> {
+  if (input.images && input.identity) {
+    return generateEvidenceBackedDszFields({
+      ...input,
+      images: input.images,
+      identity: input.identity
+    });
+  }
+
   const env = input.env || process.env;
   const apiKey =
     env.PACKY_FIELD_API_KEY || env.PACKY_TEXT_API_KEY || env.PACKY_API_KEY;
@@ -473,6 +489,116 @@ export async function generateDszFieldsWithPacky(input: {
   return {
     fields: completeGeneratedFields(repairedFields, input.productInput, identity),
     source: "ai"
+  };
+}
+
+async function generateEvidenceBackedDszFields(input: {
+  productInput: ProductInput;
+  images: ProductResearchImage[];
+  identity: ProductIdentity;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
+  ruleDocuments?: RuleDocuments;
+}): Promise<ProductGenerationResult> {
+  if (
+    !/^Elosung1\d{4}$/.test(input.identity.sku) ||
+    !/^\d{10}$/.test(input.identity.eanCode)
+  ) {
+    throw new Error("Product identity is invalid");
+  }
+
+  const ruleDocuments =
+    input.ruleDocuments || await loadRuleDocuments(input.env);
+  const research = await generateProductResearchWithPacky({
+    input: input.productInput,
+    images: input.images,
+    fieldRules: ruleDocuments.fieldRules,
+    categoryMapping: ruleDocuments.categoryMapping,
+    uploadSop: ruleDocuments.uploadSop,
+    productUploadAu: ruleDocuments.productUploadAu,
+    env: input.env,
+    fetchImpl: input.fetchImpl
+  });
+  const weight = research.package.weightKg || 0;
+  const length = research.package.lengthCm || 0;
+  const width = research.package.widthCm || 0;
+  const height = research.package.heightCm || 0;
+  const hasMeasurements = [weight, length, width, height].every(
+    (value) => value > 0
+  );
+  const purchasePrice = input.productInput.purchasePriceCny;
+  const hasPriceInputs =
+    hasMeasurements &&
+    typeof purchasePrice === "number" &&
+    purchasePrice > 0;
+  const vendorPrice = hasPriceInputs
+    ? calculateVendorPrice({
+        weightKg: weight,
+        lengthCm: length,
+        widthCm: width,
+        heightCm: height,
+        purchasePriceCny: purchasePrice
+      })
+    : 0;
+  const verifiedResearchFacts = [
+    `Product type: ${research.evidence.productType}`,
+    `Variant: ${research.evidence.variant}`,
+    research.category.id > 0 ? `Category: ${research.category.name}` : "",
+    research.colour !== "N/A" ? `Colour: ${research.colour}` : "",
+    hasMeasurements ? `Package weight kg: ${weight}` : "",
+    hasMeasurements
+      ? `Package dimensions cm: ${length} x ${width} x ${height}`
+      : ""
+  ].filter(Boolean).join("\n");
+  const copy = await generateProductCopyWithPacky({
+    input: input.productInput,
+    images: input.images,
+    verifiedResearchFacts,
+    env: input.env,
+    fetchImpl: input.fetchImpl
+  });
+  const issues = [...research.issues];
+
+  if (!hasPriceInputs) {
+    issues.push("Purchase price is required to calculate Vendor Price and RRP.");
+  }
+
+  const fields: DszProductFields = {
+    category: research.category.id,
+    categories: research.category.id > 0 ? String(research.category.id) : "",
+    categoryName: research.category.name,
+    product_name: copy.title,
+    sku: input.identity.sku,
+    status: 1,
+    ean_code: input.identity.eanCode,
+    stock: 1000,
+    weight,
+    length,
+    width,
+    height,
+    cbm: hasMeasurements ? calculateCbm(length, width, height) : 0,
+    brand_name: "Elosung",
+    colour: research.colour,
+    enabled: true,
+    description: copy.description,
+    vendor_price: hasPriceInputs ? vendorPrice : 0,
+    rrp: hasPriceInputs ? round(vendorPrice * 2, 2) : 0,
+    zone_rates: standardZoneRates({
+      actualWeightKg: weight,
+      lengthCm: length,
+      widthCm: width,
+      heightCm: height
+    }),
+    images: [],
+    risk_flags: research.riskFlags,
+    review_notes: [...research.reviewNotes, ...issues]
+  };
+
+  return {
+    fields,
+    source: "ai",
+    evidence: research.evidence,
+    issues
   };
 }
 
@@ -731,11 +857,6 @@ function createDefaultIdentity(): ProductIdentity {
     sku: formatSku(10001),
     eanCode: "4748549810"
   };
-}
-
-interface ProductIdentity {
-  sku: string;
-  eanCode: string;
 }
 
 function guessCategory(input: ProductInput) {
