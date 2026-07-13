@@ -378,7 +378,10 @@ export function validateProductResearch(options: {
     issues.push("Package sources conflict and need review.");
   }
 
-  const requestedColour = options.input.colour || document.colour;
+  const requestedColour = options.input.colour ||
+    (/\bmulticolou?r(?:ed)?\b/i.test(options.input.sellingPoints)
+      ? "Multicolor"
+      : document.colour);
   const colourParts = requestedColour.split(" / ");
   const colourValid =
     requestedColour === "N/A" ||

@@ -534,10 +534,8 @@ async function generateEvidenceBackedDszFields(input: {
     (value) => value > 0
   );
   const purchasePrice = input.productInput.purchasePriceCny;
-  const hasPriceInputs =
-    hasMeasurements &&
-    typeof purchasePrice === "number" &&
-    purchasePrice > 0;
+  const hasPurchasePrice = typeof purchasePrice === "number" && purchasePrice > 0;
+  const hasPriceInputs = hasMeasurements && hasPurchasePrice;
   const vendorPrice = hasPriceInputs
     ? calculateVendorPrice({
         weightKg: weight,
@@ -549,8 +547,12 @@ async function generateEvidenceBackedDszFields(input: {
     : 0;
   const issues = [...research.issues];
 
-  if (!hasPriceInputs) {
+  if (!hasPurchasePrice) {
     issues.push("Purchase price is required to calculate Vendor Price and RRP.");
+  } else if (!hasMeasurements) {
+    issues.push(
+      "Verified package measurements are required to calculate Vendor Price and RRP."
+    );
   }
 
   const fields: DszProductFields = {

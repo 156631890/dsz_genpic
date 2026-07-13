@@ -325,6 +325,12 @@ describe("complete DSZ field generation", () => {
     expect(result.issues).toContain(
       "Package weight and dimensions need verified same-product evidence."
     );
+    expect(result.issues).toContain(
+      "Verified package measurements are required to calculate Vendor Price and RRP."
+    );
+    expect(result.issues).not.toContain(
+      "Purchase price is required to calculate Vendor Price and RRP."
+    );
   });
 });
 

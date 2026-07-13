@@ -388,4 +388,24 @@ describe("product research request", () => {
     });
     expect(result.colour).toBe("Black / White / Beige");
   });
+
+  test("normalizes multicolour selling points to the DSZ colour value", () => {
+    const raw = researchFixture();
+    const result = validateProductResearch({
+      raw: {
+        ...raw,
+        colour: "Gold-tone with pink and purple accents"
+      },
+      annotatedUrls: ["https://supplier.example.com/item"],
+      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      input: {
+        sellingPoints: "Multicolour tourmaline and pearl necklace",
+        images: [],
+        imageUrls: []
+      }
+    });
+
+    expect(result.colour).toBe("Multicolor");
+    expect(result.issues).not.toContain("Colour needs review.");
+  });
 });
