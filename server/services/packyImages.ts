@@ -1,4 +1,5 @@
 import { uploadImagesToImgbb } from "./imageUploader.js";
+import { uploadImagesToGithub } from "./githubImageStorage.js";
 import type {
   GeneratedProductImage,
   ProductImageRole
@@ -429,13 +430,24 @@ async function resolvePackyImageUrls(
 
   if (uploadFiles.length > 0) {
     let uploaded: { imageUrls: string[] };
+    const githubConfigured = Boolean(
+      env.GITHUB_IMAGE_TOKEN &&
+      env.GITHUB_IMAGE_REPOSITORY &&
+      env.GITHUB_IMAGE_BRANCH
+    );
 
     try {
-      uploaded = await uploadImagesToImgbb({
-        files: uploadFiles,
-        env,
-        fetchImpl: fetcher
-      });
+      uploaded = githubConfigured
+        ? await uploadImagesToGithub({
+            files: uploadFiles,
+            env,
+            fetchImpl: fetcher
+          })
+        : await uploadImagesToImgbb({
+            files: uploadFiles,
+            env,
+            fetchImpl: fetcher
+          });
     } catch (error) {
       if (validateBase64) {
         throw new Error("Generated image delivery failed");

@@ -491,6 +491,51 @@ describe("Packy fixed-role product images", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  test("stores b64_json on GitHub when GitHub image storage is configured", async () => {
+    const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const fetchSpy = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        return new Response(
+          JSON.stringify({ data: [{ b64_json: tinyPng }] }),
+          { status: 200 }
+        );
+      }
+
+      expect(String(url)).toMatch(
+        /^https:\/\/api\.github\.com\/repos\/156631890\/dsz_genpic\/contents\/generated-images\/\d{4}\/\d{2}\/[0-9a-f-]+\.png$/
+      );
+      expect(init?.method).toBe("PUT");
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        branch: "generated-images",
+        content: tinyPng
+      });
+      return new Response("{}", { status: 201 });
+    });
+    const fetchImpl = fetchSpy as unknown as typeof fetch;
+
+    const result = await generateProductImageRoleWithPacky({
+      images,
+      productType: "Cotton underwear",
+      sellingPoints: "soft cotton",
+      role: "main",
+      env: {
+        PACKY_API_KEY: "role-key",
+        IMGBB_API_KEY: "unused-imgbb-key",
+        GITHUB_IMAGE_TOKEN: "github-token",
+        GITHUB_IMAGE_REPOSITORY: "156631890/dsz_genpic",
+        GITHUB_IMAGE_BRANCH: "generated-images"
+      },
+      fetchImpl
+    });
+
+    expect(result.role).toBe("main");
+    expect(result.imageUrl).toMatch(
+      /^https:\/\/raw\.githubusercontent\.com\/156631890\/dsz_genpic\/generated-images\/generated-images\/\d{4}\/\d{2}\/[0-9a-f-]+\.png$/
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(fetchSpy.mock.calls.some(([url]) => String(url).includes("imgbb.com"))).toBe(false);
+  });
+
   test.each([
     ["relative", "/generated/product.png"],
     ["malformed", "not a url"],
