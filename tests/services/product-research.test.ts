@@ -124,6 +124,65 @@ describe("product research request", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
+  test("uses a compact evidence request after a transient full-rule failure", async () => {
+    let callCount = 0;
+    const fetchImpl = vi.fn(async (_url, init) => {
+      callCount += 1;
+      const body = JSON.parse(String(init?.body));
+      const serialized = JSON.stringify(body);
+
+      if (callCount === 1) {
+        expect(serialized).toContain("Current full upload SOP.");
+        expect(serialized).toContain("Current Australian upload rules.");
+        return new Response("", { status: 503 });
+      }
+
+      expect(body).toMatchObject({
+        model: "gpt-5.6-sol",
+        stream: true,
+        tools: [{ type: "web_search" }]
+      });
+      expect(serialized).toContain(
+        "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
+      );
+      expect(serialized).toContain("exact same product and variant");
+      expect(serialized).not.toContain("Current DSZ field rules.");
+      expect(serialized).not.toContain("Current full upload SOP.");
+      expect(serialized).not.toContain("Current Australian upload rules.");
+      return new Response(JSON.stringify({
+        output_text: JSON.stringify(researchFixture())
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await generateProductResearchWithPacky({
+      input: {
+        sellingPoints: "Multicolour stone and pearl necklace",
+        images: [],
+        imageUrls: []
+      },
+      images: [png],
+      fieldRules: "Current DSZ field rules.",
+      categoryMapping:
+        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      uploadSop: "Current full upload SOP.",
+      productUploadAu: "Current Australian upload rules.",
+      env: {
+        PACKY_TEXT_API_KEY: "text-key",
+        PACKY_TEXT_MODEL: "gpt-5.6-sol"
+      },
+      fetchImpl
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(result.category).toEqual({
+      id: 950,
+      name: "Fashion / Women's Fashion / Women's Jewellery"
+    });
+  });
+
   test("sends source images, current rules and web search to GPT-5.6 SOL", () => {
     const body = buildProductResearchRequest({
       input: {

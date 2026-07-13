@@ -188,6 +188,59 @@ function packageSignature(value: ResearchPackage): string {
 export function buildProductResearchRequest(
   options: ProductResearchRequestOptions
 ) {
+  return buildResearchResponseRequest(options, [
+    "Identify this exact product and return strict JSON only.",
+    "Search the web for the same product and variant before returning package measurements.",
+    "Prefer manufacturer or supplier pages, then the exact 1688 listing, then an exact marketplace listing.",
+    "Similar-product estimates are forbidden.",
+    "DSZ FIELD RULES:",
+    options.fieldRules,
+    "CATEGORY MAPPING:",
+    options.categoryMapping,
+    "FULL UPLOAD SOP:",
+    options.uploadSop,
+    "AU PRODUCT RULES:",
+    options.productUploadAu,
+    "PRODUCT INPUT:",
+    JSON.stringify(options.input),
+    "Return identity, category, colour, package, sources, riskFlags and reviewNotes.",
+    "Each source must include url, title, matchedVariant, evidence, exactProductMatch,",
+    "and its own package object with weightKg, lengthCm, widthCm and heightCm,",
+    "or package null when that source does not explicitly publish every measurement.",
+    "Every source URL in the JSON must be emitted with a web-search URL citation annotation.",
+    "Set exactProductMatch false for similar products. Never infer a missing source value.",
+    "Do not harmonise conflicting sources."
+  ].join("\n"));
+}
+
+function buildCompactProductResearchRequest(
+  options: ProductResearchRequestOptions
+) {
+  return buildResearchResponseRequest(options, [
+    "Identify the exact same product and variant shown in the supplied images.",
+    "Search the web before answering. Prefer an exact manufacturer, supplier, 1688, or marketplace listing.",
+    "Similar-product estimates are forbidden and must have exactProductMatch false.",
+    "Use package measurements only when an exact-product source explicitly publishes every value.",
+    "Manual product input takes precedence over researched facts.",
+    "Choose category.id and category.name as an exact pair from CATEGORY MAPPING.",
+    "CATEGORY MAPPING:",
+    options.categoryMapping,
+    "PRODUCT INPUT:",
+    JSON.stringify(options.input),
+    "Return strict JSON only with identity, category, colour, package, sources, riskFlags and reviewNotes.",
+    "identity requires productType, variant and matchSummary.",
+    "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
+    "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
+    "Set source.package to null unless that source publishes all four package values.",
+    "Emit every source URL with a web-search URL citation annotation.",
+    "Never hide conflicting source measurements."
+  ].join("\n"));
+}
+
+function buildResearchResponseRequest(
+  options: ProductResearchRequestOptions,
+  prompt: string
+) {
   const content = [
     ...options.images.map((image) => ({
       type: "input_image" as const,
@@ -195,29 +248,7 @@ export function buildProductResearchRequest(
     })),
     {
       type: "input_text" as const,
-      text: [
-        "Identify this exact product and return strict JSON only.",
-        "Search the web for the same product and variant before returning package measurements.",
-        "Prefer manufacturer or supplier pages, then the exact 1688 listing, then an exact marketplace listing.",
-        "Similar-product estimates are forbidden.",
-        "DSZ FIELD RULES:",
-        options.fieldRules,
-        "CATEGORY MAPPING:",
-        options.categoryMapping,
-        "FULL UPLOAD SOP:",
-        options.uploadSop,
-        "AU PRODUCT RULES:",
-        options.productUploadAu,
-        "PRODUCT INPUT:",
-        JSON.stringify(options.input),
-        "Return identity, category, colour, package, sources, riskFlags and reviewNotes.",
-        "Each source must include url, title, matchedVariant, evidence, exactProductMatch,",
-        "and its own package object with weightKg, lengthCm, widthCm and heightCm,",
-        "or package null when that source does not explicitly publish every measurement.",
-        "Every source URL in the JSON must be emitted with a web-search URL citation annotation.",
-        "Set exactProductMatch false for similar products. Never infer a missing source value.",
-        "Do not harmonise conflicting sources."
-      ].join("\n")
+      text: prompt
     }
   ];
 
@@ -379,13 +410,25 @@ export async function generateProductResearchWithPacky(options: {
     /\/+$/,
     ""
   );
-  const request = {
+  const fullRequest = {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify(buildProductResearchRequest({
+      input: options.input,
+      images: options.images,
+      fieldRules: options.fieldRules,
+      categoryMapping: options.categoryMapping,
+      uploadSop: options.uploadSop,
+      productUploadAu: options.productUploadAu,
+      model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
+    }))
+  };
+  const compactRequest = {
+    ...fullRequest,
+    body: JSON.stringify(buildCompactProductResearchRequest({
       input: options.input,
       images: options.images,
       fieldRules: options.fieldRules,
@@ -405,7 +448,10 @@ export async function generateProductResearchWithPacky(options: {
     attempt += 1
   ) {
     try {
-      response = await fetcher(`${baseUrl}/v1/responses`, request);
+      response = await fetcher(
+        `${baseUrl}/v1/responses`,
+        attempt === 1 ? fullRequest : compactRequest
+      );
     } catch (error) {
       if (
         !(error instanceof TypeError) ||
