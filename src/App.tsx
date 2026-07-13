@@ -6,7 +6,7 @@ import {
   Sparkles,
   Upload
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   PRODUCT_IMAGE_ROLES,
   type DszProductFields,
@@ -17,6 +17,7 @@ import { buildShippingZoneRates, calculatePackageCbm } from "../shared/shipping"
 import {
   requestProductCopy,
   requestProductImageRole,
+  uploadProductFields,
   uploadSourceImages
 } from "./productWorkflow";
 
@@ -118,6 +119,11 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("等待上传原始产品图片");
   const [uploadResult, setUploadResult] = useState<unknown>(null);
+  const operationIdRef = useRef(0);
+  const controllersRef = useRef(new Set<AbortController>());
+  const aiFieldEditVersionRef = useRef(0);
+  const uploadAttemptRef = useRef(0);
+  const uploadControllerRef = useRef<AbortController | null>(null);
 
   const generatedImages = useMemo(
     () => PRODUCT_IMAGE_ROLES
@@ -131,17 +137,87 @@ export default function App() {
   const workflowLoading = copyTask.status === "loading" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "loading"
   );
+  const hasTaskError = copyTask.status === "error" || PRODUCT_IMAGE_ROLES.some(
+    (role) => imageRoles[role].status === "error"
+  );
+  const taskSummary = useMemo(() => {
+    if (workflowLoading) return `生成中：图片 ${completedImageCount}/5`;
+    if (hasTaskError) return `生成已结束，部分任务失败：图片 ${completedImageCount}/5`;
+    if (copyTask.status === "success" && completedImageCount === 5) return "AI 生成任务成功";
+    return `等待生成：图片 ${completedImageCount}/5`;
+  }, [completedImageCount, copyTask.status, hasTaskError, workflowLoading]);
+  const isReadyToSubmit = copyTask.status === "success" && !workflowLoading && !hasTaskError &&
+    PRODUCT_IMAGE_ROLES.every((role) => imageRoles[role].status === "success" &&
+      isHttpsUrl(imageRoles[role].imageUrl)) &&
+    generatedImages.length === 5 && hasRequiredDszFields(fields);
+  const hasTaskActivity = copyTask.status !== "idle" || PRODUCT_IMAGE_ROLES.some(
+    (role) => imageRoles[role].status !== "idle"
+  );
+  const pageSummary = uploadStatus !== "idle"
+    ? message
+    : hasTaskActivity ? taskSummary : message;
+
+  useEffect(() => () => {
+    operationIdRef.current += 1;
+    controllersRef.current.forEach((controller) => controller.abort());
+    controllersRef.current.clear();
+    uploadControllerRef.current?.abort();
+  }, []);
+
+  function clearUploadResult() {
+    uploadAttemptRef.current += 1;
+    uploadControllerRef.current?.abort();
+    uploadControllerRef.current = null;
+    setUploadResult(null);
+    setUploadStatus("idle");
+  }
+
+  function invalidateOperation(clearGenerated = false) {
+    operationIdRef.current += 1;
+    controllersRef.current.forEach((controller) => controller.abort());
+    const hadActiveTasks = controllersRef.current.size > 0;
+    controllersRef.current.clear();
+    if (hadActiveTasks || clearGenerated) {
+      setCopyTask(idleTask);
+      setUploadSourceTask(idleTask);
+      setImageRoles(initialRoleStates());
+    }
+  }
+
+  function beginTask(operationId: number): AbortController | null {
+    if (operationId !== operationIdRef.current) return null;
+    const controller = new AbortController();
+    controllersRef.current.add(controller);
+    return controller;
+  }
+
+  function endTask(controller: AbortController) {
+    controllersRef.current.delete(controller);
+  }
+
+  function isCurrent(operationId: number): boolean {
+    return operationId === operationIdRef.current;
+  }
 
   function updateOptionalInput(field: keyof OptionalInputs, value: string) {
+    invalidateOperation();
     setOptionalInputs((current) => ({ ...current, [field]: value }));
+    clearUploadResult();
   }
 
   function updateField(field: keyof DszProductFields, value: string | number | boolean) {
+    if (field === "product_name" || field === "description") {
+      aiFieldEditVersionRef.current += 1;
+    } else {
+      invalidateOperation();
+    }
+    clearUploadResult();
     setFields((current) => {
       const next = { ...current, [field]: value };
       if (field === "categories") {
         const category = Number(value);
-        next.category = Number.isFinite(category) && category > 0 ? category : current.category;
+        next.category = Number.isFinite(category) && category > 0 ? category : 0;
+        next.categoryName = "";
       }
       if (["weight", "length", "width", "height"].includes(String(field))) {
         next.cbm = calculatePackageCbm(next.length, next.width, next.height);
@@ -156,43 +232,61 @@ export default function App() {
     });
   }
 
-  function productInput(imageUrls: string[]): ProductInput {
+  function productInput(imageUrls: string[], fieldSnapshot: DszProductFields): ProductInput {
     return {
       sellingPoints: sellingPoints.trim(),
       categoryHint: optionalInputs.categoryHint.trim() || undefined,
       images: sourceFiles.map((file) => file.name),
       imageUrls,
       purchasePriceCny: optionalNumber(optionalInputs.purchasePriceCny),
-      packageWeightKg: optionalNumber(optionalInputs.packageWeightKg),
-      lengthCm: optionalNumber(optionalInputs.lengthCm),
-      widthCm: optionalNumber(optionalInputs.widthCm),
-      heightCm: optionalNumber(optionalInputs.heightCm)
+      packageWeightKg: fieldSnapshot.weight || undefined,
+      lengthCm: fieldSnapshot.length || undefined,
+      widthCm: fieldSnapshot.width || undefined,
+      heightCm: fieldSnapshot.height || undefined
     };
   }
 
-  async function runCopyTask() {
+  async function runCopyTask(operationId = operationIdRef.current) {
+    const controller = beginTask(operationId);
+    if (!controller) return;
+    const filesSnapshot = [...sourceFiles];
+    const fieldSnapshot = { ...fields };
+    const editVersion = aiFieldEditVersionRef.current;
     setCopyTask({ status: "loading", error: "" });
     setUploadSourceTask({ status: "loading", error: "" });
     try {
-      const imageUrls = await uploadSourceImages(sourceFiles);
+      const imageUrls = await uploadSourceImages(filesSnapshot, controller.signal);
+      if (!isCurrent(operationId)) return;
       setUploadSourceTask({ status: "success", error: "" });
-      const copy = await requestProductCopy(productInput(imageUrls));
-      setFields((current) => ({
-        ...current,
-        product_name: copy.title,
-        description: copy.description
-      }));
+      const copy = await requestProductCopy(productInput(imageUrls, fieldSnapshot), controller.signal);
+      if (!isCurrent(operationId)) return;
+      if (aiFieldEditVersionRef.current === editVersion) {
+        setFields((current) => ({
+          ...current,
+          product_name: copy.title,
+          description: copy.description
+        }));
+        clearUploadResult();
+      }
       setCopyTask({ status: "success", error: "" });
     } catch (error) {
+      if (!isCurrent(operationId) || controller.signal.aborted) return;
       const text = errorMessage(error, "商品文案生成失败");
       setUploadSourceTask((current) => current.status === "loading"
         ? { status: "error", error: text }
         : current);
       setCopyTask({ status: "error", error: text });
+    } finally {
+      endTask(controller);
     }
   }
 
-  async function runImageRole(role: ProductImageRole) {
+  async function runImageRole(role: ProductImageRole, operationId = operationIdRef.current) {
+    const controller = beginTask(operationId);
+    if (!controller) return;
+    const filesSnapshot = [...sourceFiles];
+    const sellingPointsSnapshot = sellingPoints.trim();
+    const productTypeSnapshot = optionalInputs.categoryHint.trim() || sellingPointsSnapshot || "Product";
     setImageRoles((current) => ({
       ...current,
       [role]: { status: "loading", error: "", imageUrl: current[role].imageUrl }
@@ -200,15 +294,18 @@ export default function App() {
     try {
       const result = await requestProductImageRole({
         role,
-        files: sourceFiles,
-        productType: optionalInputs.categoryHint.trim() || sellingPoints.trim() || "Product",
-        sellingPoints: sellingPoints.trim()
-      });
+        files: filesSnapshot,
+        productType: productTypeSnapshot,
+        sellingPoints: sellingPointsSnapshot
+      }, controller.signal);
+      if (!isCurrent(operationId)) return;
       setImageRoles((current) => ({
         ...current,
         [role]: { status: "success", error: "", imageUrl: result.imageUrl }
       }));
+      clearUploadResult();
     } catch (error) {
+      if (!isCurrent(operationId) || controller.signal.aborted) return;
       setImageRoles((current) => ({
         ...current,
         [role]: {
@@ -217,6 +314,8 @@ export default function App() {
           imageUrl: current[role].imageUrl
         }
       }));
+    } finally {
+      endTask(controller);
     }
   }
 
@@ -230,35 +329,36 @@ export default function App() {
       return;
     }
 
-    setMessage("AI 文案和五张角色图片正在独立生成");
-    setUploadResult(null);
+    invalidateOperation(true);
+    const operationId = operationIdRef.current;
+    clearUploadResult();
     await Promise.allSettled([
-      runCopyTask(),
-      ...PRODUCT_IMAGE_ROLES.map((role) => runImageRole(role))
+      runCopyTask(operationId),
+      ...PRODUCT_IMAGE_ROLES.map((role) => runImageRole(role, operationId))
     ]);
-    setMessage("AI 生成任务已完成，请检查各项结果");
   }
 
   async function uploadProduct() {
     const fieldsForUpload = { ...fields, images: generatedImages };
+    const uploadAttempt = uploadAttemptRef.current + 1;
+    uploadAttemptRef.current = uploadAttempt;
+    uploadControllerRef.current?.abort();
+    const controller = new AbortController();
+    uploadControllerRef.current = controller;
     setUploadStatus("loading");
     setMessage("正在提交到 Dropshipzone 后台");
     try {
-      const response = await fetch("/api/upload-product", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fields: fieldsForUpload })
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.errors?.join("；") || data.error || "上传失败");
-      }
-      setUploadResult(data);
+      const data = await uploadProductFields(fieldsForUpload, controller.signal);
+      if (uploadAttempt !== uploadAttemptRef.current) return;
+      setUploadResult({ fields: fieldsForUpload, result: data });
       setUploadStatus("success");
-      setMessage(data.mode === "mock" ? "已生成后台 payload" : "后台上传成功");
+      setMessage(isRecord(data) && data.mode === "mock" ? "已生成后台 payload" : "后台上传成功");
     } catch (error) {
+      if (uploadAttempt !== uploadAttemptRef.current || controller.signal.aborted) return;
       setUploadStatus("error");
       setMessage(errorMessage(error, "上传失败"));
+    } finally {
+      if (uploadControllerRef.current === controller) uploadControllerRef.current = null;
     }
   }
 
@@ -269,7 +369,13 @@ export default function App() {
           <h1>商品上传工作台</h1>
           <p>上传原始图和卖点，AI 文案与五张角色图片独立生成，人工校对后提交后台。</p>
         </div>
-        <div className={`status status-${statusTone(copyTask.status, uploadStatus)}`}>{message}</div>
+        <div
+          className={`status status-${statusTone(copyTask.status, uploadStatus)}`}
+          role="status"
+          aria-live="polite"
+        >
+          {pageSummary}
+        </div>
       </header>
 
       <section className="workspace" aria-label="商品上传工作区">
@@ -282,7 +388,11 @@ export default function App() {
               type="file"
               accept="image/png,image/jpeg,image/webp"
               multiple
-              onChange={(event) => setSourceFiles(Array.from(event.target.files || []))}
+              onChange={(event) => {
+                invalidateOperation(true);
+                setSourceFiles(Array.from(event.target.files || []));
+                clearUploadResult();
+              }}
             />
             <strong>{sourceFiles.length ? `已选择 ${sourceFiles.length} 张` : "选择 JPG / PNG / WebP"}</strong>
           </label>
@@ -295,7 +405,11 @@ export default function App() {
             卖点
             <textarea
               value={sellingPoints}
-              onChange={(event) => setSellingPoints(event.target.value)}
+              onChange={(event) => {
+                invalidateOperation(true);
+                setSellingPoints(event.target.value);
+                clearUploadResult();
+              }}
               rows={8}
               placeholder="例如：亲肤柔软，高弹不勒，多尺码多配色..."
             />
@@ -322,15 +436,17 @@ export default function App() {
                 onChange={(event) => updateOptionalInput("heightCm", event.target.value)} /></label>
             </div>
           </div>
-          <button onClick={startGeneration} disabled={workflowLoading}>
+          <button onClick={startGeneration}>
             {workflowLoading ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
             开始 AI 生成
           </button>
           <div data-testid="copy-task-status">
             文案：{copyTask.status}
             {uploadSourceTask.status === "loading" && "（正在上传源图）"}
-            {copyTask.error && <span>{copyTask.error}</span>}
-            {copyTask.status === "error" && <button onClick={runCopyTask}>重试</button>}
+            {copyTask.error && <span role="alert">{copyTask.error}</span>}
+            {copyTask.status === "error" && (
+              <button onClick={() => runCopyTask()} aria-label="重试标题与描述">重试</button>
+            )}
           </div>
           <div>图片进度 {completedImageCount}/5</div>
         </section>
@@ -378,13 +494,19 @@ export default function App() {
                   <strong>{role}</strong>
                   {state.imageUrl && <img src={state.imageUrl} alt={`生成图片 ${role}`} />}
                   {state.status === "loading" && <span>生成中</span>}
-                  {state.error && <span>{state.error}</span>}
-                  {state.status === "error" && <button onClick={() => runImageRole(role)}>重试</button>}
+                  {state.error && <span role="alert">{state.error}</span>}
+                  {state.status === "error" && (
+                    <button onClick={() => runImageRole(role)} aria-label={`重试图片 ${role}`}>重试</button>
+                  )}
                 </div>
               );
             })}
           </div>
-          <button className="primary-submit" onClick={uploadProduct} disabled={uploadStatus === "loading"}>
+          <button
+            className="primary-submit"
+            onClick={uploadProduct}
+            disabled={!isReadyToSubmit || uploadStatus === "loading"}
+          >
             {uploadStatus === "loading" ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
             上传到后台
           </button>
@@ -412,4 +534,36 @@ function statusTone(...statuses: Status[]): Status {
   if (statuses.includes("loading")) return "loading";
   if (statuses.includes("success")) return "success";
   return "idle";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function hasRequiredDszFields(fields: DszProductFields): boolean {
+  return Boolean(
+    fields.product_name.trim() &&
+    fields.sku.trim() &&
+    fields.categories.trim() &&
+    fields.ean_code.trim() &&
+    fields.brand_name.trim() &&
+    fields.description.trim() &&
+    fields.status > 0 &&
+    fields.stock >= 0 &&
+    fields.weight > 0 &&
+    fields.length > 0 &&
+    fields.width > 0 &&
+    fields.height > 0 &&
+    fields.cbm > 0 &&
+    fields.vendor_price > 0 &&
+    fields.rrp > 0
+  );
 }

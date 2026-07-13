@@ -2,27 +2,40 @@ import type {
   GeneratedProductCopy,
   GeneratedProductImage,
   ProductImageRole,
-  ProductInput
+  ProductInput,
+  DszProductFields
 } from "../shared/product";
 
-export async function uploadSourceImages(files: File[]): Promise<string[]> {
+export async function uploadSourceImages(files: File[], signal?: AbortSignal): Promise<string[]> {
   const form = new FormData();
   files.forEach((file) => form.append("images", file));
   const data = await requestJson("/api/upload-images", {
     method: "POST",
-    body: form
+    body: form,
+    signal
   }, "图片上传失败");
-  return (data as { imageUrls: string[] }).imageUrls;
+  const imageUrls = isRecord(data) ? data.imageUrls : undefined;
+  if (!Array.isArray(imageUrls) || imageUrls.length === 0 ||
+    !imageUrls.every((url) => typeof url === "string" && isHttpsUrl(url))) {
+    throw new Error("图片上传失败");
+  }
+  return imageUrls;
 }
 
 export async function requestProductCopy(
-  input: ProductInput
+  input: ProductInput,
+  signal?: AbortSignal
 ): Promise<GeneratedProductCopy> {
-  return await requestJson("/api/generate-product-copy", {
+  const data = await requestJson("/api/generate-product-copy", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ input })
-  }, "商品文案生成失败") as GeneratedProductCopy;
+    body: JSON.stringify({ input }),
+    signal
+  }, "商品文案生成失败");
+  if (!isRecord(data) || !isNonemptyString(data.title) || !isNonemptyString(data.description)) {
+    throw new Error("商品文案生成失败");
+  }
+  return { title: data.title, description: data.description };
 }
 
 export async function requestProductImageRole(input: {
@@ -30,17 +43,35 @@ export async function requestProductImageRole(input: {
   files: File[];
   productType: string;
   sellingPoints: string;
-}): Promise<GeneratedProductImage> {
+}, signal?: AbortSignal): Promise<GeneratedProductImage> {
   const form = new FormData();
   input.files.forEach((file) => form.append("images", file));
   form.append("role", input.role);
   form.append("productType", input.productType);
   form.append("sellingPoints", input.sellingPoints);
 
-  return await requestJson("/api/generate-product-image-role", {
+  const data = await requestJson("/api/generate-product-image-role", {
     method: "POST",
-    body: form
-  }, "商品图片生成失败") as GeneratedProductImage;
+    body: form,
+    signal
+  }, "商品图片生成失败");
+  if (!isRecord(data) || data.role !== input.role ||
+    typeof data.imageUrl !== "string" || !isHttpsUrl(data.imageUrl)) {
+    throw new Error("商品图片生成失败");
+  }
+  return { role: input.role, imageUrl: data.imageUrl };
+}
+
+export async function uploadProductFields(
+  fields: DszProductFields,
+  signal?: AbortSignal
+): Promise<unknown> {
+  return requestJson("/api/upload-product", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+    signal
+  }, "上传失败");
 }
 
 async function requestJson(
@@ -61,10 +92,7 @@ async function requestJson(
   }
 
   if (!response.ok) {
-    const error = isRecord(data) && typeof data.error === "string"
-      ? data.error
-      : fallbackError;
-    throw new Error(error);
+    throw new Error(responseError(data, fallbackError));
   }
 
   if (data === undefined) throw new Error(fallbackError);
@@ -73,4 +101,26 @@ async function requestJson(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isNonemptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function responseError(data: unknown, fallback: string): string {
+  if (!isRecord(data)) return fallback;
+  if (isNonemptyString(data.error)) return data.error;
+  if (Array.isArray(data.errors)) {
+    const errors = data.errors.filter(isNonemptyString);
+    if (errors.length > 0) return errors.join("；");
+  }
+  return fallback;
+}
+
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
