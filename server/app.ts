@@ -155,7 +155,7 @@ export function createApp(dependencies: AppDependencies = {}) {
         isRecord(requestBody) ? requestBody.input : undefined
       );
 
-      if (!validation.valid) {
+      if ("error" in validation) {
         res.status(400).json({ error: validation.error });
         return;
       }
@@ -496,7 +496,7 @@ function parseMultipartProductInput(value: unknown): ProductInput {
   }
 
   const validation = parseProductInput(parsed);
-  if (!validation.valid) {
+  if ("error" in validation) {
     throw new ProductFieldRequestError(validation.error);
   }
   return validation.input;
@@ -605,7 +605,7 @@ function parseProductInput(value: unknown): ProductInputValidation {
   const input: ProductInput = {
     sellingPoints,
     imageUrls: value.imageUrls,
-    images: value.images || []
+    images: Array.isArray(value.images) ? value.images : []
   };
 
   if (value.categoryHint !== undefined) {
