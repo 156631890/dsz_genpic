@@ -107,7 +107,7 @@ export function parseProductCopy(raw: string): GeneratedProductCopy {
   const lines = raw
     .split(/\r?\n/)
     .map((line) => line.replace(/^ +| +$/g, ""))
-    .filter((line) => line.trim().length > 0);
+    .filter((line) => line.length > 0);
 
   if (lines.length !== 2) {
     throw new Error("Product copy response must contain exactly two non-empty lines.");
@@ -140,12 +140,14 @@ export function validateProductCopy(
 
   const tags = copy.description.match(/<[^>]*>/g) || [];
   const textNodes = copy.description.replace(/<[^>]*>/g, " ");
+  const decodedDescription = decodeHtmlCharacterReferences(copy.description);
+  const decodedTextNodes = decodeHtmlCharacterReferences(textNodes);
 
-  if (containsUrlOrUri(textNodes)) {
+  if (containsUrlOrUri(decodedTextNodes.value)) {
     errors.push("Description must not contain a URL.");
   }
 
-  if (containsMarkdown(copy.description)) {
+  if (containsMarkdown(decodedDescription.value)) {
     errors.push("Description must not contain Markdown.");
   }
 
@@ -164,7 +166,12 @@ export function validateProductCopy(
     errors.push("Description contains malformed or unsupported HTML.");
   }
 
-  if (!/^[\x20-\x7E]*$/.test(textNodes) || /[?*]/.test(textNodes)) {
+  if (
+    !decodedDescription.valid ||
+    !decodedTextNodes.valid ||
+    !/^[\x20-\x7E]*$/.test(decodedTextNodes.value) ||
+    /[?*<>]/.test(decodedTextNodes.value)
+  ) {
     errors.push("Description text contains a forbidden character.");
   }
 
@@ -270,20 +277,69 @@ function containsMarkdown(value: string): boolean {
 }
 
 function containsUrlOrUri(value: string): boolean {
-  const knownUriScheme = /\b(?:https?|ftp|mailto|tel|data|file|javascript):/i;
-  const lowercaseUriScheme = /\b[a-z][a-z0-9+.-]*:(?=\/\/|[^\s<])/;
-  const structuredUriScheme =
-    /\b[a-z][a-z0-9+.-]*:(?=\/\/|[?#@]|[+-]?\d|[^\s<]*(?:\/|:|%[0-9a-f]{2}))/i;
+  const knownUriScheme =
+    /\b(?:https?|ftps?|mailto|tel|sms|geo|urn|magnet|wss?|data|file|javascript):/i;
   const protocolRelative = /\/\/[a-z0-9]/i;
   const bareDomain = /\b(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}\b/i;
   return (
     knownUriScheme.test(value) ||
-    lowercaseUriScheme.test(value) ||
-    structuredUriScheme.test(value) ||
     protocolRelative.test(value) ||
     /\bwww\./i.test(value) ||
     bareDomain.test(value)
   );
+}
+
+function decodeHtmlCharacterReferences(value: string): {
+  value: string;
+  valid: boolean;
+} {
+  const namedReferences: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    copy: "©",
+    euro: "€",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+    reg: "®",
+    trade: "™"
+  };
+  let valid = true;
+  const decoded = value.replace(
+    /&(#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]+);/gi,
+    (reference, body: string) => {
+      if (!body.startsWith("#")) {
+        const named = namedReferences[body.toLowerCase()];
+
+        if (named !== undefined) return named;
+        valid = false;
+        return reference;
+      }
+
+      const hexadecimal = body[1]?.toLowerCase() === "x";
+      const digits = body.slice(hexadecimal ? 2 : 1);
+      const codePoint = Number.parseInt(digits, hexadecimal ? 16 : 10);
+
+      if (
+        !Number.isFinite(codePoint) ||
+        codePoint < 0 ||
+        codePoint > 0x10ffff ||
+        (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        valid = false;
+        return reference;
+      }
+
+      return String.fromCodePoint(codePoint);
+    }
+  );
+
+  if (/&(?:#[^;\s<]*|[a-z][a-z0-9]+);/i.test(decoded)) {
+    valid = false;
+  }
+
+  return { value: decoded, valid };
 }
 
 function hasInvalidHtmlStructure(value: string): boolean {

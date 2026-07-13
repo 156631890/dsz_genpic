@@ -124,6 +124,12 @@ describe("product copy parsing", () => {
     );
   });
 
+  test("does not hide a tab-only extra line as blank", () => {
+    expect(() => parseProductCopy(`${validTitle}\n\t\n${validDescription}`)).toThrow(
+      /exactly two non-empty lines/i
+    );
+  });
+
   test.each([
     [
       "leading title tab",
@@ -325,6 +331,18 @@ describe("product copy validation", () => {
     })).toEqual([]);
   });
 
+  test("accepts authorized repeated ordinary spaces in footer text", () => {
+    const doubleSpacedFooter = canonicalFooter.replace(
+      "Products that are received",
+      "Products  that  are received"
+    );
+
+    expect(validateCopy({
+      title: validTitle,
+      description: `${descriptionPrefix}${doubleSpacedFooter}`
+    })).toEqual([]);
+  });
+
   test.each([
     ["unclosed p", `<p>Unclosed${canonicalFooter}`],
     ["mismatched strong and p", `<p><strong>Misnested</p></strong>${canonicalFooter}`],
@@ -376,6 +394,64 @@ describe("product copy validation", () => {
     }
   );
 
+  test.each(["&#8482;", "&#x2122;", "&#20013;", "&#x4E2D;"])(
+    "decodes and rejects forbidden numeric entity %s",
+    (entity) => {
+      const description = `${descriptionPrefix}<p>Invalid ${entity} text</p>${canonicalFooter}`;
+      expect(validateCopy({ title: validTitle, description })).toContain(
+        "Description text contains a forbidden character."
+      );
+    }
+  );
+
+  test.each(["&trade;", "&copy;", "&reg;", "&euro;"])(
+    "decodes and rejects forbidden named entity %s",
+    (entity) => {
+      const description = `${descriptionPrefix}<p>Invalid ${entity} text</p>${canonicalFooter}`;
+      expect(validateCopy({ title: validTitle, description })).toContain(
+        "Description text contains a forbidden character."
+      );
+    }
+  );
+
+  test.each(["&#xZZ;", "&#99999999;"])(
+    "rejects malformed or out-of-range numeric entity %s safely",
+    (entity) => {
+      const description = `${descriptionPrefix}<p>Invalid ${entity} text</p>${canonicalFooter}`;
+      expect(validateCopy({ title: validTitle, description })).toContain(
+        "Description text contains a forbidden character."
+      );
+    }
+  );
+
+  test("decodes an encoded URL before URL validation", () => {
+    const description =
+      `${descriptionPrefix}<p>https&#58;&#47;&#47;example&#46;com</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toContain(urlError);
+  });
+
+  test("decodes encoded Markdown before Markdown validation", () => {
+    const description =
+      `${descriptionPrefix}<p>&#42;&#42;bold&#42;&#42;</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toContain(markdownError);
+  });
+
+  test("accepts amp as a decoded ordinary ampersand", () => {
+    const description = `${descriptionPrefix}<p>Storage &amp; organisation.</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toEqual([]);
+  });
+
+  test("rejects unknown named entities safely", () => {
+    const description = `${descriptionPrefix}<p>Unknown &bogus; entity.</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toContain(
+      "Description text contains a forbidden character."
+    );
+  });
+
   test.each([
     "http://example.com/path",
     "https://example.com/path",
@@ -383,7 +459,8 @@ describe("product copy validation", () => {
     "example.com",
     "//example.com/path",
     "ftp://example.com/file",
-    "mailto:buyer@example.com"
+    "mailto:buyer@example.com",
+    "tel:+61412345678"
   ])("rejects URL or URI form %s", (url) => {
     const description = `${descriptionPrefix}<p>${url}</p>${canonicalFooter}`;
     expect(validateCopy({ title: validTitle, description })).toContain(urlError);
@@ -395,8 +472,7 @@ describe("product copy validation", () => {
     "urn:isbn:9780141036144",
     "magnet:?xt=urn:btih:abcdef",
     "ws://example.com/socket",
-    "wss://example.com/socket",
-    "custom:resource/path"
+    "wss://example.com/socket"
   ])("rejects generic URI scheme %s", (uri) => {
     const description = `${descriptionPrefix}<p>${uri}</p>${canonicalFooter}`;
 
@@ -409,8 +485,7 @@ describe("product copy validation", () => {
     "URN:ISBN:9780141036144",
     "Magnet:?xt=urn:btih:abcdef",
     "WS://example.com/socket",
-    "WsS://example.com/socket",
-    "CUSTOM:resource/path"
+    "WsS://example.com/socket"
   ])("rejects case-insensitive URI scheme %s", (uri) => {
     const description = `${descriptionPrefix}<p>${uri}</p>${canonicalFooter}`;
 
@@ -452,6 +527,12 @@ describe("product copy validation", () => {
 
   test("does not treat ordinary colon-separated prose as a URL scheme", () => {
     const description = `<p>Note:Use only as intended.</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toEqual([]);
+  });
+
+  test("does not reject an unknown alphabetic colon token as a URI scheme", () => {
+    const description = `<p>Custom:resource/path is an internal label.</p>${canonicalFooter}`;
 
     expect(validateCopy({ title: validTitle, description })).toEqual([]);
   });
