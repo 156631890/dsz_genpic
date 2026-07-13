@@ -9,16 +9,19 @@ import {
   PRODUCT_IMAGE_ROLES,
   type DszProductFields,
   type ProductImageRole,
-  type ProductInput
+  type ProductIdentity,
+  type ProductInput,
+  type ProductResearchEvidence
 } from "../shared/product";
 import { buildShippingZoneRates, calculateBillableWeightKg, calculatePackageCbm } from "../shared/shipping";
 import {
-  requestProductCopy,
+  requestProductFields,
   requestProductImageRole,
   requestServiceHealth,
   type ServiceHealth,
   uploadProductFields
 } from "./productWorkflow";
+import { reserveProductIdentity } from "./productIdentity";
 
 type Status = "idle" | "loading" | "success" | "error" | "stale";
 
@@ -41,7 +44,7 @@ interface OptionalInputs {
 
 const idleTask: TaskState = { status: "idle", error: "" };
 const MAX_SOURCE_IMAGES = 4;
-const MAX_SOURCE_IMAGE_BYTES = 5 * 1024 * 1024;
+const MAX_SOURCE_IMAGE_BATCH_BYTES = 4_000_000;
 const IMAGE_ROLE_CONCURRENCY = 2;
 const emptyOptionalInputs: OptionalInputs = {
   categoryHint: "",
@@ -104,11 +107,13 @@ function initialRoleStates(): Record<ProductImageRole, ImageRoleState> {
 function NumericInput({
   value,
   onCommit,
-  inputMode = "decimal"
+  inputMode = "decimal",
+  ariaLabel
 }: {
   value: number;
   onCommit: (value: number) => void;
   inputMode?: "decimal" | "numeric";
+  ariaLabel?: string;
 }) {
   const [buffer, setBuffer] = useState(String(value));
   const editingRef = useRef(false);
@@ -130,7 +135,7 @@ function NumericInput({
     onCommit(parsed);
   }
 
-  return <input inputMode={inputMode} value={buffer}
+  return <input inputMode={inputMode} value={buffer} aria-label={ariaLabel}
     onFocus={() => { editingRef.current = true; }}
     onChange={(event) => setBuffer(event.target.value)}
     onBlur={commit}
@@ -235,14 +240,14 @@ function TaskStatusCards({
     <section className="task-strip" aria-label="AI generation status">
       <article className={`task-card task-${copyTask.status}`} data-testid="copy-task-status"
         data-status={copyTask.status}>
-        <div className="task-title"><span>GPT-5.6 SOL</span><strong>Title & description</strong></div>
+        <div className="task-title"><span>GPT-5.6 SOL</span><strong>Complete product data & copy</strong></div>
         <span className="state-label">{statusLabel(copyTask.status)}</span>
         <span className="sr-only">{copyTask.status}</span>
         {uploadSourceTask.status === "loading" && <small>正在上传源图</small>}
         {copyTask.error && <span className="inline-error" role="alert">{copyTask.error}</span>}
         {copyTask.status === "error" && (
           <button className="text-button" onClick={onRetryCopy}
-            aria-label="重试标题与描述">重试文案</button>
+            aria-label="重试完整商品资料">重试完整商品资料</button>
         )}
       </article>
       <article data-testid="image-task-status" data-status={imageStatus}
@@ -259,34 +264,38 @@ function TaskStatusCards({
 function DetailsPanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate: UpdateField }) {
   return (
     <div className="field-grid details-grid">
-      <label>Category<input value={fields.categories}
+      <label>Category <span className="field-origin">GPT-assisted</span><input aria-label="Category" value={fields.categories}
         onChange={(event) => onUpdate("categories", event.target.value)} /></label>
       <label data-ai-field="true">Product Name <span className="ai-marker">AI</span>
         <input aria-label="Product Name" value={fields.product_name}
           onChange={(event) => onUpdate("product_name", event.target.value)} /></label>
-      <label>SKU<input value={fields.sku}
-        onChange={(event) => onUpdate("sku", event.target.value)} /></label>
+      <label>SKU <span className="field-origin">Browser-reserved</span><input aria-label="SKU" value={fields.sku}
+        onChange={(event) => onUpdate("sku", event.target.value)} />
+        <small className="identity-note">Unique in this browser for the current operator.</small>
+      </label>
       <label>Status<select value={fields.status}
         onChange={(event) => onUpdate("status", Number(event.target.value))}>
         <option value={1}>Active</option><option value={0}>Inactive</option>
       </select></label>
-      <label>EAN Code<input value={fields.ean_code}
-        onChange={(event) => onUpdate("ean_code", event.target.value)} /></label>
+      <label>EAN Code <span className="field-origin">Browser-reserved</span><input aria-label="EAN Code" value={fields.ean_code}
+        onChange={(event) => onUpdate("ean_code", event.target.value)} />
+        <small className="identity-note">Local reservation; it is not shared across devices.</small>
+      </label>
       <label>Quantity<NumericInput inputMode="numeric" value={fields.stock}
         onCommit={(value) => onUpdate("stock", value)} /></label>
-      <label>Package Weight kg<NumericInput value={fields.weight}
+      <label>Package Weight kg <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Package Weight kg" value={fields.weight}
         onCommit={(value) => onUpdate("weight", value)} /></label>
-      <label>Length cm<NumericInput value={fields.length}
+      <label>Length cm <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Length cm" value={fields.length}
         onCommit={(value) => onUpdate("length", value)} /></label>
-      <label>Width cm<NumericInput value={fields.width}
+      <label>Width cm <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Width cm" value={fields.width}
         onCommit={(value) => onUpdate("width", value)} /></label>
-      <label>Height cm<NumericInput value={fields.height}
+      <label>Height cm <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Height cm" value={fields.height}
         onCommit={(value) => onUpdate("height", value)} /></label>
-      <label>CBM m3 <span className="automatic-marker">Automatic</span>
+      <label>CBM m3 <span className="automatic-marker">Rule-calculated</span>
         <input aria-label="CBM m3" readOnly value={fields.cbm} /></label>
       <label>Brand Name<input value={fields.brand_name}
         onChange={(event) => onUpdate("brand_name", event.target.value)} /></label>
-      <label>Colour<input value={fields.colour}
+      <label>Colour <span className="field-origin">GPT-assisted</span><input aria-label="Colour" value={fields.colour}
         onChange={(event) => onUpdate("colour", event.target.value)} /></label>
       <label className="toggle-field">Enable Product <input type="checkbox" checked={fields.enabled}
         onChange={(event) => onUpdate("enabled", event.target.checked)} /></label>
@@ -302,9 +311,9 @@ function DetailsPanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate
 function PricePanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate: UpdateField }) {
   return (
     <div className="field-grid price-grid">
-      <label>Vendor Price<NumericInput value={fields.vendor_price}
+      <label>Vendor Price <span className="field-origin">Rule-calculated</span><NumericInput ariaLabel="Vendor Price" value={fields.vendor_price}
         onCommit={(value) => onUpdate("vendor_price", value)} /></label>
-      <label>Vendor RRP<NumericInput value={fields.rrp}
+      <label>Vendor RRP <span className="field-origin">Rule-calculated</span><NumericInput ariaLabel="Vendor RRP" value={fields.rrp}
         onCommit={(value) => onUpdate("rrp", value)} /></label>
     </div>
   );
@@ -312,7 +321,7 @@ function PricePanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate: 
 
 function ShippingPanel({ billableWeight }: { billableWeight: number }) {
   return <>
-    <div className="billable-weight"><span>Current billable weight</span>
+    <div className="billable-weight"><span>Current billable weight <span className="field-origin">Rule-calculated</span></span>
       <strong>{billableWeight.toFixed(2)} kg</strong></div>
     <div className="shipping-summary">
       <article><span>Australian zones</span><strong>Free</strong><small>All metro and regional zones</small></article>
@@ -337,12 +346,18 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<EditorTab>("details");
   const [serviceHealth, setServiceHealth] = useState<ServiceHealth | null>(null);
   const [healthStatus, setHealthStatus] = useState<"loading" | "success" | "error">("loading");
+  const [researchEvidence, setResearchEvidence] = useState<ProductResearchEvidence | null>(null);
+  const [researchIssues, setResearchIssues] = useState<string[]>([]);
   const copyOperationIdRef = useRef(0);
   const imageOperationIdRef = useRef(0);
   const copyControllersRef = useRef(new Set<AbortController>());
   const imageControllersRef = useRef(new Set<AbortController>());
-  const titleEditVersionRef = useRef(0);
-  const descriptionEditVersionRef = useRef(0);
+  const fieldEditVersionsRef = useRef<Record<keyof DszProductFields, number>>(
+    Object.fromEntries(
+      Object.keys(initialFields).map((key) => [key, 0])
+    ) as Record<keyof DszProductFields, number>
+  );
+  const manualFieldsRef = useRef(new Set<keyof DszProductFields>());
   const uploadAttemptRef = useRef(0);
   const uploadControllerRef = useRef<AbortController | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -433,6 +448,8 @@ export default function App() {
       ? { status: "stale", error: "" }
       : idleTask);
     setUploadSourceTask(idleTask);
+    setResearchEvidence(null);
+    setResearchIssues([]);
     if (scope === "all") {
       imageOperationIdRef.current += 1;
       imageControllersRef.current.forEach((controller) => controller.abort());
@@ -465,9 +482,36 @@ export default function App() {
     clearUploadResult();
   }
 
+  function markManualField(
+    field: keyof DszProductFields,
+    value: string | number | boolean
+  ) {
+    const requiresPositiveNumber = [
+      "categories",
+      "weight",
+      "length",
+      "width",
+      "height",
+      "vendor_price",
+      "rrp"
+    ].includes(String(field));
+    const cleared = typeof value === "string"
+      ? value.trim() === "" || (requiresPositiveNumber && !(Number(value) > 0))
+      : typeof value === "number" && requiresPositiveNumber
+        ? !(value > 0)
+        : false;
+
+    if (cleared) manualFieldsRef.current.delete(field);
+    else manualFieldsRef.current.add(field);
+    if (field === "categories") {
+      if (cleared) manualFieldsRef.current.delete("category");
+      else manualFieldsRef.current.add("category");
+    }
+  }
+
   function updateField(field: keyof DszProductFields, value: string | number | boolean) {
-    if (field === "product_name") titleEditVersionRef.current += 1;
-    if (field === "description") descriptionEditVersionRef.current += 1;
+    markManualField(field, value);
+    fieldEditVersionsRef.current[field] += 1;
     if (["weight", "length", "width", "height"].includes(String(field))) {
       invalidateGeneration("copy");
     }
@@ -499,6 +543,9 @@ export default function App() {
       images: sourceFiles.map((file) => file.name),
       imageUrls,
       purchasePriceCny: optionalNumber(optionalInputs.purchasePriceCny),
+      categoryId: fieldSnapshot.category || undefined,
+      categoryName: fieldSnapshot.categoryName || undefined,
+      colour: fieldSnapshot.colour || undefined,
       packageWeightKg: fieldSnapshot.weight || undefined,
       lengthCm: fieldSnapshot.length || undefined,
       widthCm: fieldSnapshot.width || undefined,
@@ -506,32 +553,99 @@ export default function App() {
     };
   }
 
+  function reserveIdentity(fieldSnapshot: DszProductFields): ProductIdentity {
+    const currentSku = /^Elosung1\d{4}$/.test(fieldSnapshot.sku)
+      ? fieldSnapshot.sku
+      : "";
+    const currentEan = /^\d{10}$/.test(fieldSnapshot.ean_code)
+      ? fieldSnapshot.ean_code
+      : "";
+    const reserved = currentSku && currentEan
+      ? null
+      : reserveProductIdentity();
+    const identity = {
+      sku: currentSku || (reserved as ProductIdentity).sku,
+      eanCode: currentEan || (reserved as ProductIdentity).eanCode
+    };
+
+    setFields((current) => ({
+      ...current,
+      sku: /^Elosung1\d{4}$/.test(current.sku) ? current.sku : identity.sku,
+      ean_code: /^\d{10}$/.test(current.ean_code)
+        ? current.ean_code
+        : identity.eanCode
+    }));
+    return identity;
+  }
+
+  function applyGeneratedFields(
+    generated: DszProductFields,
+    versionsAtStart: Record<keyof DszProductFields, number>
+  ) {
+    setFields((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(generated) as Array<keyof DszProductFields>) {
+        if (key === "categoryName" && manualFieldsRef.current.has("categories")) {
+          next.categoryName = generated.categories === current.categories
+            ? generated.categoryName
+            : "";
+          continue;
+        }
+        if (
+          !manualFieldsRef.current.has(key) &&
+          fieldEditVersionsRef.current[key] === versionsAtStart[key]
+        ) {
+          Object.assign(next, { [key]: generated[key] });
+        }
+      }
+      next.cbm = calculatePackageCbm(next.length, next.width, next.height);
+      next.zone_rates = buildShippingZoneRates({
+        actualWeightKg: next.weight,
+        lengthCm: next.length,
+        widthCm: next.width,
+        heightCm: next.height
+      });
+      return next;
+    });
+  }
+
   async function runCopyTask(operationId = copyOperationIdRef.current) {
     const controller = beginCopyTask(operationId);
     if (!controller) return;
     const fieldSnapshot = { ...fields };
-    const titleEditVersion = titleEditVersionRef.current;
-    const descriptionEditVersion = descriptionEditVersionRef.current;
+    const filesSnapshot = [...sourceFiles];
+    const versionsAtStart = { ...fieldEditVersionsRef.current };
     setCopyTask({ status: "loading", error: "" });
+    setResearchEvidence(null);
+    setResearchIssues([]);
+
     try {
-      const copy = await requestProductCopy(productInput([], fieldSnapshot), controller.signal);
+      const identity = reserveIdentity(fieldSnapshot);
+      const requestFields = {
+        ...fieldSnapshot,
+        sku: identity.sku,
+        ean_code: identity.eanCode
+      };
+      const result = await requestProductFields({
+        input: productInput([], requestFields),
+        files: filesSnapshot,
+        identity
+      }, controller.signal);
       if (operationId !== copyOperationIdRef.current) return;
-      const applyTitle = titleEditVersionRef.current === titleEditVersion;
-      const applyDescription = descriptionEditVersionRef.current === descriptionEditVersion;
-      if (applyTitle || applyDescription) {
-        setFields((current) => ({
-          ...current,
-          ...(applyTitle ? { product_name: copy.title } : {}),
-          ...(applyDescription ? { description: copy.description } : {})
-        }));
-        clearUploadResult();
-      }
-      setCopyTask(applyTitle || applyDescription
-        ? { status: "success", error: "" }
-        : { status: "error", error: "生成文案未应用：标题和描述已被手工修改" });
+
+      applyGeneratedFields(result.fields, versionsAtStart);
+      setResearchEvidence(result.evidence || null);
+      setResearchIssues(result.issues || []);
+      clearUploadResult();
+      setCopyTask(result.issues?.length
+        ? {
+            status: "error",
+            error: `${result.issues.length} unresolved issue${result.issues.length === 1 ? "" : "s"}. Review the evidence below.`
+          }
+        : { status: "success", error: "" });
     } catch (error) {
       if (operationId !== copyOperationIdRef.current || controller.signal.aborted) return;
-      const text = errorMessage(error, "商品文案生成失败");
+      const text = errorMessage(error, "完整商品资料生成失败");
       setCopyTask({ status: "error", error: text });
     } finally {
       copyControllersRef.current.delete(controller);
@@ -608,8 +722,11 @@ export default function App() {
       setMessage("Select at most 4 source images");
       return;
     }
-    if (sourceFiles.some((file) => file.size > MAX_SOURCE_IMAGE_BYTES)) {
-      setMessage("Each source image must be 5 MiB or smaller");
+    if (
+      sourceFiles.reduce((total, file) => total + file.size, 0) >
+      MAX_SOURCE_IMAGE_BATCH_BYTES
+    ) {
+      setMessage("Source image batch must be 4 MB or smaller");
       return;
     }
     if (!sellingPoints.trim()) {
@@ -744,6 +861,33 @@ export default function App() {
             imageRoles={imageRoles} completedImageCount={completedImageCount}
             failedImageCount={failedImageCount} hasTaskError={hasTaskError}
             onRetryCopy={() => runCopyTask()} />
+
+          {researchEvidence && (
+            <section className="research-evidence" aria-labelledby="research-evidence-heading">
+              <div className="research-evidence-head">
+                <h3 id="research-evidence-heading">Research evidence</h3>
+                <span>{researchEvidence.confidence} confidence</span>
+              </div>
+              <p>{researchEvidence.matchSummary}</p>
+              <ul>
+                {researchEvidence.sources
+                  .filter((source) => isHttpsUrl(source.url))
+                  .map((source) => (
+                    <li key={source.url}>
+                      <a href={source.url} target="_blank" rel="noreferrer">
+                        {source.title}
+                      </a>
+                      <small>{source.evidence}</small>
+                    </li>
+                  ))}
+              </ul>
+              {researchIssues.length > 0 && (
+                <ul className="research-issues" aria-label="Unresolved product issues">
+                  {researchIssues.map((issue) => <li key={issue}>{issue}</li>)}
+                </ul>
+              )}
+            </section>
+          )}
 
           <nav className="editor-tabs" role="tablist" aria-label="Product editor sections">
             {editorTabs.map((tab, index) => (

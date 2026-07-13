@@ -222,6 +222,19 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 .inline-error { grid-column: 1 / -1; color: var(--error); font-size: 11px; line-height: 1.45; }
 .text-button { width: max-content; padding: 0; background: transparent; color: var(--violet); font-size: 11px; font-weight: 750; text-decoration: underline; text-underline-offset: 3px; }
 
+.research-evidence { margin: 14px 0 18px; border: 1px solid var(--line); border-radius: 4px; padding: 14px; background: var(--violet-wash); }
+.research-evidence-head { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; }
+.research-evidence h3 { margin: 0; font-size: 13px; }
+.research-evidence-head span { color: var(--muted); font-size: 10px; text-transform: capitalize; }
+.research-evidence p { margin: 8px 0; color: var(--muted); font-size: 12px; }
+.research-evidence ul { display: grid; gap: 7px; margin: 8px 0 0; padding-left: 18px; }
+.research-evidence li { font-size: 11px; }
+.research-evidence li small { display: block; margin-top: 2px; color: var(--muted); line-height: 1.4; }
+.research-evidence a { color: var(--violet); overflow-wrap: anywhere; }
+.research-evidence .research-issues { margin-top: 12px; border-top: 1px solid var(--line-strong); padding-top: 10px; color: var(--error); }
+.field-origin { color: var(--muted); font-size: .68rem; font-weight: 650; letter-spacing: .04em; text-transform: uppercase; }
+.identity-note { margin-top: -10px; color: var(--muted); font-size: 9px; line-height: 1.35; }
+
 .editor-tabs { display: flex; gap: 30px; overflow-x: auto; border-bottom: 1px solid var(--line-strong); scrollbar-width: thin; }
 .editor-tabs button { position: relative; flex: 0 0 auto; min-height: 42px; padding: 0 0 11px; background: transparent; color: var(--muted); font-size: 13px; font-weight: 650; }
 .editor-tabs button::after { content: ""; position: absolute; right: 0; bottom: -1px; left: 0; height: 2px; background: transparent; }

@@ -10,11 +10,15 @@ import {
 } from "../src/productWorkflow";
 import {
   PRODUCT_IMAGE_ROLES,
+  type DszProductFields,
   type ProductImageRole,
-  type ProductInput
+  type ProductInput,
+  type ProductResearchEvidence
 } from "../shared/product";
+import { buildShippingZoneRates } from "../shared/shipping";
 
 beforeEach(() => {
+  localStorage.clear();
   vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>(() => undefined)));
 });
 
@@ -193,6 +197,78 @@ function response(body: unknown, status = 200): Response {
   });
 }
 
+const completeFields: DszProductFields = {
+  category: 950,
+  categories: "950",
+  categoryName: "Fashion / Women's Fashion / Women's Jewellery",
+  product_name:
+    "Multicolour Stone and Pearl Necklace - Layered Summer Jewellery for Everyday Styling and Gift Ready Outfits",
+  sku: "Elosung10000",
+  status: 1,
+  ean_code: "4748549810",
+  stock: 1000,
+  weight: 0.12,
+  length: 12,
+  width: 8,
+  height: 3,
+  cbm: 0.000288,
+  brand_name: "Elosung",
+  colour: "Multicolor",
+  enabled: true,
+  description: "<p><strong>Product Overview</strong></p><p>Necklace.</p>",
+  vendor_price: 22.89,
+  rrp: 45.78,
+  zone_rates: buildShippingZoneRates({
+    actualWeightKg: 0.12,
+    lengthCm: 12,
+    widthCm: 8,
+    heightCm: 3
+  }),
+  images: [],
+  risk_flags: [],
+  review_notes: []
+};
+
+const productEvidence: ProductResearchEvidence = {
+  productType: "Necklace",
+  variant: "Multicolour",
+  matchSummary: "Exact supplier variant",
+  confidence: "high",
+  sources: [{
+    url: "https://supplier.example.com/item",
+    title: "Supplier necklace",
+    matchedVariant: "Multicolour",
+    evidence: "Package 12 x 8 x 3 cm, 0.12 kg"
+  }]
+};
+
+function generatedFieldResponse(
+  title: string,
+  description: string,
+  init?: RequestInit
+): Response {
+  const form = init?.body instanceof FormData ? init.body : undefined;
+  const identityValue = form?.get("identity");
+  const identity = typeof identityValue === "string"
+    ? JSON.parse(identityValue) as { sku: string; eanCode: string }
+    : { sku: completeFields.sku, eanCode: completeFields.ean_code };
+
+  return response({
+    result: {
+      fields: {
+        ...completeFields,
+        product_name: title,
+        description,
+        sku: identity.sku,
+        ean_code: identity.eanCode
+      },
+      source: "ai",
+      evidence: productEvidence,
+      issues: []
+    }
+  });
+}
+
 type FetchHandler = (url: RequestInfo | URL, init?: RequestInit) => Response | Promise<Response>;
 
 function appFetch(handler: FetchHandler) {
@@ -203,7 +279,40 @@ function appFetch(handler: FetchHandler) {
       textModel: "gpt-5.6-sol",
       imageModel: "gpt-image-2"
     }));
-    return handler(url, init);
+    const legacyUrl = url === "/api/generate-product-fields"
+      ? "/api/generate-product-copy"
+      : url;
+    const handled = handler(legacyUrl, init);
+
+    if (url !== "/api/generate-product-fields") return handled;
+    return Promise.resolve(handled).then(async (result) => {
+      if (!result.ok) return result;
+
+      let body: unknown;
+      try {
+        body = await result.clone().json();
+      } catch {
+        return result;
+      }
+      if (
+        typeof body === "object" &&
+        body !== null &&
+        "result" in body
+      ) {
+        return result;
+      }
+      if (
+        typeof body === "object" &&
+        body !== null &&
+        "title" in body &&
+        "description" in body &&
+        typeof body.title === "string" &&
+        typeof body.description === "string"
+      ) {
+        return generatedFieldResponse(body.title, body.description, init);
+      }
+      return result;
+    });
   });
 }
 
@@ -309,6 +418,168 @@ describe("browser product workflow helpers", () => {
 });
 
 describe("App independent AI workflow", () => {
+  test("one click fills complete DSZ fields while image roles stay independent", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") {
+        return response({
+          result: {
+            fields: completeFields,
+            source: "ai",
+            evidence: productEvidence,
+            issues: []
+          }
+        });
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({
+          role,
+          imageUrl: `https://cdn.example.com/${role}.png`
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+
+    expect(await screen.findByDisplayValue(completeFields.product_name))
+      .toBeInTheDocument();
+    expect(screen.getByLabelText("Category")).toHaveValue(
+      completeFields.categories
+    );
+    expect(screen.getByLabelText("SKU")).toHaveValue(completeFields.sku);
+    expect(screen.getByLabelText("EAN Code")).toHaveValue(
+      completeFields.ean_code
+    );
+    expect(screen.getByLabelText("Package Weight kg")).toHaveValue(
+      String(completeFields.weight)
+    );
+    expect(screen.getByLabelText("Colour")).toHaveValue(completeFields.colour);
+    await waitFor(() => {
+      expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
+    });
+  });
+
+  test("shows safe research evidence and unresolved issues", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") {
+        return response({
+          result: {
+            fields: { ...completeFields, vendor_price: 0, rrp: 0 },
+            source: "ai",
+            evidence: productEvidence,
+            issues: [
+              "Purchase price is required to calculate Vendor Price and RRP."
+            ]
+          }
+        });
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+
+    expect(await screen.findByRole("heading", { name: "Research evidence" }))
+      .toBeVisible();
+    expect(screen.getByRole("link", { name: "Supplier necklace" }))
+      .toHaveAttribute("href", "https://supplier.example.com/item");
+    expect(screen.getByText(/Purchase price is required/)).toBeVisible();
+    expect(screen.getByTestId("copy-task-status"))
+      .toHaveTextContent("Needs attention");
+  });
+
+  test("preserves manual complete-field edits made before generation", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") {
+        return response({
+          result: {
+            fields: completeFields,
+            source: "ai",
+            evidence: productEvidence,
+            issues: []
+          }
+        });
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await user.type(screen.getByLabelText("Category"), "947");
+    await user.type(
+      screen.getByLabelText("Colour"),
+      "Black / White / Beige"
+    );
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+
+    expect(await screen.findByDisplayValue(completeFields.product_name))
+      .toBeInTheDocument();
+    expect(screen.getByLabelText("Category")).toHaveValue("947");
+    expect(screen.getByLabelText("Colour")).toHaveValue(
+      "Black / White / Beige"
+    );
+    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.12");
+  });
+
+  test("preserves manual complete-field edits made while generation is pending", async () => {
+    const user = userEvent.setup();
+    const fieldsResponse = deferred<Response>();
+    vi.stubGlobal("fetch", appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") return fieldsResponse.promise;
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("copy-task-status")).toHaveAttribute(
+        "data-status",
+        "loading"
+      );
+    });
+    await user.type(screen.getByLabelText("Category"), "947");
+    await user.type(
+      screen.getByLabelText("Colour"),
+      "Black / White / Beige"
+    );
+    fieldsResponse.resolve(response({
+      result: {
+        fields: completeFields,
+        source: "ai",
+        evidence: productEvidence,
+        issues: []
+      }
+    }));
+
+    expect(await screen.findByDisplayValue(completeFields.product_name))
+      .toBeInTheDocument();
+    expect(screen.getByLabelText("Category")).toHaveValue("947");
+    expect(screen.getByLabelText("Colour")).toHaveValue(
+      "Black / White / Beige"
+    );
+    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.12");
+  });
+
   test("one click runs one five-role image task with at most two requests in flight", async () => {
     const user = userEvent.setup();
     let copyInput: ProductInput | undefined;
@@ -320,7 +591,7 @@ describe("App independent AI workflow", () => {
     let maxImageRequestsInFlight = 0;
     const fetchMock = appFetch((url: RequestInfo | URL, init?: RequestInit) => {
       if (url === "/api/generate-product-copy") {
-        copyInput = JSON.parse(String(init?.body)).input;
+        copyInput = JSON.parse(String((init?.body as FormData).get("input")));
         return Promise.resolve(response({ title: "AI title", description: "AI description" }));
       }
       if (url === "/api/generate-product-image-role") {
@@ -354,7 +625,7 @@ describe("App independent AI workflow", () => {
     await waitFor(() => expect(imageRequests).toHaveLength(2));
     expect(maxImageRequestsInFlight).toBe(2);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(0);
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-fields")).toHaveLength(1);
     expect(copyInput?.imageUrls).toEqual([]);
 
     for (let index = 0; index < PRODUCT_IMAGE_ROLES.length; index += 1) {
@@ -394,7 +665,7 @@ describe("App independent AI workflow", () => {
     }
 
     await waitFor(() => expect(screen.queryAllByRole("img")).toHaveLength(0));
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-fields")).toHaveLength(1);
     expect(screen.queryByText(/stale-/)).not.toBeInTheDocument();
   });
 
@@ -428,16 +699,11 @@ describe("App independent AI workflow", () => {
     copy.resolve(response({ title: "Late title", description: "Late description" }));
 
     const copyStatus = screen.getByTestId("copy-task-status");
-    await waitFor(() => expect(copyStatus).toHaveTextContent(
-      editTitle && editDescription ? "error" : "success"
-    ));
+    await waitFor(() => expect(copyStatus).toHaveTextContent("success"));
     expect(screen.getByLabelText("Product Name")).toHaveValue(editTitle ? "Manual title" : "Late title");
     expect(screen.getByLabelText("Vendor Product Description")).toHaveValue(
       editDescription ? "Manual description" : "Late description"
     );
-    if (editTitle && editDescription) {
-      expect(within(copyStatus).getByRole("button", { name: "重试标题与描述" })).toBeVisible();
-    }
   });
 
   test.each([
@@ -613,14 +879,16 @@ describe("App independent AI workflow", () => {
     }
   });
 
-  test("copy failure preserves manual text; copy retry calls copy only", async () => {
+  test("field failure preserves manual text; retry calls fields only with the same identity", async () => {
     const user = userEvent.setup();
     let copyCalls = 0;
+    const identities: string[] = [];
     const fetchMock = appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (url === "/api/upload-images") {
         return response({ imageUrls: ["https://cdn.example.com/source.png"] });
       }
       if (url === "/api/generate-product-copy") {
+        identities.push(String((init?.body as FormData).get("identity")));
         copyCalls += 1;
         return copyCalls === 1
           ? response({ error: "copy failed" }, 500)
@@ -648,12 +916,15 @@ describe("App independent AI workflow", () => {
     const copyStatus = screen.getByTestId("copy-task-status");
     expect(copyStatus).toHaveTextContent("copy failed");
 
-    await user.click(within(copyStatus).getByRole("button", { name: "重试标题与描述" }));
-    expect(await screen.findByDisplayValue("Retried title")).toBeInTheDocument();
+    await user.click(within(copyStatus).getByRole("button", { name: "重试完整商品资料" }));
+    await waitFor(() => expect(copyStatus).toHaveAttribute("data-status", "success"));
+    expect(title).toHaveValue("Manual title");
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(0);
-    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(2);
+    expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-fields")).toHaveLength(2);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-image-role"))
       .toHaveLength(5);
+    expect(identities).toHaveLength(2);
+    expect(identities[1]).toBe(identities[0]);
   });
 
   test("out-of-order image completion renders and uploads strict role order", async () => {
@@ -874,7 +1145,7 @@ describe("App independent AI workflow", () => {
     vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
       if (url === "/api/generate-product-copy") {
-        copyBody = JSON.parse(String(init?.body)).input;
+        copyBody = JSON.parse(String((init?.body as FormData).get("input")));
         return response({ title: "Title", description: "Description" });
       }
       if (url === "/api/generate-product-image-role") {
@@ -966,11 +1237,16 @@ describe("App independent AI workflow", () => {
       "Select at most 4 source images"
     ],
     [
-      "a source image larger than 5 MiB",
-      [new File([new Uint8Array(5 * 1024 * 1024 + 1)], "large.png", {
-        type: "image/png"
-      })],
-      "Each source image must be 5 MiB or smaller"
+      "an aggregate source image batch larger than 4 MB",
+      [
+        new File([new Uint8Array(2_000_001)], "large-1.png", {
+          type: "image/png"
+        }),
+        new File([new Uint8Array(2_000_001)], "large-2.png", {
+          type: "image/png"
+        })
+      ],
+      "Source image batch must be 4 MB or smaller"
     ]
   ] as const)("blocks %s before generation", async (_name, files, error) => {
     const user = userEvent.setup();
