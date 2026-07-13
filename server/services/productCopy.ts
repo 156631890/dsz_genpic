@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { GeneratedProductCopy, ProductInput } from "../../shared/product.js";
+import { readPackyResponses } from "./packyResponses.js";
 
 export type ProductCopyMessage =
   | { role: "system"; content: string }
@@ -31,7 +32,6 @@ const PACKY_PRODUCT_COPY_MAX_ATTEMPTS = 3;
 export async function loadProductSystemPrompt(): Promise<string> {
   return readFile(PRODUCT_PROMPT_URL, "utf8");
 }
-
 export function extractCanonicalProductFooter(systemPrompt: string): string {
   const footerRulesStart = systemPrompt.indexOf("【固定页脚规则】");
   const formatRulesStart = systemPrompt.indexOf("【格式清洗规则】", footerRulesStart);
@@ -225,7 +225,7 @@ export async function generateProductCopyWithPacky(
       throw new Error(`Packy product copy API failed: ${response.status}`);
     }
 
-    const content = await readResponsesText(response);
+    const { text: content } = await readPackyResponses(response);
     if (typeof content !== "string" || !content.trim()) continue;
 
     let copy: GeneratedProductCopy;
@@ -262,21 +262,6 @@ function buildProductCopyInput(input: ProductInput): string {
     optionalFact("Width cm", input.widthCm),
     optionalFact("Height cm", input.heightCm)
   ].filter((fact): fact is string => Boolean(fact)).join("\n");
-}
-
-function extractResponsesText(data: unknown): string | undefined {
-  if (!data || typeof data !== "object") return undefined;
-  const response = data as {
-    output_text?: unknown;
-    output?: Array<{ content?: Array<{ type?: unknown; text?: unknown }> }>;
-  };
-  if (typeof response.output_text === "string") return response.output_text;
-
-  const text = response.output
-    ?.flatMap((item) => item.content || [])
-    .find((item) => item.type === "output_text" && typeof item.text === "string")
-    ?.text;
-  return typeof text === "string" ? text : undefined;
 }
 
 function optionalFact(label: string, value: string | number | undefined): string | undefined {
@@ -458,41 +443,4 @@ function normalizeHtmlTokens(value: string): string {
     })
     .filter(Boolean)
     .join("\u0000");
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  try {
-    return await response.json();
-  } catch {
-    throw new Error("Packy product copy API returned an invalid response.");
-  }
-}
-
-async function readResponsesText(response: Response): Promise<string | undefined> {
-  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
-    return extractResponsesText(await readJsonResponse(response));
-  }
-
-  const deltas: string[] = [];
-
-  for (const line of (await response.text()).split(/\r?\n/)) {
-    if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
-
-    try {
-      const event = JSON.parse(line.slice(6)) as {
-        type?: unknown;
-        delta?: unknown;
-      };
-      if (
-        event.type === "response.output_text.delta" &&
-        typeof event.delta === "string"
-      ) {
-        deltas.push(event.delta);
-      }
-    } catch {
-      throw new Error("Packy product copy API returned an invalid response.");
-    }
-  }
-
-  return deltas.join("") || undefined;
 }
