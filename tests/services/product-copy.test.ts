@@ -589,6 +589,46 @@ describe("Packy product copy generation", () => {
     expect(hasSystemPromptOverride).toBe(false);
   });
 
+  test("adds verified research facts, source images and web search without changing the system prompt", async () => {
+    const fetchImpl = vi.fn(async (
+      _url: string | URL | Request,
+      _init?: RequestInit
+    ) => new Response([
+      `data: ${JSON.stringify({
+        type: "response.output_text.delta",
+        delta: `${validTitle}\n${validDescription}`
+      })}`,
+      "data: [DONE]",
+      ""
+    ].join("\n\n"), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" }
+    }));
+
+    await generateProductCopyWithPacky({
+      input: productInput(),
+      verifiedResearchFacts:
+        "Category: Women's Jewellery\nColour: Multicolor\nPackage weight kg: 0.12",
+      images: [{
+        mimeType: "image/png",
+        buffer: Buffer.from("89504e470d0a1a0a", "hex")
+      }],
+      env: { PACKY_TEXT_API_KEY: "text-key" },
+      fetchImpl: fetchImpl as typeof fetch
+    });
+
+    const body = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
+    expect(body.instructions).toBe(exactSystemPrompt);
+    expect(body.tools).toEqual([{ type: "web_search" }]);
+    expect(body.input[0].content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "input_image" }),
+      expect.objectContaining({
+        type: "input_text",
+        text: expect.stringContaining("Verified research facts")
+      })
+    ]));
+  });
+
   test("posts the exact prompt and product facts to the Responses endpoint with the text key", async () => {
     const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       void url;
@@ -628,6 +668,7 @@ describe("Packy product copy generation", () => {
         role: "user",
         content: [{ type: "input_text", text: expectedUserMessage.content[0].text }]
       }],
+      tools: [{ type: "web_search" }],
       store: false,
       stream: true
     });

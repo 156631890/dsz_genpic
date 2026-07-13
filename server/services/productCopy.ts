@@ -181,6 +181,11 @@ export function validateProductCopy(
 export async function generateProductCopyWithPacky(
   options: {
     input: ProductInput;
+    images?: Array<{
+      mimeType: "image/png" | "image/jpeg" | "image/webp";
+      buffer: Buffer;
+    }>;
+    verifiedResearchFacts?: string;
     env?: Record<string, string | undefined>;
     fetchImpl?: typeof fetch;
   }
@@ -199,13 +204,29 @@ export async function generateProductCopyWithPacky(
   const canonicalFooter = extractCanonicalProductFooter(systemPrompt);
   const baseUrl = (env.PACKY_BASE_URL || "https://www.packyapi.com").replace(/\/+$/, "");
   const fetcher = options.fetchImpl || fetch;
+  const content = [
+    ...(options.images || []).map((image) => ({
+      type: "input_image" as const,
+      image_url: `data:${image.mimeType};base64,${image.buffer.toString("base64")}`
+    })),
+    {
+      type: "input_text" as const,
+      text: [
+        buildProductCopyInput(input),
+        options.verifiedResearchFacts
+          ? `Verified research facts:\n${options.verifiedResearchFacts}`
+          : ""
+      ].filter(Boolean).join("\n")
+    }
+  ];
   const requestBody = JSON.stringify({
     model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol",
     instructions: systemPrompt,
     input: [{
       role: "user",
-      content: [{ type: "input_text", text: buildProductCopyInput(input) }]
+      content
     }],
+    tools: [{ type: "web_search" }],
     store: false,
     stream: true
   });
