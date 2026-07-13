@@ -473,7 +473,7 @@ function parseProductInput(value: unknown): ProductInputValidation {
     return { valid: false, error: "Selling points are invalid" };
   }
 
-  if (!Array.isArray(value.imageUrls) || value.imageUrls.length === 0) {
+  if (!Array.isArray(value.imageUrls)) {
     return { valid: false, error: "Uploaded image URLs are required" };
   }
 

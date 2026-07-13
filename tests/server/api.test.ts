@@ -246,7 +246,6 @@ describe("API app", () => {
     [{ ...productInput, sellingPoints: 7 }, "Selling points are required"],
     [{ ...productInput, sellingPoints: "   " }, "Selling points are required"],
     [{ ...productInput, sellingPoints: "x".repeat(10001) }, "Selling points are invalid"],
-    [{ ...productInput, imageUrls: [] }, "Uploaded image URLs are required"],
     [{ ...productInput, imageUrls: undefined }, "Uploaded image URLs are required"],
     [{ ...productInput, imageUrls: "not-an-array" }, "Uploaded image URLs are required"],
     [{ ...productInput, imageUrls: ["http://cdn.example.com/a.png"] }, "Uploaded image URLs are invalid"],
@@ -381,14 +380,18 @@ describe("API app", () => {
       createApp({ generateProductCopy, generateProductImageRole })
     )
       .post("/api/generate-product-copy")
-      .send({ input: { ...productInput, sellingPoints: `  ${productInput.sellingPoints}  ` } })
+      .send({ input: {
+        ...productInput,
+        sellingPoints: `  ${productInput.sellingPoints}  `,
+        imageUrls: []
+      } })
       .expect(200);
 
     expect(response.body).toEqual({
       title: "Premium Cotton Underwear",
       description: "A breathable everyday essential."
     });
-    expect(generateProductCopy).toHaveBeenCalledWith(productInput);
+    expect(generateProductCopy).toHaveBeenCalledWith({ ...productInput, imageUrls: [] });
     expect(generateProductImageRole).not.toHaveBeenCalled();
   });
 
