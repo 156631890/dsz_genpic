@@ -21,6 +21,7 @@ export function buildProductImageRolePrompt(
 ): string {
   return [
     "Generate exactly one square product image for this single role.",
+    "Use a square 1:1 composition.",
     "Do not create a collage, grid, split screen, contact sheet, or multi-panel image.",
     "No watermark, no logo, no badge, and no unsupported text.",
     "Keep the actual product accurate, recognizable, sharp, and free of unsupported claims.",
@@ -68,8 +69,8 @@ interface PackyImageResult {
 }
 
 class PackyImageTransportError extends Error {
-  constructor(message: string) {
-    super(`Packy image transport failed: ${message}`);
+  constructor() {
+    super("Packy image generation request failed");
     this.name = "PackyImageTransportError";
   }
 }
@@ -250,6 +251,8 @@ export async function generateProductImageRoleWithPacky(input: {
     productType: input.productType,
     prompt: buildProductImageRolePrompt(input.role, input.sellingPoints),
     count: 1,
+    size: "1024x1024",
+    quality: "high",
     env,
     fetcher: input.fetchImpl || fetch,
     apiKey,
@@ -268,6 +271,8 @@ async function requestPackyShopifyProductImageUrls(input: {
   productType: string;
   prompt: string;
   count: number;
+  size?: string;
+  quality?: "low" | "medium" | "high" | "auto";
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
   apiKey: string;
@@ -303,6 +308,8 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
   productType: string;
   prompt: string;
   count: number;
+  size?: string;
+  quality?: "low" | "medium" | "high" | "auto";
   env: Record<string, string | undefined>;
   fetcher: typeof fetch;
   apiKey: string;
@@ -316,8 +323,8 @@ async function requestPackyShopifyProductImageUrlsOnce(input: {
     productType: input.productType,
     prompt: input.prompt,
     count: input.count,
-    size: config.size,
-    quality: config.quality
+    size: input.size || config.size,
+    quality: input.quality || config.quality
   });
   const form = new FormData();
 
@@ -517,8 +524,8 @@ function preservePackyTransportError(error: TypeError): TypeError {
   return error;
 }
 
-function wrapRolePackyTransportError(error: TypeError): PackyImageTransportError {
-  return new PackyImageTransportError(error.message);
+function wrapRolePackyTransportError(): PackyImageTransportError {
+  return new PackyImageTransportError();
 }
 
 function isRolePackyTransientImageError(error: unknown): boolean {

@@ -46,6 +46,7 @@ describe("Packy fixed-role product images", () => {
     expect(new Set(prompts)).toHaveLength(5);
     for (const prompt of prompts) {
       expect(prompt).toContain("exactly one square");
+      expect(prompt).toContain("square 1:1 composition");
       expect(prompt).toMatch(/no collage|do not create a collage/i);
       expect(prompt).toMatch(/grid/i);
       expect(prompt).toMatch(/split/i);
@@ -74,12 +75,12 @@ describe("Packy fixed-role product images", () => {
     expect(prompts[4]).toMatch(/rather than invent/i);
   });
 
-  test("uses configured model, size, and normalized quality overrides", async () => {
+  test("uses the configured model but ignores role-path size and quality overrides", async () => {
     const fetchImpl = vi.fn(async (_url, init) => {
       const form = init?.body as FormData;
       expect(form.get("model")).toBe("custom-image-model");
-      expect(form.get("size")).toBe("1536x1024");
-      expect(form.get("quality")).toBe("medium");
+      expect(form.get("size")).toBe("1024x1024");
+      expect(form.get("quality")).toBe("high");
       return new Response(
         JSON.stringify({ data: [{ url: "https://cdn.example.com/side.png" }] }),
         { status: 200 }
@@ -291,6 +292,85 @@ describe("Packy fixed-role product images", () => {
       })
     ).rejects.toThrow("Packy Shopify product image API failed: 401");
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  test("does not expose the API key from a non-OK provider response body", async () => {
+    const apiKey = "role-secret-key";
+    const fetchImpl = vi.fn(async () =>
+      new Response(`provider rejected ${apiKey}`, { status: 401 })
+    ) as unknown as typeof fetch;
+
+    let thrown: unknown;
+    try {
+      await generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "main",
+        env: { PACKY_API_KEY: apiKey },
+        fetchImpl
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe("Packy Shopify product image API failed: 401");
+    expect((thrown as Error).message).not.toContain(apiKey);
+  });
+
+  test.each([
+    ["empty", ""],
+    ["malformed", "not-json role-secret-key"]
+  ])("does not expose the API key from an %s provider response", async (_name, body) => {
+    const apiKey = "role-secret-key";
+    const fetchImpl = vi.fn(async () => new Response(body, { status: 200 })) as unknown as typeof fetch;
+
+    let thrown: unknown;
+    try {
+      await generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "detail",
+        env: { PACKY_API_KEY: apiKey },
+        fetchImpl
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(
+      /^Packy Shopify product image API returned (?:empty|non-JSON) response$/
+    );
+    expect((thrown as Error).message).not.toContain(apiKey);
+  });
+
+  test("sanitizes a thrown role-path transport error containing the API key", async () => {
+    const apiKey = "role-secret-key";
+    const fetchImpl = vi.fn(async () => {
+      throw new TypeError(`fetch failed with bearer ${apiKey}`);
+    }) as unknown as typeof fetch;
+
+    let thrown: unknown;
+    try {
+      await generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "side",
+        env: { PACKY_API_KEY: apiKey },
+        fetchImpl
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe("Packy image generation request failed");
+    expect((thrown as Error).message).not.toContain(apiKey);
   });
 
   test("converts b64_json through ImgBB and preserves the requested role", async () => {
