@@ -237,6 +237,57 @@ function buildCompactProductResearchRequest(
   ].join("\n"));
 }
 
+function buildFocusedProductResearchRequest(
+  options: ProductResearchRequestOptions
+) {
+  const categoryCandidates = selectCategoryCandidates(
+    options.categoryMapping,
+    options.input.categoryHint
+  );
+
+  return buildResearchResponseRequest(options, [
+    "Identify the exact same product and variant shown in the supplied images.",
+    "Use web search. Prefer exact manufacturer, supplier, 1688, or marketplace evidence.",
+    "Similar products are not evidence and must have exactProductMatch false.",
+    "Only accept package measurements explicitly published by an exact-product source.",
+    "Choose category.id and category.name only from CATEGORY CANDIDATES.",
+    "CATEGORY CANDIDATES:",
+    categoryCandidates || "No matching candidate. Return id 0 and name Needs review.",
+    "PRODUCT INPUT:",
+    JSON.stringify(options.input),
+    "Return strict JSON only with identity, category, colour, package, sources, riskFlags and reviewNotes.",
+    "identity requires productType, variant and matchSummary.",
+    "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
+    "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
+    "Use source.package null unless all four values are explicitly present on that source.",
+    "Emit every source URL with a web-search URL citation annotation."
+  ].join("\n"));
+}
+
+function selectCategoryCandidates(
+  categoryMapping: string,
+  categoryHint: string | undefined
+): string {
+  const keywords = (categoryHint?.toLowerCase().match(/[a-z0-9]+/g) || [])
+    .filter((keyword) => keyword.length >= 4);
+
+  if (keywords.length === 0) return "";
+
+  return categoryMapping
+    .split(/\r?\n/)
+    .filter((line) => /^\|\s*.+?\s*\|\s*\d+\s*\|$/.test(line))
+    .map((line) => ({
+      line,
+      score: keywords.filter((keyword) => line.toLowerCase().includes(keyword))
+        .length
+    }))
+    .filter((candidate) => candidate.score > 0)
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 50)
+    .map((candidate) => candidate.line)
+    .join("\n");
+}
+
 function buildResearchResponseRequest(
   options: ProductResearchRequestOptions,
   prompt: string
@@ -438,6 +489,18 @@ export async function generateProductResearchWithPacky(options: {
       model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
     }))
   };
+  const focusedRequest = {
+    ...fullRequest,
+    body: JSON.stringify(buildFocusedProductResearchRequest({
+      input: options.input,
+      images: options.images,
+      fieldRules: options.fieldRules,
+      categoryMapping: options.categoryMapping,
+      uploadSop: options.uploadSop,
+      productUploadAu: options.productUploadAu,
+      model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
+    }))
+  };
   const fetcher = options.fetchImpl || fetch;
   let response: Response | undefined;
   let transportError: TypeError | undefined;
@@ -450,7 +513,11 @@ export async function generateProductResearchWithPacky(options: {
     try {
       response = await fetcher(
         `${baseUrl}/v1/responses`,
-        attempt === 1 ? fullRequest : compactRequest
+        attempt === 1
+          ? fullRequest
+          : attempt === 2
+            ? compactRequest
+            : focusedRequest
       );
     } catch (error) {
       if (

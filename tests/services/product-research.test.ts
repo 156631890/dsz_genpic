@@ -183,6 +183,57 @@ describe("product research request", () => {
     });
   });
 
+  test("limits the final retry to category-hint candidates", async () => {
+    let callCount = 0;
+    const fetchImpl = vi.fn(async (_url, init) => {
+      callCount += 1;
+      const body = JSON.parse(String(init?.body));
+      const serialized = JSON.stringify(body);
+
+      if (callCount < 3) {
+        return new Response("", { status: 503 });
+      }
+
+      expect(serialized).toContain(
+        "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
+      );
+      expect(serialized).not.toContain("| Home / Furniture | 500 |");
+      expect(serialized).not.toContain("Current DSZ field rules.");
+      expect(serialized).not.toContain("Current full upload SOP.");
+      return new Response(JSON.stringify({
+        output_text: JSON.stringify(researchFixture())
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    }) as unknown as typeof fetch;
+
+    const result = await generateProductResearchWithPacky({
+      input: {
+        sellingPoints: "Multicolour stone and pearl necklace",
+        categoryHint: "Women's Jewellery",
+        images: [],
+        imageUrls: []
+      },
+      images: [png],
+      fieldRules: "Current DSZ field rules.",
+      categoryMapping: [
+        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+        "| Home / Furniture | 500 |"
+      ].join("\n"),
+      uploadSop: "Current full upload SOP.",
+      productUploadAu: "Current Australian upload rules.",
+      env: {
+        PACKY_TEXT_API_KEY: "text-key",
+        PACKY_TEXT_MODEL: "gpt-5.6-sol"
+      },
+      fetchImpl
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(result.category.id).toBe(950);
+  });
+
   test("sends source images, current rules and web search to GPT-5.6 SOL", () => {
     const body = buildProductResearchRequest({
       input: {
