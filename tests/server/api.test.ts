@@ -110,9 +110,23 @@ describe("API app", () => {
     );
   });
 
+  test("allows preflight requests from the configured app origin", async () => {
+    const origin = "https://dsz-genpic.vercel.app";
+    const response = await request(createApp({ env: { APP_ORIGIN: origin } }))
+      .options("/api/generate-product-copy")
+      .set("Origin", origin)
+      .set("Access-Control-Request-Method", "POST")
+      .set("Access-Control-Request-Headers", "content-type")
+      .expect(204);
+
+    expect(response.headers["access-control-allow-origin"]).toBe(origin);
+  });
+
   test("rejects external browser origins without exposing request details", async () => {
     const origin = "https://attacker.example/private-token";
-    const response = await request(createApp({ env: {} }))
+    const response = await request(
+      createApp({ env: { APP_ORIGIN: "https://dsz-genpic.vercel.app" } })
+    )
       .get("/api/health")
       .set("Origin", origin)
       .expect(403);

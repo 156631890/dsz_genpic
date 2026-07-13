@@ -99,7 +99,10 @@ export function createApp(dependencies: AppDependencies = {}) {
         return;
       }
 
-      if (isAllowedLoopbackOrigin(origin)) {
+      if (
+        isAllowedLoopbackOrigin(origin) ||
+        isConfiguredAppOrigin(origin, env.APP_ORIGIN)
+      ) {
         callback(null, true);
         return;
       }
@@ -550,6 +553,21 @@ function isAllowedLoopbackOrigin(origin: string): boolean {
       (url.protocol === "http:" || url.protocol === "https:") &&
       (url.hostname === "localhost" || url.hostname === "127.0.0.1")
     );
+  } catch {
+    return false;
+  }
+}
+
+function isConfiguredAppOrigin(
+  origin: string,
+  configuredOrigin: string | undefined
+): boolean {
+  if (!configuredOrigin) {
+    return false;
+  }
+
+  try {
+    return new URL(origin).origin === new URL(configuredOrigin).origin;
   } catch {
     return false;
   }
