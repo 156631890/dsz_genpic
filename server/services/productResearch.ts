@@ -188,81 +188,38 @@ function packageSignature(value: ResearchPackage): string {
 export function buildProductResearchRequest(
   options: ProductResearchRequestOptions
 ) {
-  return buildResearchResponseRequest(options, [
-    "Identify this exact product and return strict JSON only.",
-    "Search the web for the same product and variant before returning package measurements.",
-    "Prefer manufacturer or supplier pages, then the exact 1688 listing, then an exact marketplace listing.",
-    "Similar-product estimates are forbidden.",
-    "DSZ FIELD RULES:",
-    options.fieldRules,
-    "CATEGORY MAPPING:",
-    options.categoryMapping,
-    "FULL UPLOAD SOP:",
-    options.uploadSop,
-    "AU PRODUCT RULES:",
-    options.productUploadAu,
-    "PRODUCT INPUT:",
-    JSON.stringify(options.input),
-    "Return identity, category, colour, package, sources, riskFlags and reviewNotes.",
-    "Each source must include url, title, matchedVariant, evidence, exactProductMatch,",
-    "and its own package object with weightKg, lengthCm, widthCm and heightCm,",
-    "or package null when that source does not explicitly publish every measurement.",
-    "Every source URL in the JSON must be emitted with a web-search URL citation annotation.",
-    "Set exactProductMatch false for similar products. Never infer a missing source value.",
-    "Do not harmonise conflicting sources."
-  ].join("\n"));
-}
-
-function buildCompactProductResearchRequest(
-  options: ProductResearchRequestOptions
-) {
-  return buildResearchResponseRequest(options, [
-    "Identify the exact same product and variant shown in the supplied images.",
-    "Search the web before answering. Prefer an exact manufacturer, supplier, 1688, or marketplace listing.",
-    "Similar-product estimates are forbidden and must have exactProductMatch false.",
-    "Use package measurements only when an exact-product source explicitly publishes every value.",
-    "Manual product input takes precedence over researched facts.",
-    "Choose category.id and category.name as an exact pair from CATEGORY MAPPING.",
-    "CATEGORY MAPPING:",
-    options.categoryMapping,
-    "PRODUCT INPUT:",
-    JSON.stringify(options.input),
-    "Return strict JSON only with identity, category, colour, package, sources, riskFlags and reviewNotes.",
-    "identity requires productType, variant and matchSummary.",
-    "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
-    "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
-    "Set source.package to null unless that source publishes all four package values.",
-    "Emit every source URL with a web-search URL citation annotation.",
-    "Never hide conflicting source measurements."
-  ].join("\n"));
-}
-
-function buildFocusedProductResearchRequest(
-  options: ProductResearchRequestOptions
-) {
   const categoryCandidates = selectCategoryCandidates(
     options.categoryMapping,
     options.input.categoryHint
   );
 
   return {
-    ...buildResearchResponseRequest(options, [
-    "Identify the exact same product and variant shown in the supplied images.",
-    "Use web search. Prefer exact manufacturer, supplier, 1688, or marketplace evidence.",
-    "Similar products are not evidence and must have exactProductMatch false.",
-    "Only accept package measurements explicitly published by an exact-product source.",
-    "Choose category.id and category.name only from CATEGORY CANDIDATES.",
-    "CATEGORY CANDIDATES:",
-    categoryCandidates || "No matching candidate. Return id 0 and name Needs review.",
-    "PRODUCT INPUT:",
-    JSON.stringify(options.input),
-    "Return strict JSON only with identity, category, colour, package, sources, riskFlags and reviewNotes.",
-    "identity requires productType, variant and matchSummary.",
-    "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
-    "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
-    "Use source.package null unless all four values are explicitly present on that source.",
-      "Emit every source URL with a web-search URL citation annotation."
-    ].join("\n"), false)
+    model: options.model,
+    instructions:
+      "Research exact-product facts with web search. Return a concise cited plain-text evidence report. Do not return JSON.",
+    input: [{
+      role: "user" as const,
+      content: [{
+        type: "input_text" as const,
+        text: [
+          "Research the exact product and variant described below.",
+          "Prefer exact manufacturer or supplier pages, then 1688, then exact marketplace listings.",
+          "Similar products are not evidence. Clearly label them as non-matches.",
+          "Report product type, variant, colour and the best category candidate.",
+          "For every source report URL, title, matched variant and why it is or is not exact.",
+          "Report package weight and L x W x H only when one exact-product source explicitly publishes all four values.",
+          "Cite every source URL with the web-search citation mechanism.",
+          "Do not return JSON. Keep the report under 900 words.",
+          "CATEGORY CANDIDATES:",
+          categoryCandidates || "No matching category candidate was found.",
+          "PRODUCT INPUT:",
+          JSON.stringify(options.input)
+        ].join("\n")
+      }]
+    }],
+    tools: [{ type: "web_search" as const }],
+    store: false,
+    stream: true
   };
 }
 
@@ -290,30 +247,43 @@ function selectCategoryCandidates(
     .join("\n");
 }
 
-function buildResearchResponseRequest(
+function buildProductResearchStructuringRequest(
   options: ProductResearchRequestOptions,
-  prompt: string,
-  includeImages = true
+  report: string,
+  annotatedUrls: string[]
 ) {
-  const content = [
-    ...(includeImages
-      ? options.images.map((image) => ({
-          type: "input_image" as const,
-          image_url: `data:${image.mimeType};base64,${image.buffer.toString("base64")}`
-        }))
-      : []),
-    {
-      type: "input_text" as const,
-      text: prompt
-    }
-  ];
+  const categoryCandidates = selectCategoryCandidates(
+    options.categoryMapping,
+    options.input.categoryHint
+  );
 
   return {
     model: options.model,
     instructions:
-      "Research Dropshipzone product facts. Use web search and return strict JSON without hidden reasoning.",
-    input: [{ role: "user" as const, content }],
-    tools: [{ type: "web_search" as const }],
+      "Convert the supplied evidence report into strict JSON only. Do not add facts, URLs, measurements or reasoning.",
+    input: [{
+      role: "user" as const,
+      content: [{
+        type: "input_text" as const,
+        text: [
+          "EVIDENCE REPORT:",
+          report,
+          "CITED HTTPS URLS ALLOWED IN sources:",
+          annotatedUrls.join("\n") || "None",
+          "CATEGORY CANDIDATES:",
+          categoryCandidates || "None. Use id 0 and name Needs review.",
+          "PRODUCT INPUT:",
+          JSON.stringify(options.input),
+          "Return keys identity, category, colour, package, sources, riskFlags and reviewNotes.",
+          "identity requires productType, variant and matchSummary strings.",
+          "category requires integer id and name from CATEGORY CANDIDATES.",
+          "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
+          "Each source requires url, title, matchedVariant, evidence, exactProductMatch and package.",
+          "Use source.package null unless that exact cited source explicitly contains all four package values.",
+          "Use only cited URLs. Preserve conflicts. Similar products must have exactProductMatch false."
+        ].join("\n")
+      }]
+    }],
     store: false,
     stream: true
   };
@@ -466,48 +436,76 @@ export async function generateProductResearchWithPacky(options: {
     /\/+$/,
     ""
   );
-  const fullRequest = {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(buildProductResearchRequest({
-      input: options.input,
-      images: options.images,
-      fieldRules: options.fieldRules,
-      categoryMapping: options.categoryMapping,
-      uploadSop: options.uploadSop,
-      productUploadAu: options.productUploadAu,
-      model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
-    }))
+  const requestOptions = {
+    input: options.input,
+    images: options.images,
+    fieldRules: options.fieldRules,
+    categoryMapping: options.categoryMapping,
+    uploadSop: options.uploadSop,
+    productUploadAu: options.productUploadAu,
+    model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
   };
-  const compactRequest = {
-    ...fullRequest,
-    body: JSON.stringify(buildCompactProductResearchRequest({
-      input: options.input,
-      images: options.images,
-      fieldRules: options.fieldRules,
-      categoryMapping: options.categoryMapping,
-      uploadSop: options.uploadSop,
-      productUploadAu: options.productUploadAu,
-      model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
-    }))
-  };
-  const focusedRequest = {
-    ...fullRequest,
-    body: JSON.stringify(buildFocusedProductResearchRequest({
-      input: options.input,
-      images: options.images,
-      fieldRules: options.fieldRules,
-      categoryMapping: options.categoryMapping,
-      uploadSop: options.uploadSop,
-      productUploadAu: options.productUploadAu,
-      model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol"
-    }))
+  const requestHeaders = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json"
   };
   const fetcher = options.fetchImpl || fetch;
-  let response: Response | undefined;
+  const reportResponse = await requestPackyResearchResponse({
+    url: `${baseUrl}/v1/responses`,
+    request: {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify(buildProductResearchRequest(requestOptions))
+    },
+    fetcher
+  });
+  const report = await readPackyResponses(reportResponse);
+
+  if (!report.text.trim()) {
+    throw new Error("Packy product research API returned empty content.");
+  }
+
+  const structureResponse = await requestPackyResearchResponse({
+    url: `${baseUrl}/v1/responses`,
+    request: {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify(buildProductResearchStructuringRequest(
+        requestOptions,
+        report.text.trim(),
+        report.annotatedUrls
+      ))
+    },
+    fetcher
+  });
+  const structured = await readPackyResponses(structureResponse);
+
+  if (!structured.text.trim()) {
+    throw new Error("Packy product research API returned empty content.");
+  }
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(
+      structured.text.trim().replace(/^```json\s*/i, "").replace(/\s*```$/, "")
+    );
+  } catch {
+    throw new Error("Packy product research API returned invalid content.");
+  }
+
+  return validateProductResearch({
+    raw,
+    annotatedUrls: report.annotatedUrls,
+    categoryMapping: options.categoryMapping,
+    input: options.input
+  });
+}
+
+async function requestPackyResearchResponse(input: {
+  url: string;
+  request: RequestInit;
+  fetcher: typeof fetch;
+}): Promise<Response> {
   let transportError: TypeError | undefined;
 
   for (
@@ -515,15 +513,10 @@ export async function generateProductResearchWithPacky(options: {
     attempt <= PACKY_PRODUCT_RESEARCH_MAX_ATTEMPTS;
     attempt += 1
   ) {
+    let response: Response;
+
     try {
-      response = await fetcher(
-        `${baseUrl}/v1/responses`,
-        attempt === 1
-          ? fullRequest
-          : attempt === 2
-            ? compactRequest
-            : focusedRequest
-      );
+      response = await input.fetcher(input.url, input.request);
     } catch (error) {
       if (
         !(error instanceof TypeError) ||
@@ -534,7 +527,8 @@ export async function generateProductResearchWithPacky(options: {
       transportError = error;
       continue;
     }
-    if (response.ok) break;
+
+    if (response.ok) return response;
 
     const transient =
       response.status === 408 ||
@@ -545,29 +539,6 @@ export async function generateProductResearchWithPacky(options: {
     }
   }
 
-  if (!response?.ok) {
-    if (transportError) throw transportError;
-    throw new Error("Packy product research API failed: 503");
-  }
-
-  const output = await readPackyResponses(response);
-  if (!output.text.trim()) {
-    throw new Error("Packy product research API returned empty content.");
-  }
-
-  let raw: unknown;
-  try {
-    raw = JSON.parse(
-      output.text.trim().replace(/^```json\s*/i, "").replace(/\s*```$/, "")
-    );
-  } catch {
-    throw new Error("Packy product research API returned invalid content.");
-  }
-
-  return validateProductResearch({
-    raw,
-    annotatedUrls: output.annotatedUrls,
-    categoryMapping: options.categoryMapping,
-    input: options.input
-  });
+  if (transportError) throw transportError;
+  throw new Error("Packy product research API failed: 503");
 }

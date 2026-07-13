@@ -124,7 +124,8 @@ describe("product research request", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  test("uses a compact evidence request after a transient full-rule failure", async () => {
+  test("separates cited web evidence from JSON structuring", async () => {
+    const sourceUrl = "https://supplier.example.com/item";
     let callCount = 0;
     const fetchImpl = vi.fn(async (_url, init) => {
       callCount += 1;
@@ -132,25 +133,27 @@ describe("product research request", () => {
       const serialized = JSON.stringify(body);
 
       if (callCount === 1) {
-        expect(serialized).toContain("Current full upload SOP.");
-        expect(serialized).toContain("Current Australian upload rules.");
-        return new Response("", { status: 503 });
+        expect(body.tools).toEqual([{ type: "web_search" }]);
+        expect(serialized).not.toContain("input_image");
+        return new Response([
+          `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Verified supplier report." })}`,
+          `data: ${JSON.stringify({
+            type: "response.output_text.annotation.added",
+            annotation: { type: "url_citation", url: sourceUrl }
+          })}`,
+          "data: [DONE]",
+          ""
+        ].join("\n\n"), {
+          status: 200,
+          headers: { "content-type": "text/event-stream" }
+        });
       }
 
-      expect(body).toMatchObject({
-        model: "gpt-5.6-sol",
-        stream: true,
-        tools: [{ type: "web_search" }]
-      });
-      expect(serialized).toContain(
-        "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
-      );
-      expect(serialized).toContain("exact same product and variant");
-      expect(serialized).not.toContain("Current DSZ field rules.");
-      expect(serialized).not.toContain("Current full upload SOP.");
-      expect(serialized).not.toContain("Current Australian upload rules.");
+      expect(body.tools).toBeUndefined();
+      expect(serialized).toContain("Verified supplier report.");
+      expect(serialized).toContain(sourceUrl);
       return new Response(JSON.stringify({
-        output_text: JSON.stringify(researchFixture())
+        output_text: JSON.stringify(researchFixture({ sourceUrl }))
       }), {
         status: 200,
         headers: { "content-type": "application/json" }
@@ -160,6 +163,7 @@ describe("product research request", () => {
     const result = await generateProductResearchWithPacky({
       input: {
         sellingPoints: "Multicolour stone and pearl necklace",
+        categoryHint: "Women's Jewellery",
         images: [],
         imageUrls: []
       },
@@ -177,69 +181,19 @@ describe("product research request", () => {
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(result.category).toEqual({
-      id: 950,
-      name: "Fashion / Women's Fashion / Women's Jewellery"
+    expect(result.package).toEqual({
+      weightKg: 0.12,
+      lengthCm: 12,
+      widthCm: 8,
+      heightCm: 3
     });
   });
 
-  test("limits the final retry to category-hint candidates", async () => {
-    let callCount = 0;
-    const fetchImpl = vi.fn(async (_url, init) => {
-      callCount += 1;
-      const body = JSON.parse(String(init?.body));
-      const serialized = JSON.stringify(body);
-
-      if (callCount < 3) {
-        return new Response("", { status: 503 });
-      }
-
-      expect(body.stream).toBe(true);
-      expect(serialized).not.toContain("input_image");
-      expect(serialized).toContain(
-        "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
-      );
-      expect(serialized).not.toContain("| Home / Furniture | 500 |");
-      expect(serialized).not.toContain("Current DSZ field rules.");
-      expect(serialized).not.toContain("Current full upload SOP.");
-      return new Response(JSON.stringify({
-        output_text: JSON.stringify(researchFixture())
-      }), {
-        status: 200,
-        headers: { "content-type": "application/json" }
-      });
-    }) as unknown as typeof fetch;
-
-    const result = await generateProductResearchWithPacky({
-      input: {
-        sellingPoints: "Multicolour stone and pearl necklace",
-        categoryHint: "Women's Jewellery",
-        images: [],
-        imageUrls: []
-      },
-      images: [png],
-      fieldRules: "Current DSZ field rules.",
-      categoryMapping: [
-        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
-        "| Home / Furniture | 500 |"
-      ].join("\n"),
-      uploadSop: "Current full upload SOP.",
-      productUploadAu: "Current Australian upload rules.",
-      env: {
-        PACKY_TEXT_API_KEY: "text-key",
-        PACKY_TEXT_MODEL: "gpt-5.6-sol"
-      },
-      fetchImpl
-    });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(result.category.id).toBe(950);
-  });
-
-  test("sends source images, current rules and web search to GPT-5.6 SOL", () => {
+  test("builds a text-only web evidence request for GPT-5.6 SOL", () => {
     const body = buildProductResearchRequest({
       input: {
         sellingPoints: "Multicolour stone and pearl necklace",
+        categoryHint: "Women's Jewellery",
         images: ["source.png"],
         imageUrls: []
       },
@@ -258,19 +212,11 @@ describe("product research request", () => {
       store: false,
       tools: [{ type: "web_search" }]
     });
-    expect(body.input[0].content).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "input_image",
-        image_url: expect.stringMatching(/^data:image\/png;base64,/)
-      }),
-      expect.objectContaining({
-        type: "input_text",
-        text: expect.stringContaining("Similar-product estimates are forbidden.")
-      })
-    ]));
-    expect(JSON.stringify(body)).toContain("Current DSZ field rules.");
-    expect(JSON.stringify(body)).toContain("Current full upload SOP.");
-    expect(JSON.stringify(body)).toContain("Current Australian upload rules.");
+    expect(JSON.stringify(body)).not.toContain("input_image");
+    expect(JSON.stringify(body)).toContain("Do not return JSON");
+    expect(JSON.stringify(body)).toContain(
+      "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
+    );
   });
 
   test.each([
