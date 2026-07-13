@@ -427,6 +427,8 @@ describe("product copy validation", () => {
   test.each([
     "&#8482",
     "&#x2122",
+    "&#8482abc",
+    "&#169copy",
     "&copy text",
     "https&#58&#47&#47example&#46com"
   ])("rejects semicolonless HTML entity bypass %s", (text) => {
@@ -457,7 +459,7 @@ describe("product copy validation", () => {
     expect(validateCopy({ title: validTitle, description })).toEqual([]);
   });
 
-  test.each(["Salt & Pepper", "R&D"])(
+  test.each(["Salt & Pepper", "R&D", "Rock&Roll"])(
     "accepts ordinary standalone ampersand text %s",
     (text) => {
       const description = `${descriptionPrefix}<p>${text}</p>${canonicalFooter}`;

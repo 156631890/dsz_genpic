@@ -293,21 +293,16 @@ function decodeHtmlCharacterReferences(value: string): {
   value: string;
   valid: boolean;
 } {
-  const semicolonlessNumeric = /&#(?:x[0-9a-f]+|\d+)(?![0-9a-f;])/i;
-  const semicolonlessNamed = /&[a-z][a-z0-9]+(?![a-z0-9;])/i;
+  const numericReference = /&#(?:x[0-9a-f]+|\d+)/i;
+  const semicolonlessLegacyNamed =
+    /&(?:copy|trade|euro|nbsp|lt|gt|quot|amp)(?![a-z0-9;])/i;
   const namedReferences: Record<string, string> = {
     amp: "&",
     apos: "'",
-    copy: "©",
-    euro: "€",
-    gt: ">",
-    lt: "<",
-    nbsp: " ",
-    quot: '"',
-    reg: "®",
-    trade: "™"
+    quot: '"'
   };
-  let valid = !semicolonlessNumeric.test(value) && !semicolonlessNamed.test(value);
+  let valid =
+    !numericReference.test(value) && !semicolonlessLegacyNamed.test(value);
   const decoded = value.replace(
     /&(#(?:x[0-9a-f]+|\d+)|[a-z][a-z0-9]+);/gi,
     (reference, body: string) => {
