@@ -284,10 +284,8 @@ describe("Packy fixed-role product images", () => {
     expect(imgbbCalls).toBe(0);
   });
 
-  test.each([
-    "http://cdn.example.com/generated.png",
-    "https://cdn.example.com/generated.png"
-  ])("accepts and returns an absolute web provider URL: %s", async (url) => {
+  test("accepts and returns an absolute HTTPS provider URL", async () => {
+    const url = "https://cdn.example.com/generated.png";
     const fetchImpl = vi.fn(async () => new Response(
       JSON.stringify({ data: [{ url }] }),
       { status: 200 }
@@ -304,6 +302,25 @@ describe("Packy fixed-role product images", () => {
       })
     ).resolves.toEqual({ role: "side", imageUrl: url });
     expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  test("rejects an absolute HTTP provider URL on the strict role path", async () => {
+    const fetchImpl = vi.fn(async () => new Response(
+      JSON.stringify({ data: [{ url: "http://cdn.example.com/generated.png" }] }),
+      { status: 200 }
+    )) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "side",
+        env: { PACKY_API_KEY: "role-key" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Packy Shopify product image API returned malformed response");
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
   test.each([
@@ -511,10 +528,8 @@ describe("Packy fixed-role product images", () => {
     expect(imgbbCalls).toBe(1);
   });
 
-  test.each([
-    "https://i.ibb.co/generated.png",
-    "http://i.ibb.co/generated.png"
-  ])("accepts an absolute web ImgBB delivery URL: %s", async (displayUrl) => {
+  test("accepts an absolute HTTPS ImgBB delivery URL", async () => {
+    const displayUrl = "https://i.ibb.co/generated.png";
     const base64 = Buffer.from("valid-image-bytes").toString("base64");
     const fetchImpl = vi.fn(async (url) => {
       if (String(url).endsWith("/v1/images/edits")) {
@@ -540,6 +555,35 @@ describe("Packy fixed-role product images", () => {
         fetchImpl
       })
     ).resolves.toEqual({ role: "detail", imageUrl: displayUrl });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  test("rejects an absolute HTTP ImgBB delivery URL on the strict role path", async () => {
+    const base64 = Buffer.from("valid-image-bytes").toString("base64");
+    const fetchImpl = vi.fn(async (url) => {
+      if (String(url).endsWith("/v1/images/edits")) {
+        return new Response(
+          JSON.stringify({ data: [{ b64_json: base64 }] }),
+          { status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({ data: { display_url: "http://i.ibb.co/generated.png" } }),
+        { status: 200 }
+      );
+    }) as unknown as typeof fetch;
+
+    await expect(
+      generateProductImageRoleWithPacky({
+        images,
+        productType: "Cotton underwear",
+        sellingPoints: "soft cotton",
+        role: "detail",
+        env: { PACKY_API_KEY: "role-key", IMGBB_API_KEY: "imgbb-key" },
+        fetchImpl
+      })
+    ).rejects.toThrow("Generated image delivery failed");
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 

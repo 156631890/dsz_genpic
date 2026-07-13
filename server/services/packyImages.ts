@@ -6,6 +6,8 @@ import type {
 
 const PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS = 3;
 const SHOPIFY_PRODUCT_IMAGE_COUNT = 5;
+export const PACKY_PRODUCT_IMAGE_ROLE_SIZE = "1024x1024";
+export const PACKY_PRODUCT_IMAGE_ROLE_QUALITY = "high";
 
 export const PRODUCT_IMAGE_ROLE_RULES: Record<ProductImageRole, string> = {
   main: "Feature main image. Use a clean premium neutral, softly lit studio, or subtle real-world background. Do not use a pure white or plain white background. Keep the full product visible, centered, and sharp.",
@@ -251,8 +253,8 @@ export async function generateProductImageRoleWithPacky(input: {
     productType: input.productType,
     prompt: buildProductImageRolePrompt(input.role, input.sellingPoints),
     count: 1,
-    size: "1024x1024",
-    quality: "high",
+    size: PACKY_PRODUCT_IMAGE_ROLE_SIZE,
+    quality: PACKY_PRODUCT_IMAGE_ROLE_QUALITY,
     env,
     fetcher: input.fetchImpl || fetch,
     apiKey,
@@ -441,7 +443,7 @@ async function resolvePackyImageUrls(
 
     uploaded.imageUrls.forEach((url, index) => {
       imageUrls[uploadIndexes[index]] = validateBase64
-        ? parseAbsoluteWebImageUrl(url, "Generated image delivery failed")
+        ? parseAbsoluteHttpsImageUrl(url, "Generated image delivery failed")
         : url;
     });
   }
@@ -571,7 +573,7 @@ function parsePackyImageResults(
     let url: string | undefined;
 
     if (rawUrl) {
-      url = parseAbsoluteWebImageUrl(
+      url = parseAbsoluteHttpsImageUrl(
         rawUrl,
         `${context} returned malformed response.`
       );
@@ -588,13 +590,10 @@ function parsePackyImageResults(
   });
 }
 
-function parseAbsoluteWebImageUrl(value: string, errorMessage: string): string {
+function parseAbsoluteHttpsImageUrl(value: string, errorMessage: string): string {
   try {
     const parsedUrl = new URL(value);
-    if (
-      (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") ||
-      !parsedUrl.hostname
-    ) {
+    if (parsedUrl.protocol !== "https:" || !parsedUrl.hostname) {
       throw new Error("unsupported image URL");
     }
     return parsedUrl.toString();

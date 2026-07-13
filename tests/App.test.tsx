@@ -309,9 +309,15 @@ describe("browser product workflow helpers", () => {
 });
 
 describe("App independent AI workflow", () => {
-  test("one click starts five role calls before the upload/copy chain finishes", async () => {
+  test("one click runs one five-role image task with at most two requests in flight", async () => {
     const user = userEvent.setup();
     const upload = deferred<Response>();
+    const imageRequests: Array<{
+      role: ProductImageRole;
+      resolve: () => void;
+    }> = [];
+    let imageRequestsInFlight = 0;
+    let maxImageRequestsInFlight = 0;
     const fetchMock = appFetch((url: RequestInfo | URL, init?: RequestInit) => {
       if (url === "/api/upload-images") return upload.promise;
       if (url === "/api/generate-product-copy") {
@@ -319,7 +325,23 @@ describe("App independent AI workflow", () => {
       }
       if (url === "/api/generate-product-image-role") {
         const role = roleFromRequest(init);
-        return Promise.resolve(response({ role, imageUrl: `https://cdn.example.com/${role}.png` }));
+        imageRequestsInFlight += 1;
+        maxImageRequestsInFlight = Math.max(
+          maxImageRequestsInFlight,
+          imageRequestsInFlight
+        );
+        return new Promise<Response>((resolve) => {
+          imageRequests.push({
+            role,
+            resolve: () => {
+              imageRequestsInFlight -= 1;
+              resolve(response({
+                role,
+                imageUrl: `https://cdn.example.com/${role}.png`
+              }));
+            }
+          });
+        });
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -329,12 +351,23 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
 
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-image-role"))
-        .toHaveLength(5);
-    });
+    await waitFor(() => expect(imageRequests).toHaveLength(2));
+    expect(maxImageRequestsInFlight).toBe(2);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(1);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-copy")).toHaveLength(0);
+
+    for (let index = 0; index < PRODUCT_IMAGE_ROLES.length; index += 1) {
+      imageRequests[index].resolve();
+      if (index < PRODUCT_IMAGE_ROLES.length - 1) {
+        await waitFor(() => expect(imageRequests).toHaveLength(
+          Math.min(PRODUCT_IMAGE_ROLES.length, index + 3)
+        ));
+        expect(imageRequestsInFlight).toBeLessThanOrEqual(2);
+      }
+    }
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
+    expect(imageRequests.map(({ role }) => role)).toEqual(PRODUCT_IMAGE_ROLES);
+    expect(maxImageRequestsInFlight).toBe(2);
 
     upload.resolve(response({ imageUrls: ["https://cdn.example.com/source.png"] }));
     await waitFor(() => {
@@ -648,12 +681,24 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await fillSubmissionFields(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
-      url === "/api/generate-product-image-role")).toHaveLength(5));
+    const imageCallCount = () => fetchMock.mock.calls.filter(([url]) =>
+      url === "/api/generate-product-image-role").length;
+    await waitFor(() => expect(imageCallCount()).toBe(2));
 
-    for (const role of ["lifestyle_2", "detail", "side", "lifestyle_1", "main"] as ProductImageRole[]) {
-      pending[role].resolve(response({ role, imageUrl: `https://cdn.example.com/${role}.png` }));
-    }
+    pending.side.resolve(response({ role: "side", imageUrl: "https://cdn.example.com/side.png" }));
+    await waitFor(() => expect(imageCallCount()).toBe(3));
+    pending.main.resolve(response({ role: "main", imageUrl: "https://cdn.example.com/main.png" }));
+    await waitFor(() => expect(imageCallCount()).toBe(4));
+    pending.lifestyle_1.resolve(response({
+      role: "lifestyle_1",
+      imageUrl: "https://cdn.example.com/lifestyle_1.png"
+    }));
+    await waitFor(() => expect(imageCallCount()).toBe(5));
+    pending.detail.resolve(response({ role: "detail", imageUrl: "https://cdn.example.com/detail.png" }));
+    pending.lifestyle_2.resolve(response({
+      role: "lifestyle_2",
+      imageUrl: "https://cdn.example.com/lifestyle_2.png"
+    }));
     await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
     expect(screen.getAllByRole("img", { hidden: true }).map((image) => image.getAttribute("alt"))).toEqual([
       "Main product image generated preview",
@@ -798,6 +843,35 @@ describe("App independent AI workflow", () => {
     expect(submit).toBeEnabled();
   });
 
+  test("inactive status 0 can become ready and is preserved in the upload payload", async () => {
+    const user = userEvent.setup();
+    let uploadedStatus: number | undefined;
+    vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
+      if (url === "/api/generate-product-copy") return response({ title: "Title", description: "Description" });
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      if (url === "/api/upload-product") {
+        uploadedStatus = JSON.parse(String(init?.body)).fields.status;
+        return response({ mode: "mock" });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    render(<App />);
+    await fillRequiredInputs(user);
+    await fillSubmissionFields(user);
+    await user.selectOptions(screen.getByLabelText("Status"), "0");
+    await user.click(screen.getByRole("button", { name: /AI/ }));
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
+
+    const submit = screen.getByRole("button", { name: /提交/ });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+    await waitFor(() => expect(uploadedStatus).toBe(0));
+  });
+
   test("copy body uses editable package fields as the measurement source of truth", async () => {
     const user = userEvent.setup();
     let copyBody: ProductInput | undefined;
@@ -884,6 +958,35 @@ describe("App independent AI workflow", () => {
       new File(["image"], "source.png", { type: "image/png" })
     );
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    expect(workflowFetch).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    [
+      "more than four source images",
+      Array.from({ length: 5 }, (_, index) =>
+        new File(["image"], `source-${index}.png`, { type: "image/png" })
+      ),
+      "Select at most 4 source images"
+    ],
+    [
+      "a source image larger than 5 MiB",
+      [new File([new Uint8Array(5 * 1024 * 1024 + 1)], "large.png", {
+        type: "image/png"
+      })],
+      "Each source image must be 5 MiB or smaller"
+    ]
+  ] as const)("blocks %s before generation", async (_name, files, error) => {
+    const user = userEvent.setup();
+    const workflowFetch = vi.fn();
+    vi.stubGlobal("fetch", appFetch(workflowFetch));
+    render(<App />);
+
+    await user.upload(screen.getByLabelText(/产品图片/), Array.from(files));
+    await user.type(screen.getByLabelText(/卖点/), "Soft cotton");
+    await user.click(screen.getByRole("button", { name: /AI/ }));
+
+    expect(screen.getByRole("status", { name: "Workflow status" })).toHaveTextContent(error);
     expect(workflowFetch).not.toHaveBeenCalled();
   });
 

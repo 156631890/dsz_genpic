@@ -84,6 +84,43 @@ describe("API app", () => {
     >().returns.toEqualTypeOf<Promise<GeneratedProductImage>>();
   });
 
+  test("allows loopback browser origins and same-origin requests", async () => {
+    const app = createApp({ env: {} });
+
+    const localhostResponse = await request(app)
+      .get("/api/health")
+      .set("Origin", "http://localhost:5173")
+      .expect(200);
+    const loopbackResponse = await request(app)
+      .get("/api/health")
+      .set("Origin", "https://127.0.0.1:4173")
+      .expect(200);
+    const sameOriginResponse = await request(app)
+      .get("/api/health")
+      .expect(200);
+
+    expect(localhostResponse.headers["access-control-allow-origin"]).toBe(
+      "http://localhost:5173"
+    );
+    expect(loopbackResponse.headers["access-control-allow-origin"]).toBe(
+      "https://127.0.0.1:4173"
+    );
+    expect(sameOriginResponse.headers).not.toHaveProperty(
+      "access-control-allow-origin"
+    );
+  });
+
+  test("rejects external browser origins without exposing request details", async () => {
+    const origin = "https://attacker.example/private-token";
+    const response = await request(createApp({ env: {} }))
+      .get("/api/health")
+      .set("Origin", origin)
+      .expect(403);
+
+    expect(response.body).toEqual({ error: "Request origin is not allowed" });
+    expect(response.text).not.toContain(origin);
+  });
+
   test("reports health and mock/live upload state", async () => {
     const apiKey = "health-test-secret-key";
     const app = createApp({
@@ -92,7 +129,7 @@ describe("API app", () => {
         PACKY_TEXT_MODEL: "copy-model",
         PACKY_IMAGE_MODEL: "image-model",
         PACKY_IMAGE_SIZE: "1536x1024",
-        PACKY_IMAGE_QUALITY: "high",
+        PACKY_IMAGE_QUALITY: "low",
         IMGBB_API_KEY: "imgbb-key",
         ADMIN_API_BASE_URL:
           "https://services.dropshipzone.com.au/admin/api/supplier/v1"
@@ -111,7 +148,7 @@ describe("API app", () => {
       legacyImageConfigured: true,
       textModel: "copy-model",
       imageModel: "image-model",
-      imageSize: "1536x1024",
+      imageSize: "1024x1024",
       imageQuality: "high",
       imageUploadConfigured: true,
       adminBaseUrl: "https://services.dropshipzone.com.au/admin/api/supplier/v1",
@@ -569,30 +606,30 @@ describe("API app", () => {
     expect(generateProductImageRole).toHaveBeenCalledOnce();
   });
 
-  test("returns safe JSON when an image exceeds 8 MiB", async () => {
+  test("returns safe JSON when an image exceeds 5 MiB", async () => {
     const generateProductImageRole = vi.fn();
     const response = await request(createApp({ generateProductImageRole }))
       .post("/api/generate-product-image-role")
       .field("role", "main")
       .field("sellingPoints", "valid")
-      .attach("images", Buffer.alloc(8 * 1024 * 1024 + 1), {
+      .attach("images", Buffer.alloc(5 * 1024 * 1024 + 1), {
         filename: "large.png",
         contentType: "image/png"
       })
       .expect(413);
 
     expect(response.headers["content-type"]).toMatch(/json/);
-    expect(response.body).toEqual({ error: "Image file exceeds 8 MiB limit" });
+    expect(response.body).toEqual({ error: "Image file exceeds 5 MiB limit" });
     expect(generateProductImageRole).not.toHaveBeenCalled();
   });
 
-  test("returns safe JSON when more than 10 images are uploaded", async () => {
+  test("returns safe JSON when more than 4 images are uploaded", async () => {
     const generateProductImageRole = vi.fn();
     let pending = request(createApp({ generateProductImageRole }))
       .post("/api/generate-product-image-role")
       .field("role", "main")
       .field("sellingPoints", "valid");
-    for (let index = 0; index < 11; index += 1) {
+    for (let index = 0; index < 5; index += 1) {
       pending = pending.attach("images", pngImage, {
         filename: `${index}.png`,
         contentType: "image/png"
@@ -601,7 +638,7 @@ describe("API app", () => {
     const response = await pending.expect(400);
 
     expect(response.headers["content-type"]).toMatch(/json/);
-    expect(response.body).toEqual({ error: "Invalid multipart upload" });
+    expect(response.body).toEqual({ error: "At most 4 source images are allowed" });
     expect(generateProductImageRole).not.toHaveBeenCalled();
   });
 
@@ -682,6 +719,7 @@ describe("API app", () => {
     ["a javascript URL", { role: "main", imageUrl: "javascript:alert(1)" }],
     ["a file URL", { role: "main", imageUrl: "file:///private/result.png" }],
     ["a relative URL", { role: "main", imageUrl: "/result.png" }],
+    ["an HTTP URL", { role: "main", imageUrl: "http://cdn.example.com/result.png" }],
     ["a malformed URL", { role: "main", imageUrl: "not a url" }],
     ["a non-string URL", { role: "main", imageUrl: 7 }]
   ])("rejects %s from the product image role adapter", async (_label, result) => {

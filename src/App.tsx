@@ -41,6 +41,9 @@ interface OptionalInputs {
 }
 
 const idleTask: TaskState = { status: "idle", error: "" };
+const MAX_SOURCE_IMAGES = 4;
+const MAX_SOURCE_IMAGE_BYTES = 5 * 1024 * 1024;
+const IMAGE_ROLE_CONCURRENCY = 2;
 const emptyOptionalInputs: OptionalInputs = {
   categoryHint: "",
   purchasePriceCny: ""
@@ -583,7 +586,18 @@ export default function App() {
   }
 
   async function runAllImageRoles(operationId: number) {
-    await Promise.allSettled(PRODUCT_IMAGE_ROLES.map((role) => runImageRole(role, operationId)));
+    let nextRoleIndex = 0;
+    const worker = async () => {
+      while (nextRoleIndex < PRODUCT_IMAGE_ROLES.length) {
+        const role = PRODUCT_IMAGE_ROLES[nextRoleIndex];
+        nextRoleIndex += 1;
+        await runImageRole(role, operationId);
+      }
+    };
+
+    await Promise.allSettled(
+      Array.from({ length: IMAGE_ROLE_CONCURRENCY }, () => worker())
+    );
   }
 
   function replaceImageRole(role: ProductImageRole, imageUrl: string) {
@@ -597,6 +611,14 @@ export default function App() {
   async function startGeneration() {
     if (sourceFiles.length === 0) {
       setMessage("请先上传至少一张原始产品图片");
+      return;
+    }
+    if (sourceFiles.length > MAX_SOURCE_IMAGES) {
+      setMessage("Select at most 4 source images");
+      return;
+    }
+    if (sourceFiles.some((file) => file.size > MAX_SOURCE_IMAGE_BYTES)) {
+      setMessage("Each source image must be 5 MiB or smaller");
       return;
     }
     if (!sellingPoints.trim()) {
@@ -870,7 +892,7 @@ function hasRequiredDszFields(fields: DszProductFields): boolean {
     fields.ean_code.trim() &&
     fields.brand_name.trim() &&
     fields.description.trim() &&
-    fields.status > 0 &&
+    [0, 1].includes(fields.status) &&
     fields.stock >= 0 &&
     fields.weight > 0 &&
     fields.length > 0 &&

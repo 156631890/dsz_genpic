@@ -1190,6 +1190,25 @@ describe("admin upload helpers", () => {
     expect(payload.cbm).toBe(fields.cbm);
   });
 
+  test("preserves inactive status 0 in the admin payload", () => {
+    const payload = buildAdminProductPayload({ ...fields, status: 0 });
+
+    expect(payload.status).toBe(0);
+    expect(validateDszProductFields(payload).valid).toBe(true);
+  });
+
+  test.each([2, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid admin status %s",
+    (status) => {
+      const payload = buildAdminProductPayload({ ...fields, status });
+
+      expect(validateDszProductFields(payload)).toEqual({
+        valid: false,
+        errors: ["Status must be 0 or 1"]
+      });
+    }
+  );
+
   test("pads existing HTTPS image URLs to the minimum DSZ image count before upload validation", () => {
     const payload = buildAdminProductPayload({
       ...fields,

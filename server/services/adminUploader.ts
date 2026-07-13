@@ -223,7 +223,7 @@ export function buildAdminProductPayload(
     height: Number(fields.height),
     cbm: Number(fields.cbm),
     stock: Number(fields.stock),
-    status: Number(fields.status || 1),
+    status: Number(fields.status ?? 1),
     images: padImageUrls(fields.images)
   };
 }

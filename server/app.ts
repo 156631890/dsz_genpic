@@ -14,6 +14,8 @@ import {
   generateShopifyProductImagesWithPacky,
   generateImageWithPacky,
   generateProductImageRoleWithPacky,
+  PACKY_PRODUCT_IMAGE_ROLE_QUALITY,
+  PACKY_PRODUCT_IMAGE_ROLE_SIZE,
   resolvePackyImageConfig
 } from "./services/packyImages.js";
 import { generateProductCopyWithPacky } from "./services/productCopy.js";
@@ -27,13 +29,16 @@ import {
   type ProductInput
 } from "../shared/product.js";
 
+export const MAX_SOURCE_IMAGES = 4;
+export const MAX_SOURCE_IMAGE_BYTES = 5 * 1024 * 1024;
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    files: 10,
-    fileSize: 8 * 1024 * 1024,
-    fields: 10,
-    parts: 20
+    files: MAX_SOURCE_IMAGES,
+    fileSize: MAX_SOURCE_IMAGE_BYTES,
+    fields: 4,
+    parts: 8
   }
 });
 const PRODUCT_INPUT_NUMERIC_KEYS: Array<
@@ -87,7 +92,21 @@ export function createApp(dependencies: AppDependencies = {}) {
   const app = express();
   const env = dependencies.env || process.env;
 
-  app.use(cors());
+  app.use(cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, false);
+        return;
+      }
+
+      if (isAllowedLoopbackOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new CorsOriginError());
+    }
+  }));
   app.use(express.json({ limit: "2mb" }));
 
   app.get("/api/health", (_req, res) => {
@@ -114,8 +133,8 @@ export function createApp(dependencies: AppDependencies = {}) {
       ),
       textModel: env.PACKY_TEXT_MODEL || "gpt-5.6-sol",
       imageModel: imageConfig.model,
-      imageSize: imageConfig.size,
-      imageQuality: imageConfig.quality,
+      imageSize: PACKY_PRODUCT_IMAGE_ROLE_SIZE,
+      imageQuality: PACKY_PRODUCT_IMAGE_ROLE_QUALITY,
       imageUploadConfigured: Boolean(env.IMGBB_API_KEY),
       adminBaseUrl: adminConfig.baseUrl,
       adminMockMode: adminConfig.mockMode
@@ -148,7 +167,7 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   app.post(
     "/api/generate-product-image-role",
-    upload.array("images", 10),
+    upload.array("images"),
     async (req, res) => {
       try {
         const files = (req.files || []) as Express.Multer.File[];
@@ -223,7 +242,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     }
   );
 
-  app.post("/api/upload-images", upload.array("images", 10), async (req, res) => {
+  app.post("/api/upload-images", upload.array("images"), async (req, res) => {
     try {
       const files = (req.files || []) as Express.Multer.File[];
 
@@ -307,7 +326,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     }
   });
 
-  app.post("/api/generate-main-images", upload.array("images", 10), async (req, res) => {
+  app.post("/api/generate-main-images", upload.array("images"), async (req, res) => {
     try {
       const files = (req.files || []) as Express.Multer.File[];
 
@@ -372,6 +391,11 @@ export function createApp(dependencies: AppDependencies = {}) {
   ) => {
     void _next;
 
+    if (error instanceof CorsOriginError) {
+      res.status(403).json({ error: "Request origin is not allowed" });
+      return;
+    }
+
     if (isRecord(error) && error.type === "entity.too.large") {
       res.status(413).json({ error: "JSON body exceeds 2 MiB limit" });
       return;
@@ -388,7 +412,15 @@ export function createApp(dependencies: AppDependencies = {}) {
 
     if (error instanceof multer.MulterError) {
       if (error.code === "LIMIT_FILE_SIZE") {
-        res.status(413).json({ error: "Image file exceeds 8 MiB limit" });
+        res.status(413).json({ error: "Image file exceeds 5 MiB limit" });
+        return;
+      }
+
+      if (
+        error.code === "LIMIT_FILE_COUNT" ||
+        error.code === "LIMIT_UNEXPECTED_FILE"
+      ) {
+        res.status(400).json({ error: "At most 4 source images are allowed" });
         return;
       }
 
@@ -511,6 +543,25 @@ function isAbsoluteHttpsUrl(value: unknown): value is string {
   }
 }
 
+function isAllowedLoopbackOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+    );
+  } catch {
+    return false;
+  }
+}
+
+class CorsOriginError extends Error {
+  constructor() {
+    super("CORS origin denied");
+    this.name = "CorsOriginError";
+  }
+}
+
 function validateGeneratedProductCopy(value: unknown): GeneratedProductCopy {
   if (
     !isRecord(value) ||
@@ -532,25 +583,12 @@ function validateGeneratedProductImage(
   if (
     !isRecord(value) ||
     value.role !== requestedRole ||
-    !isAbsoluteWebUrl(value.imageUrl)
+    !isAbsoluteHttpsUrl(value.imageUrl)
   ) {
     throw new Error("Invalid image generation response");
   }
 
   return { role: requestedRole, imageUrl: value.imageUrl };
-}
-
-function isAbsoluteWebUrl(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-
-  try {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
 }
 
 function isSupportedImage(file: Express.Multer.File): boolean {
