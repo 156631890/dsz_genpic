@@ -593,17 +593,21 @@ describe("Packy product copy generation", () => {
     const fetchImpl = vi.fn(async (
       _url: string | URL | Request,
       _init?: RequestInit
-    ) => new Response([
-      `data: ${JSON.stringify({
-        type: "response.output_text.delta",
-        delta: `${validTitle}\n${validDescription}`
-      })}`,
-      "data: [DONE]",
-      ""
-    ].join("\n\n"), {
-      status: 200,
-      headers: { "content-type": "text/event-stream" }
-    }));
+    ) => {
+      void _url;
+      void _init;
+      return new Response([
+        `data: ${JSON.stringify({
+          type: "response.output_text.delta",
+          delta: `${validTitle}\n${validDescription}`
+        })}`,
+        "data: [DONE]",
+        ""
+      ].join("\n\n"), {
+        status: 200,
+        headers: { "content-type": "text/event-stream" }
+      });
+    });
 
     await generateProductCopyWithPacky({
       input: productInput(),

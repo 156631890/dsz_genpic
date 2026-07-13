@@ -181,18 +181,22 @@ describe("complete DSZ field generation", () => {
     const fetchMock = vi.fn(async (
       _url: string | URL | Request,
       _init?: RequestInit
-    ) => new Response(JSON.stringify({
-      result: {
-        fields: { ...fields, providerDebug: "discard-me" },
-        source: "ai",
-        evidence,
-        issues: [],
-        providerDebug: "discard-me"
-      }
-    }), {
-      status: 200,
-      headers: { "content-type": "application/json" }
-    }));
+    ) => {
+      void _url;
+      void _init;
+      return new Response(JSON.stringify({
+        result: {
+          fields: { ...fields, providerDebug: "discard-me" },
+          source: "ai",
+          evidence,
+          issues: [],
+          providerDebug: "discard-me"
+        }
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" }
+      });
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await requestProductFields({
