@@ -146,6 +146,9 @@ describe("API app", () => {
         PACKY_IMAGE_SIZE: "1536x1024",
         PACKY_IMAGE_QUALITY: "low",
         IMGBB_API_KEY: "imgbb-key",
+        GITHUB_IMAGE_TOKEN: "github-token",
+        GITHUB_IMAGE_REPOSITORY: "156631890/dsz_genpic",
+        GITHUB_IMAGE_BRANCH: "generated-images",
         ADMIN_API_BASE_URL:
           "https://services.dropshipzone.com.au/admin/api/supplier/v1"
       }
@@ -166,6 +169,7 @@ describe("API app", () => {
       imageSize: "1024x1024",
       imageQuality: "high",
       imageUploadConfigured: true,
+      githubImageStorageConfigured: true,
       adminBaseUrl: "https://services.dropshipzone.com.au/admin/api/supplier/v1",
       adminMockMode: true
     });

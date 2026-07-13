@@ -143,6 +143,11 @@ export function createApp(dependencies: AppDependencies = {}) {
       imageSize: PACKY_PRODUCT_IMAGE_ROLE_SIZE,
       imageQuality: PACKY_PRODUCT_IMAGE_ROLE_QUALITY,
       imageUploadConfigured: Boolean(env.IMGBB_API_KEY),
+      githubImageStorageConfigured: Boolean(
+        env.GITHUB_IMAGE_TOKEN &&
+        env.GITHUB_IMAGE_REPOSITORY &&
+        env.GITHUB_IMAGE_BRANCH
+      ),
       adminBaseUrl: adminConfig.baseUrl,
       adminMockMode: adminConfig.mockMode
     });

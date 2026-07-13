@@ -3,6 +3,11 @@
   "installCommand": "npm install",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "git": {
+    "deploymentEnabled": {
+      "generated-images": false
+    }
+  },
   "functions": {
     "api/index.ts": {
       "includeFiles": "rules/**",
