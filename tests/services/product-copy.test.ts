@@ -424,6 +424,19 @@ describe("product copy validation", () => {
     }
   );
 
+  test.each([
+    "&#8482",
+    "&#x2122",
+    "&copy text",
+    "https&#58&#47&#47example&#46com"
+  ])("rejects semicolonless HTML entity bypass %s", (text) => {
+    const description = `${descriptionPrefix}<p>Invalid ${text}</p>${canonicalFooter}`;
+
+    expect(validateCopy({ title: validTitle, description })).toContain(
+      "Description text contains a forbidden character."
+    );
+  });
+
   test("decodes an encoded URL before URL validation", () => {
     const description =
       `${descriptionPrefix}<p>https&#58;&#47;&#47;example&#46;com</p>${canonicalFooter}`;
@@ -443,6 +456,15 @@ describe("product copy validation", () => {
 
     expect(validateCopy({ title: validTitle, description })).toEqual([]);
   });
+
+  test.each(["Salt & Pepper", "R&D"])(
+    "accepts ordinary standalone ampersand text %s",
+    (text) => {
+      const description = `${descriptionPrefix}<p>${text}</p>${canonicalFooter}`;
+
+      expect(validateCopy({ title: validTitle, description })).toEqual([]);
+    }
+  );
 
   test("rejects unknown named entities safely", () => {
     const description = `${descriptionPrefix}<p>Unknown &bogus; entity.</p>${canonicalFooter}`;
