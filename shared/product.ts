@@ -21,6 +21,9 @@ export interface GeneratedCopy {
 export interface ProductInput {
   sellingPoints: string;
   categoryHint?: string;
+  categoryId?: number;
+  categoryName?: string;
+  colour?: string;
   images: string[];
   imageUrls: string[];
   purchasePriceCny?: number;
@@ -103,6 +106,28 @@ export interface AdminProductPayload
 export interface ProductGenerationResult {
   fields: DszProductFields;
   source: "ai" | "fallback";
+  evidence?: ProductResearchEvidence;
+  issues?: string[];
+}
+
+export interface ProductIdentity {
+  sku: string;
+  eanCode: string;
+}
+
+export interface ProductResearchSource {
+  url: string;
+  title: string;
+  matchedVariant: string;
+  evidence: string;
+}
+
+export interface ProductResearchEvidence {
+  productType: string;
+  variant: string;
+  matchSummary: string;
+  confidence: "high" | "medium" | "low";
+  sources: ProductResearchSource[];
 }
 
 export interface ValidationResult {
