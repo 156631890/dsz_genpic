@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  CATEGORY_MATCH_REQUIRED_MESSAGE,
+  CategoryMatchRequiredError,
   formatCategoryCandidates,
   parseCategoryEntries,
   rankCategoryEntries,
@@ -7,7 +9,6 @@ import {
 } from "../../server/services/categoryMatcher";
 
 const mapping = [
-  "| General Goods | default / unclassified | ID: 1 |",
   "| Fashion / Men's Fashion / Men's Jewellery | 924 |",
   "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
   "| Duplicate category that must be ignored | 950 |",
@@ -17,9 +18,8 @@ const mapping = [
 ].join("\n");
 
 describe("category matcher", () => {
-  test("parses ordinary rows and the supplied General Goods row", () => {
+  test("parses canonical rows and ignores duplicate IDs", () => {
     expect(parseCategoryEntries(mapping)).toEqual([
-      { id: 1, name: "General Goods" },
       { id: 924, name: "Fashion / Men's Fashion / Men's Jewellery" },
       { id: 950, name: "Fashion / Women's Fashion / Women's Jewellery" },
       { id: 956, name: "Fashion / Women's Fashion / Women's Swimwear" },
@@ -60,8 +60,7 @@ describe("category matcher", () => {
         id: 950,
         name: "Fashion / Women's Fashion / Women's Jewellery"
       },
-      source: "hint",
-      defaulted: false
+      source: "hint"
     });
   });
 
@@ -75,8 +74,7 @@ describe("category matcher", () => {
         id: 950,
         name: "Fashion / Women's Fashion / Women's Jewellery"
       },
-      source: "model",
-      defaulted: false
+      source: "model"
     });
   });
 
@@ -88,16 +86,19 @@ describe("category matcher", () => {
     }).category.id).toBe(950);
   });
 
-  test("uses mapped General Goods when no result is available", () => {
-    expect(resolveMappedCategory({
+  test("requires a more specific hint when no live category can be resolved", () => {
+    const resolve = () => resolveMappedCategory({
       categoryMapping: mapping,
       categoryHint: "unclassifiable phrase",
       generatedCategoryId: 999999
-    })).toMatchObject({
-      category: { id: 1, name: "General Goods" },
-      source: "default",
-      defaulted: true
     });
+
+    expect(CATEGORY_MATCH_REQUIRED_MESSAGE).toBe(
+      "No valid Dropshipzone category matched. Enter a more specific category hint and generate again."
+    );
+    expect(CategoryMatchRequiredError).toBeTypeOf("function");
+    expect(resolve).toThrow(CategoryMatchRequiredError);
+    expect(resolve).toThrow(CATEGORY_MATCH_REQUIRED_MESSAGE);
   });
 
   test("formats only canonical mapping rows for AI selection", () => {
