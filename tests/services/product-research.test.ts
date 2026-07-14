@@ -4,7 +4,6 @@ import { describe, expect, test, vi } from "vitest";
 import {
   buildProductResearchRequest,
   generateProductResearchWithPacky,
-  parseCategoryMapping,
   validateProductResearch,
   type ProductResearchImage
 } from "../../server/services/productResearch";
@@ -17,10 +16,16 @@ const manualInput = {
   sellingPoints: "Multicolour stone and pearl necklace",
   images: [],
   imageUrls: [],
+  packageWeightKg: 0.2,
   lengthCm: 15,
   widthCm: 10,
   heightCm: 4
 };
+const categoryMapping = [
+  "| General Goods | default / unclassified | ID: 1 |",
+  "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+  "| Fashion / Women's Fashion / Women's Swimwear | 956 |"
+].join("\n");
 
 function researchFixture(options: {
   sourceUrl?: string;
@@ -90,8 +95,7 @@ describe("product research request", () => {
       input: manualInput,
       images: [png],
       fieldRules: "Current DSZ field rules.",
-      categoryMapping:
-        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       uploadSop: "Current full upload SOP.",
       productUploadAu: "Current Australian upload rules.",
       env: {
@@ -111,8 +115,7 @@ describe("product research request", () => {
       input: manualInput,
       images: [png],
       fieldRules: "Current DSZ field rules.",
-      categoryMapping:
-        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       uploadSop: "Current full upload SOP.",
       productUploadAu: "Current Australian upload rules.",
       env: {
@@ -125,16 +128,16 @@ describe("product research request", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  test("generates a conventional weight in one structured request", async () => {
+  test("generates with fixed operator package measurements in one structured request", async () => {
     const fetchImpl = vi.fn(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       const serialized = JSON.stringify(body);
       expect(body.tools).toBeUndefined();
       expect(serialized).toContain("input_image");
-      expect(serialized).toContain("Estimate only package weightKg");
       expect(serialized).toContain(
-        "Use operator-provided lengthCm, widthCm, and heightCm exactly"
+        "Copy PRODUCT INPUT packageWeightKg to package.weightKg exactly"
       );
+      expect(serialized).not.toContain("Estimate only package weightKg");
       expect(serialized).not.toContain(
         "Return realistic conventional packed shipping estimates"
       );
@@ -156,8 +159,7 @@ describe("product research request", () => {
       },
       images: [png],
       fieldRules: "Current DSZ field rules.",
-      categoryMapping:
-        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       uploadSop: "Current full upload SOP.",
       productUploadAu: "Current Australian upload rules.",
       env: {
@@ -169,14 +171,14 @@ describe("product research request", () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.package).toEqual({
-      weightKg: 0.12,
+      weightKg: 0.2,
       lengthCm: 15,
       widthCm: 10,
       heightCm: 4
     });
   });
 
-  test("builds a vision-assisted conventional weight request for GPT-5.6 SOL", () => {
+  test("builds a vision-assisted fixed package request for GPT-5.6 SOL", () => {
     const body = buildProductResearchRequest({
       input: {
         ...manualInput,
@@ -185,8 +187,7 @@ describe("product research request", () => {
       },
       images: [png],
       fieldRules: "Current DSZ field rules.",
-      categoryMapping:
-        "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       uploadSop: "Current full upload SOP.",
       productUploadAu: "Current Australian upload rules.",
       model: "gpt-5.6-sol"
@@ -200,10 +201,10 @@ describe("product research request", () => {
     expect(body).not.toHaveProperty("tools");
     expect(JSON.stringify(body)).toContain("input_image");
     expect(JSON.stringify(body)).toContain("strict JSON");
-    expect(JSON.stringify(body)).toContain("Estimate only package weightKg");
     expect(JSON.stringify(body)).toContain(
-      "Use operator-provided lengthCm, widthCm, and heightCm exactly"
+      "Copy PRODUCT INPUT packageWeightKg to package.weightKg exactly"
     );
+    expect(JSON.stringify(body)).not.toContain("Estimate only package weightKg");
     expect(JSON.stringify(body)).not.toContain(
       "Return realistic conventional packed shipping estimates"
     );
@@ -253,7 +254,7 @@ describe("product research request", () => {
       confidence: "high" as const,
       sourcePackageAvailable: false
     }
-  ])("keeps manual dimensions and uses a conventional weight for $name", ({
+  ])("keeps operator package measurements for $name", ({
     annotatedUrls,
     sourceUrl,
     exactProductMatch,
@@ -268,17 +269,17 @@ describe("product research request", () => {
         sourcePackageAvailable
       }),
       annotatedUrls,
-      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       input: { ...manualInput, sellingPoints: "necklace" }
     });
 
     expect(result.package).toEqual({
-      weightKg: 0.12,
+      weightKg: 0.2,
       lengthCm: 15,
       widthCm: 10,
       heightCm: 4
     });
-    expect(result.issues).toContain(
+    expect(result.issues).not.toContain(
       "Package weight uses a conventional estimate."
     );
     expect(result.issues.join(" ")).not.toContain("dimensions use conventional");
@@ -298,23 +299,23 @@ describe("product research request", () => {
         "https://supplier.example.com/item",
         "https://manufacturer.example.com/item"
       ],
-      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       input: { ...manualInput, sellingPoints: "necklace" }
     });
 
     expect(result.package).toEqual({
-      weightKg: 0.12,
+      weightKg: 0.2,
       lengthCm: 15,
       widthCm: 10,
       heightCm: 4
     });
     expect(result.issues).toContain("Package sources conflict and need review.");
-    expect(result.issues).toContain(
+    expect(result.issues).not.toContain(
       "Package weight uses a conventional estimate."
     );
   });
 
-  test("accepts a low-confidence conventional weight without sources", () => {
+  test("keeps operator package measurements without sources", () => {
     const raw = researchFixture({
       confidence: "low",
       includeSources: false
@@ -322,54 +323,109 @@ describe("product research request", () => {
     const result = validateProductResearch({
       raw,
       annotatedUrls: [],
-      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       input: { ...manualInput, sellingPoints: "necklace" }
     });
 
     expect(result.package).toEqual({
-      weightKg: 0.12,
+      weightKg: 0.2,
       lengthCm: 15,
       widthCm: 10,
       heightCm: 4
     });
-    expect(result.issues).toContain(
+    expect(result.issues).not.toContain(
       "Package weight uses a conventional estimate."
     );
   });
 
-  test("ignores model dimensions and keeps operator dimensions", () => {
+  test("ignores model package values and keeps operator package measurements", () => {
     const result = validateProductResearch({
       raw: researchFixture({ confidence: "low", includeSources: false }),
       annotatedUrls: [],
-      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       input: manualInput
     });
 
     expect(result.package).toEqual({
-      weightKg: 0.12,
+      weightKg: 0.2,
       lengthCm: 15,
       widthCm: 10,
       heightCm: 4
     });
-    expect(result.issues).toContain(
+    expect(result.issues).not.toContain(
       "Package weight uses a conventional estimate."
     );
     expect(result.issues.join(" ")).not.toContain("dimensions use conventional");
   });
 
-  test("accepts a category only when ID and path match the mapping", () => {
-    expect(parseCategoryMapping(
-      "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
-    )).toEqual(new Map([
-      [950, "Fashion / Women's Fashion / Women's Jewellery"]
-    ]));
+  test("lets a high-confidence category hint override model inference", () => {
+    const raw = researchFixture();
+    const result = validateProductResearch({
+      raw: {
+        ...raw,
+        category: {
+          id: 956,
+          name: "Fashion / Women's Fashion / Women's Swimwear"
+        }
+      },
+      annotatedUrls: ["https://supplier.example.com/item"],
+      categoryMapping,
+      input: { ...manualInput, categoryHint: "Women's Jewelry" }
+    });
+
+    expect(result.category).toEqual({
+      id: 950,
+      name: "Fashion / Women's Fashion / Women's Jewellery"
+    });
+  });
+
+  test.each(["necklace", "项链"])(
+    "canonicalises semantic ID 950 for hint %s even when the model path differs",
+    (categoryHint) => {
+      const raw = researchFixture();
+      const result = validateProductResearch({
+        raw: {
+          ...raw,
+          category: { id: 950, name: "Women's Jewelry" }
+        },
+        annotatedUrls: ["https://supplier.example.com/item"],
+        categoryMapping,
+        input: { ...manualInput, categoryHint }
+      });
+
+      expect(result.category).toEqual({
+        id: 950,
+        name: "Fashion / Women's Fashion / Women's Jewellery"
+      });
+      expect(result.issues).not.toContain(
+        "Category needs review because no valid ID and path match was found."
+      );
+    }
+  );
+
+  test("defaults an invalid semantic ID to mapped General Goods", () => {
+    const raw = researchFixture();
+    const result = validateProductResearch({
+      raw: {
+        ...raw,
+        category: { id: 999999, name: "Invented category" }
+      },
+      annotatedUrls: ["https://supplier.example.com/item"],
+      categoryMapping,
+      input: { ...manualInput, categoryHint: "unclassifiable phrase" }
+    });
+
+    expect(result.category).toEqual({ id: 1, name: "General Goods" });
+    expect(result.issues).toContain(
+      "Category defaulted to General Goods because no closer mapping match was found."
+    );
   });
 
   test("preserves verified manual measurements over web research", () => {
     const result = validateProductResearch({
       raw: researchFixture(),
       annotatedUrls: ["https://supplier.example.com/item"],
-      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       input: {
         sellingPoints: "necklace",
         images: [],
@@ -396,7 +452,7 @@ describe("product research request", () => {
     const result = validateProductResearch({
       raw: researchFixture(),
       annotatedUrls: ["https://supplier.example.com/item"],
-      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       input: {
         ...manualInput,
         sellingPoints: "necklace",
@@ -421,7 +477,7 @@ describe("product research request", () => {
         colour: "Gold-tone with pink and purple accents"
       },
       annotatedUrls: ["https://supplier.example.com/item"],
-      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      categoryMapping,
       input: {
         ...manualInput,
         sellingPoints: "Multicolour tourmaline and pearl necklace",

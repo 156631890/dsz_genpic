@@ -3,6 +3,10 @@ import type {
   ProductResearchEvidence,
   ProductResearchSource
 } from "../../shared/product.js";
+import {
+  formatCategoryCandidates,
+  resolveMappedCategory
+} from "./categoryMatcher.js";
 import { readPackyResponses } from "./packyResponses.js";
 
 const PACKY_PRODUCT_RESEARCH_MAX_ATTEMPTS = 3;
@@ -181,9 +185,10 @@ function packageSignature(value: ResearchPackage): string {
 export function buildProductResearchRequest(
   options: ProductResearchRequestOptions
 ) {
-  const categoryCandidates = selectCategoryCandidates(
+  const categoryCandidates = formatCategoryCandidates(
     options.categoryMapping,
-    options.input
+    options.input.categoryHint,
+    options.input.sellingPoints
   );
 
   return {
@@ -201,15 +206,14 @@ export function buildProductResearchRequest(
           type: "input_text" as const,
           text: [
             "Identify the most likely product and variant from the input and source images.",
-            "Choose exactly one most-specific category ID and path from CATEGORY CANDIDATES.",
-            "Use operator-provided lengthCm, widthCm, and heightCm exactly; do not estimate, change, or replace them.",
-            "Estimate only package weightKg when the operator did not provide packageWeightKg.",
-            "A conventional weight estimate must include normal protective retail packaging, be positive and use package confidence low.",
+            "When categoryHint is non-empty, treat it as authoritative. Use images and selling points only to break ties. When categoryHint is empty, infer from the product.",
+            "Choose exactly one category ID from CATEGORY CANDIDATES.",
+            "Copy PRODUCT INPUT packageWeightKg to package.weightKg exactly, and use lengthCm, widthCm, and heightCm exactly; do not estimate, change, or replace them.",
             "Use the DSZ colour Multicolor for a multicolour product; otherwise use N/A or one to three allowed colour names separated by ' / '.",
             "Return keys identity, category, colour, package, sources, riskFlags and reviewNotes.",
             "identity requires productType, variant and matchSummary strings.",
-            "category requires integer id and exact name from CATEGORY CANDIDATES.",
-            "package requires positive weightKg, lengthCm, widthCm, heightCm and confidence high, medium or low.",
+            "category requires an integer id from CATEGORY CANDIDATES and a non-empty name.",
+            "package requires the exact positive weightKg, lengthCm, widthCm, heightCm from PRODUCT INPUT and confidence high, medium or low.",
             "Set sources to [] because no web evidence is supplied. riskFlags and reviewNotes must be string arrays.",
             "Return strict JSON only, without Markdown or commentary.",
             "CATEGORY CANDIDATES:",
@@ -233,54 +237,11 @@ function optionalPackageFacts(value: Record<string, unknown>): Partial<ResearchP
   );
 }
 
-function isCompleteResearchPackage(
-  value: Partial<ResearchPackage>
-): value is ResearchPackage {
-  return positiveNumber(value.weightKg) !== undefined &&
-    positiveNumber(value.lengthCm) !== undefined &&
-    positiveNumber(value.widthCm) !== undefined &&
-    positiveNumber(value.heightCm) !== undefined;
-}
-
 function normalizeStringList(value: unknown): string[] | undefined {
   if (isNonemptyString(value)) return [value];
   return Array.isArray(value) && value.every(isNonemptyString)
     ? value
     : undefined;
-}
-
-function selectCategoryCandidates(
-  categoryMapping: string,
-  input: ProductInput
-): string {
-  const keywords = (`${input.categoryHint || ""} ${input.sellingPoints}`
-    .toLowerCase().match(/[a-z0-9]+/g) || [])
-    .filter((keyword) => keyword.length >= 4);
-  const mappedLines = categoryMapping
-    .split(/\r?\n/)
-    .filter((line) => /^\|\s*.+?\s*\|\s*\d+\s*\|$/.test(line));
-  const ranked = mappedLines
-    .map((line) => ({
-      line,
-      score: keywords.filter((keyword) => line.toLowerCase().includes(keyword))
-        .length
-    }))
-    .filter((candidate) => candidate.score > 0)
-    .sort((left, right) => right.score - left.score);
-
-  return (ranked.length > 0
-    ? ranked.slice(0, 50).map((candidate) => candidate.line)
-    : mappedLines)
-    .join("\n");
-}
-
-export function parseCategoryMapping(value: string): Map<number, string> {
-  const result = new Map<number, string>();
-  for (const line of value.split(/\r?\n/)) {
-    const match = /^\|\s*(.+?)\s*\|\s*(\d+)\s*\|$/.exec(line);
-    if (match) result.set(Number(match[2]), match[1].trim());
-  }
-  return result;
 }
 
 export function validateProductResearch(options: {
@@ -290,22 +251,14 @@ export function validateProductResearch(options: {
   input: ProductInput;
 }): AcceptedProductResearch {
   const document = parseResearchDocument(options.raw);
-  const mapping = parseCategoryMapping(options.categoryMapping);
-  const mappedName = mapping.get(document.category.id);
-  const generatedCategoryValid = mappedName === document.category.name;
-  const manualCategoryName = positiveNumber(options.input.categoryId)
-    ? mapping.get(options.input.categoryId as number)
-    : undefined;
-  const manualCategoryValid =
-    manualCategoryName !== undefined &&
-    (!options.input.categoryName || options.input.categoryName === manualCategoryName);
-  const manualCategoryProvided =
-    options.input.categoryId !== undefined || Boolean(options.input.categoryName);
-  const category = manualCategoryValid
-    ? { id: options.input.categoryId as number, name: manualCategoryName }
-    : generatedCategoryValid
-      ? document.category
-      : { id: 0, name: "" };
+  const categoryResolution = resolveMappedCategory({
+    categoryMapping: options.categoryMapping,
+    categoryHint: options.input.categoryHint,
+    fallbackText: options.input.sellingPoints,
+    manualCategoryId: options.input.categoryId,
+    generatedCategoryId: document.category.id
+  });
+  const category = categoryResolution.category;
 
   const annotated = new Set(options.annotatedUrls);
   const exactSources = document.sources.filter(
@@ -322,23 +275,15 @@ export function validateProductResearch(options: {
     measuredExactSources.map((source) => packageSignature(source.package))
   );
   const sourcesConflict = sourceSignatures.size > 1;
-  const aggregatePackage = isCompleteResearchPackage(document.package)
-    ? document.package
-    : undefined;
-  const aggregateMatchesSources = aggregatePackage !== undefined &&
-    sourceSignatures.has(packageSignature(aggregatePackage));
-  const evidenceValid =
-    document.package.confidence === "high" &&
-    measuredExactSources.length > 0 &&
-    !sourcesConflict &&
-    aggregateMatchesSources;
   const issues: string[] = [];
 
-  if (manualCategoryProvided && !manualCategoryValid) {
-    issues.push("The manual category ID/path is not in the current mapping.");
+  if (categoryResolution.invalidManualCategory) {
+    issues.push("The manual category ID is not in the current mapping.");
   }
-  if (category.id === 0) {
-    issues.push("Category needs review because no valid ID and path match was found.");
+  if (categoryResolution.defaulted) {
+    issues.push(
+      "Category defaulted to General Goods because no closer mapping match was found."
+    );
   }
   if (sourcesConflict) {
     issues.push("Package sources conflict and need review.");
@@ -361,9 +306,8 @@ export function validateProductResearch(options: {
     issues.push("Colour needs review.");
   }
 
-  const researchedWeight = aggregatePackage?.weightKg;
   const packageFacts = {
-    weightKg: positiveNumber(options.input.packageWeightKg) ?? researchedWeight,
+    weightKg: positiveNumber(options.input.packageWeightKg),
     lengthCm: positiveNumber(options.input.lengthCm),
     widthCm: positiveNumber(options.input.widthCm),
     heightCm: positiveNumber(options.input.heightCm)
@@ -371,14 +315,8 @@ export function validateProductResearch(options: {
   const completePackage = Object.values(packageFacts).every(
     (value) => value !== undefined
   );
-  const usesConventionalWeightEstimate =
-    !evidenceValid &&
-    positiveNumber(options.input.packageWeightKg) === undefined &&
-    positiveNumber(researchedWeight) !== undefined;
-  if (usesConventionalWeightEstimate && completePackage) {
-    issues.push("Package weight uses a conventional estimate.");
-  } else if (!completePackage) {
-    issues.push("Package weight or required operator dimensions are unavailable.");
+  if (!completePackage) {
+    issues.push("Required operator package measurements are unavailable.");
   }
 
   return {
