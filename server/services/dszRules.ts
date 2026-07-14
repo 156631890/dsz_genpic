@@ -11,6 +11,7 @@ import {
   buildShippingZoneRates,
   type ShippingMeasurements
 } from "../../shared/shipping.js";
+import { resolveMappedCategory } from "./categoryMatcher.js";
 import { generateProductCopyWithPacky } from "./productCopy.js";
 import {
   generateProductResearchWithPacky,
@@ -30,117 +31,6 @@ export interface ChatMessage {
   content: string;
 }
 
-const DEFAULT_CATEGORY = {
-  id: 1,
-  name: "General Goods"
-};
-const CATEGORY_HINTS = [
-  {
-    id: 947,
-    name: "Fashion / Women's Fashion / Women's Intimates",
-    keywords: [
-      "women's intimates",
-      "womens intimates",
-      "intimate",
-      "thong",
-      "women underwear",
-      "women's underwear",
-      "女士内衣",
-      "女士内裤",
-      "女士丁字裤",
-      "丁字裤"
-    ]
-  },
-  {
-    id: 952,
-    name: "Fashion / Women's Fashion / Women's Lingerie",
-    keywords: [
-      "women's lingerie",
-      "womens lingerie",
-      "lingerie",
-      "bra",
-      "女士文胸",
-      "文胸",
-      "女士内衣套装",
-      "女性内衣"
-    ]
-  },
-  {
-    id: 953,
-    name: "Fashion / Women's Fashion / Women's Sleepwear",
-    keywords: [
-      "women's sleepwear",
-      "womens sleepwear",
-      "sleepwear",
-      "pyjama",
-      "pajama",
-      "nightwear",
-      "女士睡衣",
-      "女式睡衣",
-      "睡衣"
-    ]
-  },
-  {
-    id: 956,
-    name: "Fashion / Women's Fashion / Women's Swimwear",
-    keywords: [
-      "women's swimwear",
-      "womens swimwear",
-      "women swimwear",
-      "swimwear",
-      "swimsuit",
-      "bikini",
-      "女士泳装",
-      "女士泳衣",
-      "女式泳装",
-      "泳装",
-      "泳衣",
-      "比基尼"
-    ]
-  },
-  {
-    id: 936,
-    name: "Fashion / Men's Fashion / Men's Underwear & Socks",
-    keywords: [
-      "men's underwear",
-      "mens underwear",
-      "men underwear",
-      "men's socks",
-      "mens socks",
-      "男士内裤",
-      "男士袜子",
-      "男式内裤",
-      "男内裤"
-    ]
-  },
-  {
-    id: 929,
-    name: "Fashion / Men's Fashion / Men's Sleepwear",
-    keywords: [
-      "men's sleepwear",
-      "mens sleepwear",
-      "men sleepwear",
-      "men's pyjama",
-      "mens pajama",
-      "男士睡衣",
-      "男式睡衣"
-    ]
-  },
-  {
-    id: 961,
-    name: "Fashion / Men's Fashion / Men's Swimwear",
-    keywords: [
-      "men's swimwear",
-      "mens swimwear",
-      "men swimwear",
-      "men's swimsuit",
-      "mens swimsuit",
-      "男士泳装",
-      "男士泳衣",
-      "男式泳装"
-    ]
-  }
-] as const;
 const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
   "7000": "916",
   "7001": "917",
@@ -229,8 +119,8 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
     FOOTER
   ].join("\n"),
   categoryMapping: [
-    "Women's Intimates | 947",
-    "Default | 1 | General Goods"
+    "| General Goods | default / unclassified | ID: 1 |",
+    "| Fashion / Women's Fashion / Women's Intimates | 947 |"
   ].join("\n"),
   uploadSop: [
     "Full product upload SOP.",
@@ -275,10 +165,10 @@ export function buildDszGenerationMessages(input: {
         "INPUT:",
         JSON.stringify(input.input, null, 2),
         "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, images, risk_flags, review_notes.",
-        "Copy length, width and height exactly from INPUT; do not estimate or replace them.",
+        "Copy weight, length, width and height exactly from INPUT; do not estimate or replace them.",
         "product_name and description must follow the DSZ system prompt rules. If the DSZ system prompt says to output only two final lines, use that as content guidance only; return strict JSON for this API call.",
         "For product_name and description, PRODUCT PROMPT is the only writing rule source. Do not add, override, shorten or reinterpret title and HTML description rules outside PRODUCT PROMPT.",
-        "Choose exactly one best matching Category_Mapping ID from the category mapping. Prefer the most specific sub-subcategory that matches categoryHint, selling points, product type and image context. Do not default every product to Women's Intimates.",
+        "When categoryHint is non-empty it is authoritative. Choose a category ID from CATEGORY MAPPING; the server canonicalises its path.",
         "Use internal JSON key product_name for the title and vendor_price for Vendor Price. The uploader maps product_name to DSZ API name and vendor_price to DSZ API price.",
         "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer.",
         "Shipping rates are calculated by the server, not the model: all Australian zones are 0; New Zealand uses max(actual weight, length * width * height / 5000), with AUD 20 below 3 kg and AUD 40 at or above 3 kg. Do not return shipping rates."
@@ -407,7 +297,7 @@ export async function generateDszFieldsWithPacky(input: {
   fetchImpl?: typeof fetch;
   ruleDocuments?: RuleDocuments;
 }): Promise<ProductGenerationResult> {
-  requireManualPackageDimensions(input.productInput);
+  requireManualPackageMeasurements(input.productInput);
 
   if (input.images && input.identity) {
     return generateEvidenceBackedDszFields({
@@ -425,7 +315,11 @@ export async function generateDszFieldsWithPacky(input: {
 
   if (!apiKey) {
     return {
-      fields: buildFallbackFields(input.productInput, identity),
+      fields: buildFallbackFields(
+        input.productInput,
+        identity,
+        ruleDocuments.categoryMapping
+      ),
       source: "fallback"
     };
   }
@@ -457,6 +351,7 @@ export async function generateDszFieldsWithPacky(input: {
         fields: buildFallbackFields(
           input.productInput,
           identity,
+          ruleDocuments.categoryMapping,
           `Packy field generation failed with ${response.status}. Local fallback fields were generated.`
         ),
         source: "fallback"
@@ -490,7 +385,12 @@ export async function generateDszFieldsWithPacky(input: {
       });
 
   return {
-    fields: completeGeneratedFields(repairedFields, input.productInput, identity),
+    fields: completeGeneratedFields(
+      repairedFields,
+      input.productInput,
+      identity,
+      ruleDocuments.categoryMapping
+    ),
     source: "ai"
   };
 }
@@ -529,16 +429,12 @@ async function generateEvidenceBackedDszFields(input: {
       fetchImpl: input.fetchImpl
     })
   ]);
-  const weight = research.package.weightKg || 0;
-  const { length, width, height } = requireManualPackageDimensions(
+  const { weight, length, width, height } = requireManualPackageMeasurements(
     input.productInput
-  );
-  const hasMeasurements = [weight, length, width, height].every(
-    (value) => value > 0
   );
   const purchasePrice = input.productInput.purchasePriceCny;
   const hasPurchasePrice = typeof purchasePrice === "number" && purchasePrice > 0;
-  const hasPriceInputs = hasMeasurements && hasPurchasePrice;
+  const hasPriceInputs = hasPurchasePrice;
   const vendorPrice = hasPriceInputs
     ? calculateVendorPrice({
         weightKg: weight,
@@ -552,8 +448,6 @@ async function generateEvidenceBackedDszFields(input: {
 
   if (!hasPurchasePrice) {
     issues.push("Purchase price is required to calculate Vendor Price and RRP.");
-  } else if (!hasMeasurements) {
-    issues.push("Package weight is required to calculate Vendor Price and RRP.");
   }
 
   const fields: DszProductFields = {
@@ -569,7 +463,7 @@ async function generateEvidenceBackedDszFields(input: {
     length,
     width,
     height,
-    cbm: hasMeasurements ? calculateCbm(length, width, height) : 0,
+    cbm: calculateCbm(length, width, height),
     brand_name: "Elosung",
     colour: research.colour,
     enabled: true,
@@ -660,22 +554,26 @@ export function calculateCbm(lengthCm: number, widthCm: number, heightCm: number
   return round((lengthCm * widthCm * heightCm) / 1_000_000, 6);
 }
 
-function requireManualPackageDimensions(input: ProductInput): {
+function requireManualPackageMeasurements(input: ProductInput): {
+  weight: number;
   length: number;
   width: number;
   height: number;
 } {
+  const weight = Number(input.packageWeightKg);
   const length = Number(input.lengthCm);
   const width = Number(input.widthCm);
   const height = Number(input.heightCm);
 
-  if (![length, width, height].every(
+  if (![weight, length, width, height].every(
     (value) => Number.isFinite(value) && value > 0
   )) {
-    throw new Error("Package length, width, and height are required.");
+    throw new Error(
+      "Package weight, length, width, and height are required."
+    );
   }
 
-  return { length, width, height };
+  return { weight, length, width, height };
 }
 
 export function calculateVendorPrice(input: {
@@ -722,10 +620,11 @@ export async function loadRuleDocuments(
 function buildFallbackFields(
   input: ProductInput,
   identity: ProductIdentity,
+  categoryMapping: string,
   reason?: string
 ): DszProductFields {
-  const weight = input.packageWeightKg || 0.1;
-  const { length, width, height } = requireManualPackageDimensions(input);
+  const { weight, length, width, height } =
+    requireManualPackageMeasurements(input);
   const vendorPrice = calculateVendorPrice({
     weightKg: weight,
     lengthCm: length,
@@ -733,7 +632,13 @@ function buildFallbackFields(
     heightCm: height,
     purchasePriceCny: input.purchasePriceCny || 0
   });
-  const category = resolveCategoryHint(input.categoryHint) || guessCategory(input);
+  const categoryResolution = resolveMappedCategory({
+    categoryMapping,
+    categoryHint: input.categoryHint,
+    fallbackText: input.sellingPoints,
+    manualCategoryId: input.categoryId
+  });
+  const category = categoryResolution.category;
   const productName = buildFallbackTitle(input);
 
   return {
@@ -766,7 +671,10 @@ function buildFallbackFields(
     risk_flags: [],
     review_notes: [
       ...(reason ? [reason] : []),
-      "AI field generation fallback used. Review title, category, colour, weight and price before live upload."
+      ...(categoryResolution.defaulted
+        ? ["Category defaulted to General Goods because no closer mapping match was found."]
+        : []),
+      "AI field generation fallback used. Review title, category, colour and price before live upload."
     ]
   };
 }
@@ -774,28 +682,38 @@ function buildFallbackFields(
 function completeGeneratedFields(
   fields: DszProductFields,
   input: ProductInput,
-  identity: ProductIdentity
+  identity: ProductIdentity,
+  categoryMapping: string
 ): DszProductFields {
-  const fallback = buildFallbackFields(input, identity);
+  const fallback = buildFallbackFields(input, identity, categoryMapping);
+  const categoryResolution = resolveMappedCategory({
+    categoryMapping,
+    categoryHint: input.categoryHint,
+    fallbackText: input.sellingPoints,
+    manualCategoryId: input.categoryId,
+    generatedCategoryId: Number(fields.categories || fields.category)
+  });
   const merged = normalizeGeneratedFields({
     ...fallback,
     ...fields,
-    sku: fields.sku || fallback.sku,
-    ean_code: fields.ean_code || fallback.ean_code,
+    weight: fallback.weight,
     length: fallback.length,
     width: fallback.width,
     height: fallback.height,
     cbm: fallback.cbm,
+    category: categoryResolution.category.id,
+    categories: String(categoryResolution.category.id),
+    categoryName: categoryResolution.category.name,
+    sku: fields.sku || fallback.sku,
+    ean_code: fields.ean_code || fallback.ean_code,
     images: fields.images?.length ? fields.images : input.imageUrls,
     zone_rates: standardZoneRates({
-      actualWeightKg: fields.weight,
+      actualWeightKg: fallback.weight,
       lengthCm: fallback.length,
       widthCm: fallback.width,
       heightCm: fallback.height
     })
   });
-  const hintedCategory = resolveCategoryHint(input.categoryHint);
-
   merged.description = normalizeDescriptionHtml(merged.description);
   if (!followsDszDescriptionPrompt(merged.description)) {
     merged.description = buildFallbackDescription(input);
@@ -803,10 +721,16 @@ function completeGeneratedFields(
     merged.description = `${merged.description}${FOOTER}`;
   }
   merged.description = normalizeDescriptionHtml(merged.description);
-  if (hintedCategory) {
-    merged.category = hintedCategory.id;
-    merged.categories = String(hintedCategory.id);
-    merged.categoryName = hintedCategory.name;
+  if (
+    categoryResolution.defaulted &&
+    !merged.review_notes.includes(
+      "Category defaulted to General Goods because no closer mapping match was found."
+    )
+  ) {
+    merged.review_notes = [
+      ...merged.review_notes,
+      "Category defaulted to General Goods because no closer mapping match was found."
+    ];
   }
   if (!isValidSku(merged.sku)) {
     merged.sku = fallback.sku;
@@ -872,51 +796,6 @@ function createDefaultIdentity(): ProductIdentity {
     sku: formatSku(10001),
     eanCode: "4748549810"
   };
-}
-
-function guessCategory(input: ProductInput) {
-  const text = `${input.categoryHint || ""} ${input.sellingPoints}`.toLowerCase();
-  const category = resolveCategoryHint(text);
-
-  if (category) {
-    return category;
-  }
-
-  if (text.includes("intimate") || text.includes("underwear") || text.includes("thong")) {
-    return {
-      id: 947,
-      name: "Fashion / Women's Fashion / Women's Intimates"
-    };
-  }
-
-  return DEFAULT_CATEGORY;
-}
-
-function resolveCategoryHint(value?: string) {
-  const normalized = normalizeSearchText(value);
-
-  if (!normalized) {
-    return undefined;
-  }
-
-  return CATEGORY_HINTS.flatMap((category) =>
-    category.keywords.map((keyword) => ({
-      category,
-      keyword: normalizeSearchText(keyword)
-    }))
-  )
-    .filter((match) => match.keyword && normalized.includes(match.keyword))
-    .sort((left, right) => right.keyword.length - left.keyword.length)[0]
-    ?.category;
-}
-
-function normalizeSearchText(value?: string): string {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/[’']/g, "")
-    .replace(/&/g, " and ")
-    .replace(/\s+/g, " ")
-    .trim();
 }
 
 function buildFallbackTitle(input: ProductInput): string {
@@ -1067,7 +946,7 @@ function round(value: number, decimals: number): number {
 }
 
 function normalizeCategoryId(value: string | number): string {
-  const id = String(value || DEFAULT_CATEGORY.id).trim();
+  const id = String(value || 1).trim();
   return LEGACY_CATEGORY_ID_MAP[id] || id;
 }
 

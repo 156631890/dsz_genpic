@@ -92,11 +92,17 @@ const workflowTitle =
 const workflowFooter = extractCanonicalProductFooter(await loadProductSystemPrompt());
 const workflowDescription =
   `<p><strong>Product Overview</strong></p><p>A multicolour necklace for everyday styling.</p>${workflowFooter}`;
+const mappedCategories = [
+  "| General Goods | default / unclassified | ID: 1 |",
+  "| Fashion / Men's Fashion / Men's Swimwear | 961 |",
+  "| Fashion / Women's Fashion / Women's Intimates | 947 |",
+  "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+  "| Fashion / Women's Fashion / Women's Swimwear | 956 |"
+].join("\n");
 const workflowRules: RuleDocuments = {
   fieldRules: "Current DSZ field rules.",
   productPrompt: await loadProductSystemPrompt(),
-  categoryMapping:
-    "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+  categoryMapping: mappedCategories,
   uploadSop: "Current full product upload SOP.",
   productUploadAu: "Current Australian upload rules."
 };
@@ -230,6 +236,7 @@ describe("complete DSZ field generation", () => {
         sellingPoints: "Multicolour tourmaline style stone and pearl necklace",
         categoryHint: "Women's Jewellery",
         purchasePriceCny: 20,
+        packageWeightKg: 0.2,
         lengthCm: 15,
         widthCm: 10,
         heightCm: 4,
@@ -252,7 +259,7 @@ describe("complete DSZ field generation", () => {
       status: 1,
       ean_code: "4748549810",
       stock: 1000,
-      weight: 0.12,
+      weight: 0.2,
       length: 15,
       width: 10,
       height: 4,
@@ -263,7 +270,7 @@ describe("complete DSZ field generation", () => {
     });
     expect(result.fields.cbm).toBe(calculateCbm(15, 10, 4));
     expect(result.fields.vendor_price).toBe(calculateVendorPrice({
-      weightKg: 0.12,
+      weightKg: 0.2,
       lengthCm: 15,
       widthCm: 10,
       heightCm: 4,
@@ -273,7 +280,7 @@ describe("complete DSZ field generation", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  test("uses manual dimensions with a conventional package weight", async () => {
+  test("uses all operator package measurements without a conventional weight", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { instructions?: string };
       if (body.instructions?.startsWith("Generate complete DSZ product research JSON")) {
@@ -286,6 +293,7 @@ describe("complete DSZ field generation", () => {
         sellingPoints: "Multicolour tourmaline style stone and pearl necklace",
         categoryHint: "Women's Jewellery",
         purchasePriceCny: 20,
+        packageWeightKg: 0.2,
         lengthCm: 15,
         widthCm: 10,
         heightCm: 4,
@@ -300,13 +308,13 @@ describe("complete DSZ field generation", () => {
     });
 
     expect(result.fields).toMatchObject({
-      weight: 0.12,
+      weight: 0.2,
       length: 15,
       width: 10,
       height: 4,
       cbm: calculateCbm(15, 10, 4)
     });
-    expect(result.issues).toContain(
+    expect(result.issues).not.toContain(
       "Package weight uses a conventional estimate."
     );
     expect(result.issues).not.toContain(
@@ -317,17 +325,17 @@ describe("complete DSZ field generation", () => {
     );
   });
 
-  test("rejects field generation without manual package dimensions", async () => {
+  test.each([
+    ["weight", { packageWeightKg: undefined }],
+    ["length", { lengthCm: undefined }],
+    ["width", { widthCm: undefined }],
+    ["height", { heightCm: undefined }]
+  ])("rejects field generation without manual package %s", async (_name, patch) => {
     await expect(generateDszFieldsWithPacky({
-      productInput: {
-        ...input,
-        lengthCm: undefined,
-        widthCm: undefined,
-        heightCm: undefined
-      },
+      productInput: { ...input, ...patch },
       env: {}
     })).rejects.toThrow(
-      "Package length, width, and height are required."
+      "Package weight, length, width, and height are required."
     );
   });
 });
@@ -341,7 +349,7 @@ describe("DSZ field rules", () => {
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt,
-        categoryMapping: "Women's Intimates | 947",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       }
@@ -349,7 +357,10 @@ describe("DSZ field rules", () => {
 
     expect(messages).toHaveLength(2);
     expect(messages[1].content).toContain(
-      "Copy length, width and height exactly from INPUT; do not estimate or replace them."
+      "Copy weight, length, width and height exactly from INPUT; do not estimate or replace them."
+    );
+    expect(messages[1].content).toContain(
+      "When categoryHint is non-empty it is authoritative. Choose a category ID from CATEGORY MAPPING; the server canonicalises its path."
     );
     expect(messages[0].role).toBe("system");
     expect(messages[1].content).toContain("Soft cotton blend thong underwear");
@@ -370,9 +381,6 @@ describe("DSZ field rules", () => {
     );
     expect(messages[1].content).toContain(
       "return strict JSON for this API call"
-    );
-    expect(messages[1].content).toContain(
-      "Choose exactly one best matching Category_Mapping ID"
     );
     expect(messages[1].content).toContain("JSON");
   });
@@ -592,7 +600,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 947",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       },
@@ -626,9 +634,67 @@ ${JSON.stringify(fields)}
     expect(result.fields.description).not.toMatch(/\r|\n/);
   });
 
-  test("keeps manual dimensions when AI returns different values", async () => {
+  test("uses the supplied mapping for local fallback categories", async () => {
+    const result = await generateDszFieldsWithPacky({
+      productInput: {
+        ...input,
+        categoryHint: "Women's Jewelry"
+      },
+      env: {},
+      ruleDocuments: {
+        fieldRules: "Current DSZ field rules.",
+        productPrompt: "Current product prompt.",
+        categoryMapping: [
+          "| General Goods | default / unclassified | ID: 1 |",
+          "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
+        ].join("\n"),
+        uploadSop: "Current upload SOP.",
+        productUploadAu: "Current AU rules."
+      }
+    });
+
+    expect(result.source).toBe("fallback");
+    expect(result.fields).toMatchObject({
+      category: 950,
+      categories: "950",
+      categoryName: "Fashion / Women's Fashion / Women's Jewellery",
+      weight: input.packageWeightKg
+    });
+  });
+
+  test("defaults an unknown local fallback category to mapped General Goods", async () => {
+    const result = await generateDszFieldsWithPacky({
+      productInput: {
+        ...input,
+        categoryHint: "unclassifiable phrase"
+      },
+      env: {},
+      ruleDocuments: {
+        fieldRules: "Current DSZ field rules.",
+        productPrompt: "Current product prompt.",
+        categoryMapping: [
+          "| General Goods | default / unclassified | ID: 1 |",
+          "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
+        ].join("\n"),
+        uploadSop: "Current upload SOP.",
+        productUploadAu: "Current AU rules."
+      }
+    });
+
+    expect(result.fields).toMatchObject({
+      category: 1,
+      categories: "1",
+      categoryName: "General Goods"
+    });
+    expect(result.fields.review_notes).toContain(
+      "Category defaulted to General Goods because no closer mapping match was found."
+    );
+  });
+
+  test("keeps all operator package measurements when AI returns different values", async () => {
     const manualInput: ProductInput = {
       ...input,
+      packageWeightKg: 0.2,
       lengthCm: 21,
       widthCm: 13,
       heightCm: 7
@@ -640,6 +706,7 @@ ${JSON.stringify(fields)}
             message: {
               content: JSON.stringify({
                 ...fields,
+                weight: 99,
                 length: 99,
                 width: 98,
                 height: 97,
@@ -660,7 +727,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 947",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       },
@@ -668,13 +735,14 @@ ${JSON.stringify(fields)}
     });
 
     const vendorPrice = calculateVendorPrice({
-      weightKg: fields.weight,
+      weightKg: 0.2,
       lengthCm: 21,
       widthCm: 13,
       heightCm: 7,
       purchasePriceCny: manualInput.purchasePriceCny as number
     });
     expect(result.fields).toMatchObject({
+      weight: 0.2,
       length: 21,
       width: 13,
       height: 7,
@@ -739,7 +807,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt,
-        categoryMapping: "Women's Intimates | 947",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       },
@@ -782,7 +850,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Fashion / Women's Fashion / Women's Swimwear | 956",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       },
@@ -795,7 +863,7 @@ ${JSON.stringify(fields)}
     expect(result.fields.categoryName).toBe("Fashion / Women's Fashion / Women's Swimwear");
   });
 
-  test("uses Chinese category hints for local fallback category IDs", async () => {
+  test("defaults an unmatched Chinese hint when semantic AI is unavailable", async () => {
     const result = await generateDszFieldsWithPacky({
       productInput: {
         ...input,
@@ -806,16 +874,19 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Fashion / Women's Fashion / Women's Swimwear | 956",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       }
     });
 
     expect(result.source).toBe("fallback");
-    expect(result.fields.category).toBe(956);
-    expect(result.fields.categories).toBe("956");
-    expect(result.fields.categoryName).toBe("Fashion / Women's Fashion / Women's Swimwear");
+    expect(result.fields.category).toBe(1);
+    expect(result.fields.categories).toBe("1");
+    expect(result.fields.categoryName).toBe("General Goods");
+    expect(result.fields.review_notes).toContain(
+      "Category defaulted to General Goods because no closer mapping match was found."
+    );
   });
 
   test("prefers specific gendered category hints over generic keywords", async () => {
@@ -829,7 +900,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Fashion / Men's Fashion / Men's Swimwear | 961",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       }
@@ -866,7 +937,7 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "F2 Product Name. F13 Vendor Product Description.",
         productPrompt: "Title must be pure English. HTML must be single line.",
-        categoryMapping: "Women's Intimates | 947",
+        categoryMapping: mappedCategories,
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       },
