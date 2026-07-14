@@ -11,3 +11,4 @@ tmp
 
 .vercel
 .env*.local
+.worktrees/
