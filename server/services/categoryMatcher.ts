@@ -115,8 +115,10 @@ export function rankCategoryEntries(
     .sort((left, right) => right.score - left.score || left.index - right.index);
   const secondScore = ranked[1]?.score || 0;
 
-  return ranked.map(({ index: _index, ...entry }, index) => ({
-    ...entry,
+  return ranked.map((entry, index) => ({
+    id: entry.id,
+    name: entry.name,
+    score: entry.score,
     highConfidence:
       index === 0 && entry.score >= 7_000 && entry.score > secondScore
   }));
