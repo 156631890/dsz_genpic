@@ -594,6 +594,13 @@ ${JSON.stringify(fields)}
     expect(userMessage).toContain("Fashion / Women's Fashion / Women's Intimates");
     expect(userMessage).toContain("FULL PRODUCT UPLOAD SOP");
     expect(userMessage).toContain("Use ean_code as a 10 digit string");
+    expect(rules.fieldRules).not.toContain('默认 "General Goods"');
+    expect(rules.fieldRules).not.toContain("| General Goods | — | — | 1 |");
+    expect(rules.fieldRules).not.toContain("| 蓝牙耳机 | 6025 |");
+    expect(rules.uploadSop).not.toContain("General Goods (ID=1)");
+    expect(rules.uploadSop).not.toContain("| 蓝牙耳机 | 6025 |");
+    expect(rules.fieldRules).toContain("Category_Mapping.md");
+    expect(rules.uploadSop).toContain("Category_Mapping.md");
   });
 
   test("falls back to local rules when Packy field generation is temporarily unavailable", async () => {

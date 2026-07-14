@@ -128,8 +128,9 @@ Dropshipzone 后台填写 16 个字段
 
 ### F1. Category（类目）
 - **规则：** 根据产品关键词匹配 `Category_Mapping.md` 中的完整类目链
-- **匹配顺序：** Sub-subcategory > Subcategory > Category > General Goods (ID=1)
-- **参考：** `SOP/Category_Mapping.md`
+- **匹配顺序：** 用户类目提示 > AI 识别 > 最相近的当前有效完整路径
+- **无匹配处理：** 停止生成并要求用户提供更具体的类目提示，不生成默认类目
+- **参考：** `Category_Mapping.md`
 
 ### F2. Product Name（产品名称）
 - **来源：** AI 根据链接内容 + 产品特征生成
@@ -300,7 +301,7 @@ https://www.amazon.com.au/...（任意链接）
 ### 执行后输出格式
 ```
 ✅ SKU: Elosung10001
-✅ Category: Electronics > Headphones and Earphones (ID: 6025)
+✅ Category: [Category_Mapping.md 中的完整路径] (ID: [当前有效 ID])
 ✅ Product Name: Wireless TWS Earbuds - Bluetooth 5.3 - Black, Active Noise Cancelling, Gym & Sports
 ✅ EAN: 5901234567890
 ✅ Quantity: 1000
@@ -323,26 +324,14 @@ MOQ：2件
 
 ## 九、附录
 
-### 常用类目 ID 速查（Top 20）
-| 产品 | Category ID |
-|------|------------|
-| 蓝牙耳机 | 6025 |
-| 游戏手柄 | 6024 |
-| 手机壳 | 6028 |
-| 车载支架 | 6027 |
-| 保温杯 | 12018 |
-| 厨房收纳 | 12025 |
-| 冰块机 | 1020 |
-| 美容仪 | 11008 |
-| 儿童玩具 | 4006 |
-| 筋膜枪 | 11005 |
-| 瑜伽垫 | 15003 |
-| 宠物喂食器 | 14003 |
-| 男士泳装 | 961 |
-| 女士泳装 | 956 |
+### 类目 ID 查询
+- `Category_Mapping.md` 是唯一类目代码参考
+- 每次按照类目提示检索最相近的当前有效完整路径
+- 不使用旧速查表、默认 ID 或未出现在当前映射中的代码
+- 无有效匹配时要求用户补充更具体的类目提示
 
 ### 快速参考文档
-- 完整类目表：`SOP/Category_Mapping.md`
+- 完整类目表：`Category_Mapping.md`
 - 字段规则详情：`SOP/Dropshipzone_Field_Rules.md`
 - 产品上传模板：`SOP/Product_Upload_AU.md`
 
