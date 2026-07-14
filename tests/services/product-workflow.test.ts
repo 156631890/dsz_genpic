@@ -525,6 +525,11 @@ ${JSON.stringify(fields)}
 
     expect(rules.fieldRules).toContain("Dropshipzone");
     expect(rules.productPrompt).toContain("固定页脚规则");
+    expect(rules.productPrompt).toContain("<h2>Returns, Refunds and Replacements</h2>");
+    expect(rules.productPrompt).toContain("local consumer laws");
+    expect(rules.productPrompt).toContain("5–12 business days");
+    expect(rules.productPrompt).toContain("</p >");
+    expect(rules.productPrompt).not.toContain("Australian Consumer Law (ACL)");
     expect(rules.categoryMapping).toContain("Fashion / Women's Fashion / Women's Intimates");
     expect(rules.uploadSop).toContain("Dropshipzone 16 字段");
     expect(rules.productUploadAu).toContain("澳洲独立站");
@@ -631,6 +636,12 @@ ${JSON.stringify(fields)}
     expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
     expect(result.fields.description).not.toContain("<p><strong>Ideal For</strong></p>");
+    expect(result.fields.description).toContain("<h2>Returns, Refunds and Replacements</h2>");
+    expect(result.fields.description).toContain("local consumer laws");
+    expect(result.fields.description).toContain("5–12 business days");
+    expect(result.fields.description).toContain("</p >");
+    expect(result.fields.description).not.toContain("Australian Consumer Law (ACL)");
+    expect(result.fields.description).not.toContain("Victoria");
     expect(result.fields.description).not.toMatch(/\r|\n/);
   });
 
@@ -757,7 +768,8 @@ ${JSON.stringify(fields)}
     const productPrompt =
       "【HTML 描述生成总规则】\n- 描述必须是 Amazon 风格。\n【HTML 描述建议结构】\nProduct Overview, Key Features, Why It Stands Out, Notes.";
     const repairedDescription =
-      "<p><strong>Product Overview</strong></p><p>Women cotton thong underwear designed for breathable everyday comfort and smooth daily wear.</p><p><strong>Key Features</strong></p><ul><li>Soft cotton blend helps support comfortable everyday wear.</li><li>Breathable stretch fabric supports flexible movement.</li><li>Low-profile thong cut helps reduce visible lines under outfits.</li><li>Multiple colour options support easy wardrobe matching.</li></ul><p><strong>Why It Stands Out</strong></p><p>The design focuses on a practical balance of softness, stretch and everyday fit without unsupported claims.</p><p><strong>Notes</strong></p><p>Please check the selected colour and size before purchase.</p><p><strong>Returns, Refunds and Replacements </strong><br />Products that are received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with the Australian Consumer Law (ACL). We are committed to ensuring all products meet the standards of quality and reliability expected by our customers. However, please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p><p><strong>Delivery Timeframe</strong></p><p>Please note that we cannot guarantee the exact date of arrival, and the delivery timeframes excluding weekends and public holidays are as follows:</p><ul><li>For customers in Victoria, approximately 7-10 working days;</li><li>For customers in NSW, SA, ACT, and QLD, approximately 9-12 working days;</li><li>For customers in WA, NT, and TAS, approximately 9-12 working days.</li></ul>";
+      "<p><strong>Product Overview</strong></p><p>Women cotton thong underwear designed for breathable everyday comfort and smooth daily wear.</p><p><strong>Key Features</strong></p><ul><li>Soft cotton blend helps support comfortable everyday wear.</li><li>Breathable stretch fabric supports flexible movement.</li><li>Low-profile thong cut helps reduce visible lines under outfits.</li><li>Multiple colour options support easy wardrobe matching.</li></ul><p><strong>Why It Stands Out</strong></p><p>The design focuses on a practical balance of softness, stretch and everyday fit without unsupported claims.</p><p><strong>Notes</strong></p><p>Please check the selected colour and size before purchase.</p>" +
+      workflowFooter.replace(/\s{2,}/g, " ");
     let callIndex = 0;
     const fetchImpl = vi.fn(async (_url, init) => {
       const currentCallIndex = callIndex;

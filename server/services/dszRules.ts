@@ -81,7 +81,7 @@ const LEGACY_CATEGORY_ID_MAP: Record<string, string> = {
 };
 
 const FOOTER =
-  "<p><strong>Returns, Refunds and Replacements </strong><br />Products that are received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with the Australian Consumer Law (ACL). We are committed to ensuring all products meet the standards of quality and reliability expected by our customers. However, please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p><p><strong>Delivery Timeframe</strong></p><p>Please note that we cannot guarantee the exact date of arrival, and the delivery timeframes excluding weekends and public holidays are as follows:</p><ul><li>For customers in Victoria, approximately 7-10 working days;</li><li>For customers in NSW, SA, ACT, and QLD, approximately 9-12 working days;</li><li>For customers in WA, NT, and TAS, approximately 9-12 working days.</li></ul>";
+  "<h2>Returns, Refunds and Replacements</h2><p>Products received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with local consumer laws. We are committed to ensuring all products meet the standards of quality and reliability expected by our customers.</p ><p>Please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p ><h2>Delivery Timeframe</h2><p>Delivery is approximately 5–12 business days (excluding weekends and public holidays).</p >";
 
 const REQUIRED_DESCRIPTION_SECTIONS = [
   "Product Overview",
@@ -113,9 +113,9 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
     "Do not invent unsupported specifications, certifications, links, logos, brand claims, materials or measurements.",
     "The title should be concise, searchable and based on visible product features plus seller selling points.",
     "The description must be single-line HTML.",
-    "Allowed HTML tags only: <p>, <strong>, <ul>, <li>, <br />.",
+    "Allowed HTML tags only: <h2>, <p>, <strong>, <ul>, <li>, <br />.",
     "Include Product Overview, Key Features and Notes sections when useful.",
-    "Always include this fixed ACL and Delivery Timeframe footer:",
+    "Always include this fixed Returns, Refunds and Replacements and Delivery Timeframe footer:",
     FOOTER
   ].join("\n"),
   categoryMapping: [

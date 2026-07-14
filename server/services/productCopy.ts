@@ -68,10 +68,7 @@ export function extractCanonicalProductFooter(systemPrompt: string): string {
     tags.some((tag) => !ALLOWED_HTML_TAGS.has(tag)) ||
     /[<>]/.test(textNodes) ||
     hasInvalidHtmlStructure(footer) ||
-    !(
-      footer.includes("local consumer laws") ||
-      footer.includes("Australian Consumer Law (ACL)")
-    ) ||
+    !footer.includes("local consumer laws") ||
     !footer.includes("Delivery Timeframe")
   ) {
     throw new Error("DSZ system prompt does not contain the canonical product footer.");

@@ -85,8 +85,8 @@ Step 2. 搜索澳大利亚市场
 - 描述必须是 Amazon 风格，强调清晰结构、购买理由、卖点展开、场景化表达和可快速浏览。
 - 描述必须体现 SEO 与面向 AI 摘要的可解析性，尽量使用清晰、明确、实体化的表达，不使用模糊空话。
 - 只能使用以下 HTML 标签：
-<p> <strong> <ul> <li> <br />
-- 不要使用 <a>、<img>、<table>、<h1>、<h2>、<div>、<span> 等其他标签。
+<h2> <p> <strong> <ul> <li> <br />
+- 不要使用 <a>、<img>、<table>、<h1>、<div>、<span> 等其他标签。
 - 不得出现超链接、网址或第三方站点名。
 - 不得出现无根据的对比贬低或虚假承诺。
 - 不得编造规格。若参数无法确认，则省略该参数，不要猜。
@@ -189,15 +189,20 @@ Do not aim at eyes or face.
 【固定页脚规则】
 - 在描述最后必须拼接以下固定页脚。
 - 必须保留其原始含义和原始英文内容。
-- 允许为了单行输出而规范空格和标签间距，但不得改写核心文案。
+- 允许为了单行输出而移除换行，但不得改写核心文案或固定页脚标签。
 - 固定页脚如下：
-<p><strong>Returns, Refunds and Replacements </strong><br />Products that are received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with the Australian Consumer Law (ACL). We are committed to ensuring all products meet the standards of quality and reliability expected by our customers. However, please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p><p><strong>Delivery Timeframe</strong></p><p>Please note that we cannot guarantee the exact date of arrival, and the delivery timeframes excluding weekends and public holidays are as follows:</p><ul><li>For customers in Victoria, approximately 7-10 working days;</li><li>For customers in NSW, SA, ACT, and QLD, approximately 9-12 working days;</li><li>For customers in WA, NT, and TAS, approximately 9-12 working days.</li></ul>
+<h2>Returns, Refunds and Replacements</h2>
+<p>Products received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with local consumer laws. We are committed to ensuring all products meet the standards of quality and reliability expected by our customers.</p >
+<p>Please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p >
+
+<h2>Delivery Timeframe</h2>
+<p>Delivery is approximately 5–12 business days (excluding weekends and public holidays).</p >
 
 【格式清洗规则】
 - 删除中文标点。
 - 删除常见特殊字符，包括但不限于：
 “ ” ‘ ’ ? € ™ ® © ★ ☆ ※ ◆ • → ← ✔
-- 仅保留必要英文字符、数字、空格、标准英文标点和 HTML 标签。
+- 仅保留必要英文字符、数字、空格、标准英文标点、固定页脚中的 en dash（–）和 HTML 标签。
 - 确保 HTML 标签闭合。
 - 不要在 HTML 内容里出现换行。
 - 不要输出多余空格堆叠。

@@ -101,7 +101,13 @@ describe("product copy messages", () => {
       "utf8"
     );
 
-    await expect(loadProductSystemPrompt()).resolves.toBe(expected);
+    const loaded = await loadProductSystemPrompt();
+
+    expect(loaded).toBe(expected);
+    const normalizedLoaded = loaded.replace(/\r\n/g, "\n");
+    expect(normalizedLoaded).toContain(suppliedFooterSource);
+    expect(loaded).not.toContain("Australian Consumer Law (ACL)");
+    expect(loaded).not.toContain("WA, NT, and TAS");
   });
 
   test("resolves the prompt only from the module-relative rules path, independent of cwd", async () => {
@@ -198,8 +204,13 @@ describe("product copy validation", () => {
   });
 
   test("extracts only the exact HTML footer from the loaded system prompt", () => {
-    expect(canonicalFooter).toMatch(/^<p>/);
-    expect(canonicalFooter).toMatch(/<\/ul>$/);
+    expect(canonicalFooter).toMatch(/^<h2>/);
+    expect(canonicalFooter).toMatch(/<\/p >$/);
+    expect(canonicalFooter).toContain("Products received faulty");
+    expect(canonicalFooter).toContain("local consumer laws");
+    expect(canonicalFooter).toContain("Delivery Timeframe");
+    expect(canonicalFooter).toContain("5–12 business days");
+    expect(canonicalFooter).not.toContain("Australian Consumer Law (ACL)");
     expect(canonicalFooter).not.toContain("在描述最后");
     expect(canonicalFooter).not.toContain("固定页脚如下");
   });
@@ -220,7 +231,7 @@ describe("product copy validation", () => {
   test("extracts and safely joins a complete multiline canonical footer", () => {
     const multilineFooter = canonicalFooter
       .replace(/></g, ">\n<")
-      .replace("Products that are received", "Products that\nare received");
+      .replace("Products received", "Products\nreceived");
     const suppliedPrompt = [
       "【固定页脚规则】",
       "- 固定页脚如下：",
@@ -231,16 +242,16 @@ describe("product copy validation", () => {
     const extracted = extractCanonicalProductFooter(suppliedPrompt);
 
     expect(extracted).toBe(multilineFooter.replace(/\n/g, " "));
-    expect(extracted).toContain("Products that are received");
-    expect(extracted).toContain("Australian Consumer Law (ACL)");
+    expect(extracted).toContain("Products received");
+    expect(extracted).toContain("local consumer laws");
     expect(extracted).toContain("Delivery Timeframe");
-    expect(extracted).toContain("WA, NT, and TAS");
+    expect(extracted).toContain("5–12 business days");
   });
 
   test.each([
-    ["missing ACL phrase", canonicalFooter.replace("Australian Consumer Law (ACL)", "consumer law")],
+    ["missing consumer-laws phrase", canonicalFooter.replace("local consumer laws", "consumer rules")],
     ["missing delivery phrase", canonicalFooter.replace("Delivery Timeframe", "Shipping")],
-    ["invalid HTML structure", canonicalFooter.replace("</ul>", "")]
+    ["invalid HTML structure", canonicalFooter.replace("</h2>", "")]
   ])("rejects a canonical footer with %s", (_label, footer) => {
     const suppliedPrompt = [
       "【固定页脚规则】",
@@ -250,6 +261,22 @@ describe("product copy validation", () => {
     ].join("\n");
 
     expect(() => extractCanonicalProductFooter(suppliedPrompt)).toThrow(/canonical product footer/i);
+  });
+
+  test("rejects the legacy ACL footer as canonical", () => {
+    const legacyFooter =
+      "<p>Returns, Refunds and Replacements under the Australian Consumer Law (ACL).</p>" +
+      "<p>Delivery Timeframe</p>";
+    const suppliedPrompt = [
+      "【固定页脚规则】",
+      "- 固定页脚如下：",
+      legacyFooter,
+      "【格式清洗规则】"
+    ].join("\n");
+
+    expect(() => extractCanonicalProductFooter(suppliedPrompt)).toThrow(
+      /canonical product footer/i
+    );
   });
 
   test("accepts a valid title and allowed single-line HTML description", () => {
@@ -326,12 +353,12 @@ describe("product copy validation", () => {
   test.each([
     ["truncated footer", `${descriptionPrefix}${canonicalFooter.slice(0, -20)}`],
     [
-      "rewritten ACL wording",
-      `${descriptionPrefix}${canonicalFooter.replace("Australian Consumer Law (ACL)", "Australian Consumer Law")}`
+      "rewritten consumer-laws wording",
+      `${descriptionPrefix}${canonicalFooter.replace("local consumer laws", "consumer laws")}`
     ],
     [
-      "missing delivery regions",
-      `${descriptionPrefix}${canonicalFooter.replace("NSW, SA, ACT, and QLD", "NSW and QLD")}`
+      "rewritten delivery timeframe",
+      `${descriptionPrefix}${canonicalFooter.replace("5–12 business days", "7–14 business days")}`
     ],
     ["footer followed by content", `${validDescription}<p>Extra content</p>`]
   ])("rejects %s", (_label, description) => {
@@ -348,21 +375,21 @@ describe("product copy validation", () => {
   });
 
   test("accepts insignificant text-node whitespace changes at footer tag boundaries", () => {
-    const footerWithoutHeadingSpace = canonicalFooter.replace(
-      "Returns, Refunds and Replacements </strong>",
-      "Returns, Refunds and Replacements</strong>"
+    const footerWithHeadingSpace = canonicalFooter.replace(
+      "Returns, Refunds and Replacements</h2>",
+      "Returns, Refunds and Replacements </h2>"
     );
 
     expect(validateCopy({
       title: validTitle,
-      description: `${descriptionPrefix}${footerWithoutHeadingSpace}`
+      description: `${descriptionPrefix}${footerWithHeadingSpace}`
     })).toEqual([]);
   });
 
   test("accepts authorized repeated ordinary spaces in footer text", () => {
     const doubleSpacedFooter = canonicalFooter.replace(
-      "Products that are received",
-      "Products  that  are received"
+      "Products received",
+      "Products  received"
     );
 
     expect(validateCopy({
