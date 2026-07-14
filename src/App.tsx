@@ -46,6 +46,12 @@ const idleTask: TaskState = { status: "idle", error: "" };
 const MAX_SOURCE_IMAGES = 4;
 const MAX_SOURCE_IMAGE_BATCH_BYTES = 4_000_000;
 const IMAGE_ROLE_CONCURRENCY = 2;
+const OPERATOR_PACKAGE_FIELDS = new Set<keyof DszProductFields>([
+  "weight",
+  "length",
+  "width",
+  "height"
+]);
 const emptyOptionalInputs: OptionalInputs = {
   categoryHint: "",
   purchasePriceCny: ""
@@ -289,7 +295,7 @@ function DetailsPanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate
       </label>
       <label>Quantity<NumericInput inputMode="numeric" value={fields.stock}
         onCommit={(value) => onUpdate("stock", value)} /></label>
-      <label>Package Weight kg <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Package Weight kg" value={fields.weight}
+      <label>Package Weight kg <span className="field-origin">User-provided</span><NumericInput ariaLabel="Package Weight kg" value={fields.weight}
         onCommit={(value) => onUpdate("weight", value)} /></label>
       <label>Length cm <span className="field-origin">User-provided</span><NumericInput ariaLabel="Length cm" value={fields.length}
         onCommit={(value) => onUpdate("length", value)} /></label>
@@ -354,7 +360,7 @@ export default function App() {
   const [healthStatus, setHealthStatus] = useState<"loading" | "success" | "error">("loading");
   const [researchEvidence, setResearchEvidence] = useState<ProductResearchEvidence | null>(null);
   const [researchIssues, setResearchIssues] = useState<string[]>([]);
-  const [showDimensionError, setShowDimensionError] = useState(false);
+  const [showMeasurementError, setShowMeasurementError] = useState(false);
   const copyOperationIdRef = useRef(0);
   const imageOperationIdRef = useRef(0);
   const copyControllersRef = useRef(new Set<AbortController>());
@@ -381,7 +387,12 @@ export default function App() {
   const failedImageCount = PRODUCT_IMAGE_ROLES.filter((role) =>
     imageRoles[role].status === "error"
   ).length;
-  const hasValidPackageDimensions = [fields.length, fields.width, fields.height]
+  const hasValidPackageMeasurements = [
+    fields.weight,
+    fields.length,
+    fields.width,
+    fields.height
+  ]
     .every((value) => Number.isFinite(value) && value > 0);
   const workflowLoading = copyTask.status === "loading" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "loading"
@@ -442,8 +453,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (hasValidPackageDimensions) setShowDimensionError(false);
-  }, [hasValidPackageDimensions]);
+    if (hasValidPackageMeasurements) setShowMeasurementError(false);
+  }, [hasValidPackageMeasurements]);
 
   function clearUploadResult() {
     uploadAttemptRef.current += 1;
@@ -598,6 +609,7 @@ export default function App() {
     setFields((current) => {
       const next = { ...current };
       for (const key of Object.keys(generated) as Array<keyof DszProductFields>) {
+        if (OPERATOR_PACKAGE_FIELDS.has(key)) continue;
         if (key === "categoryName" && manualFieldsRef.current.has("categories")) {
           next.categoryName = generated.categories === current.categories
             ? generated.categoryName
@@ -746,9 +758,9 @@ export default function App() {
       setMessage("请填写卖点");
       return;
     }
-    if (!hasValidPackageDimensions) {
-      setShowDimensionError(true);
-      setMessage("Enter package length, width, and height before generation.");
+    if (!hasValidPackageMeasurements) {
+      setShowMeasurementError(true);
+      setMessage("Enter package weight, length, width, and height before generation.");
       return;
     }
 
@@ -861,31 +873,37 @@ export default function App() {
             </label>
             <label>采购价 CNY<input inputMode="decimal" value={optionalInputs.purchasePriceCny}
               onChange={(event) => updateOptionalInput("purchasePriceCny", event.target.value)} /></label>
-            <fieldset className="package-dimensions">
-              <legend>Package dimensions (required)</legend>
-              <div className="package-dimension-grid">
+            <fieldset className="package-measurements">
+              <legend>Package measurements (required)</legend>
+              <div className="package-measurement-grid">
+                <label>Weight
+                  <NumericInput ariaLabel="Package weight kg" value={fields.weight}
+                    required ariaInvalid={showMeasurementError && !(fields.weight > 0)}
+                    onCommit={(value) => updateField("weight", value)} />
+                  <span>kg</span>
+                </label>
                 <label>Length
                   <NumericInput ariaLabel="Package length cm" value={fields.length}
-                    required ariaInvalid={showDimensionError && !(fields.length > 0)}
+                    required ariaInvalid={showMeasurementError && !(fields.length > 0)}
                     onCommit={(value) => updateField("length", value)} />
                   <span>cm</span>
                 </label>
                 <label>Width
                   <NumericInput ariaLabel="Package width cm" value={fields.width}
-                    required ariaInvalid={showDimensionError && !(fields.width > 0)}
+                    required ariaInvalid={showMeasurementError && !(fields.width > 0)}
                     onCommit={(value) => updateField("width", value)} />
                   <span>cm</span>
                 </label>
                 <label>Height
                   <NumericInput ariaLabel="Package height cm" value={fields.height}
-                    required ariaInvalid={showDimensionError && !(fields.height > 0)}
+                    required ariaInvalid={showMeasurementError && !(fields.height > 0)}
                     onCommit={(value) => updateField("height", value)} />
                   <span>cm</span>
                 </label>
               </div>
-              {showDimensionError && !hasValidPackageDimensions && (
+              {showMeasurementError && !hasValidPackageMeasurements && (
                 <p className="inline-error" role="alert">
-                  Enter package length, width, and height before generation.
+                  Enter package weight, length, width, and height before generation.
                 </p>
               )}
             </fieldset>

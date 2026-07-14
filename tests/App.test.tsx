@@ -70,6 +70,7 @@ describe("DSZ product workbench layout", () => {
     render(<App />);
 
     for (const label of [
+      "Package weight kg",
       "Package length cm",
       "Package width cm",
       "Package height cm"
@@ -91,7 +92,12 @@ describe("DSZ product workbench layout", () => {
     ]);
     expect(screen.getByLabelText("Colour").closest("label")).not.toHaveAttribute("data-ai-field");
     expect(screen.getByLabelText("CBM m3")).toHaveAttribute("readonly");
-    for (const label of ["Length cm", "Width cm", "Height cm"]) {
+    for (const label of [
+      "Package Weight kg",
+      "Length cm",
+      "Width cm",
+      "Height cm"
+    ]) {
       expect(screen.getByLabelText(label).closest("label"))
         .toHaveTextContent("User-provided");
     }
@@ -347,6 +353,7 @@ async function fillSourceBasics(user: ReturnType<typeof userEvent.setup>) {
 async function fillRequiredInputs(user: ReturnType<typeof userEvent.setup>) {
   await fillSourceBasics(user);
   for (const [label, value] of [
+    ["Package weight kg", "0.2"],
     ["Package length cm", "12"],
     ["Package width cm", "8"],
     ["Package height cm", "3"]
@@ -443,7 +450,7 @@ describe("browser product workflow helpers", () => {
 });
 
 describe("App independent AI workflow", () => {
-  test("blocks all AI requests until manual package dimensions are positive", async () => {
+  test("blocks all AI requests until manual package weight is positive", async () => {
     const user = userEvent.setup();
     const fetchMock = appFetch(() => {
       throw new Error("Generation must not start");
@@ -452,16 +459,24 @@ describe("App independent AI workflow", () => {
     render(<App />);
 
     await fillSourceBasics(user);
+    for (const [label, value] of [
+      ["Package length cm", "12"],
+      ["Package width cm", "8"],
+      ["Package height cm", "3"]
+    ] as const) {
+      await user.clear(screen.getByLabelText(label));
+      await user.type(screen.getByLabelText(label), value);
+    }
     await user.click(screen.getByRole("button", { name: /AI/ }));
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter package length, width, and height before generation."
+      "Enter package weight, length, width, and height before generation."
     );
     expect(fetchMock.mock.calls.filter(([url]) => url !== "/api/health"))
       .toHaveLength(0);
   });
 
-  test("sends exact Source dimensions and preserves them over AI output", async () => {
+  test("sends exact Source package measurements and preserves them over AI output", async () => {
     const user = userEvent.setup();
     let requestInput: ProductInput | undefined;
     vi.stubGlobal("fetch", appFetch(async (url, init) => {
@@ -469,7 +484,13 @@ describe("App independent AI workflow", () => {
         requestInput = JSON.parse(String((init?.body as FormData).get("input")));
         return response({
           result: {
-            fields: { ...completeFields, length: 999, width: 999, height: 999 },
+            fields: {
+              ...completeFields,
+              weight: 999,
+              length: 999,
+              width: 999,
+              height: 999
+            },
             source: "ai",
             issues: []
           }
@@ -487,7 +508,13 @@ describe("App independent AI workflow", () => {
     await user.click(screen.getByRole("button", { name: /AI/ }));
 
     await waitFor(() => expect(requestInput).toBeDefined());
-    expect(requestInput).toMatchObject({ lengthCm: 12, widthCm: 8, heightCm: 3 });
+    expect(requestInput).toMatchObject({
+      packageWeightKg: 0.2,
+      lengthCm: 12,
+      widthCm: 8,
+      heightCm: 3
+    });
+    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.2");
     expect(screen.getByLabelText("Length cm")).toHaveValue("12");
     expect(screen.getByLabelText("Width cm")).toHaveValue("8");
     expect(screen.getByLabelText("Height cm")).toHaveValue("3");
@@ -529,9 +556,7 @@ describe("App independent AI workflow", () => {
     expect(screen.getByLabelText("EAN Code")).toHaveValue(
       completeFields.ean_code
     );
-    expect(screen.getByLabelText("Package Weight kg")).toHaveValue(
-      String(completeFields.weight)
-    );
+    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.2");
     expect(screen.getByLabelText("Colour")).toHaveValue(completeFields.colour);
     await waitFor(() => {
       expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
@@ -608,7 +633,7 @@ describe("App independent AI workflow", () => {
     expect(screen.getByLabelText("Colour")).toHaveValue(
       "Black / White / Beige"
     );
-    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.12");
+    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.2");
   });
 
   test("preserves manual complete-field edits made while generation is pending", async () => {
@@ -652,7 +677,7 @@ describe("App independent AI workflow", () => {
     expect(screen.getByLabelText("Colour")).toHaveValue(
       "Black / White / Beige"
     );
-    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.12");
+    expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.2");
   });
 
   test("one click runs one five-role image task with at most two requests in flight", async () => {
