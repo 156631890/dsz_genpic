@@ -1013,6 +1013,28 @@ describe("image upload helpers", () => {
 });
 
 describe("Packy image helpers", () => {
+  test("appends the complete English-only image-text policy after caller content", () => {
+    const callerPrompt = "Keep this caller instruction before the final policy.";
+    const request = buildPackyEditRequest({
+      prompt: callerPrompt,
+      productType: "Packaged product"
+    });
+    const prompt = request.fields.prompt;
+    const rules = [
+      "All visible readable text in the generated image must be English only.",
+      "Remove all Chinese and other non-English text from the source image, including brand names, trademarks, product labels, and packaging text.",
+      "Translate source text into English only when its exact meaning is supported by the supplied product information or visible source context; otherwise remove it.",
+      "Do not invent English wording or claims, and do not generate misspellings, gibberish, or pseudo-text.",
+      "If correct English text cannot be guaranteed, generate the image with no readable text."
+    ];
+
+    for (const rule of rules) {
+      expect(prompt).toContain(rule);
+    }
+    expect(prompt.indexOf(rules[0])).toBeGreaterThan(prompt.indexOf(callerPrompt));
+    expect(prompt.endsWith(rules[rules.length - 1])).toBe(true);
+  });
+
   test("builds Packy gpt-image-2 edit request config", () => {
     const request = buildPackyEditRequest({
       baseUrl: "https://www.packyapi.com",
@@ -1033,7 +1055,11 @@ describe("Packy image helpers", () => {
       expect(init?.headers).toEqual({
         Authorization: "Bearer image-key"
       });
-      expect((init?.body as FormData).get("model")).toBe("image-model");
+      const form = init?.body as FormData;
+      expect(form.get("model")).toBe("image-model");
+      expect(String(form.get("prompt"))).toContain(
+        "All visible readable text in the generated image must be English only."
+      );
 
       return new Response(
         JSON.stringify({
@@ -1137,6 +1163,9 @@ describe("Packy image helpers", () => {
       );
       expect(String(form.get("prompt"))).toContain(
         "Do not create a collage, grid, contact sheet, split screen or multi-panel image"
+      );
+      expect(String(form.get("prompt"))).toContain(
+        "All visible readable text in the generated image must be English only."
       );
       expect(String(form.get("prompt"))).toContain(rolePrompts[callIndex]);
       if (callIndex === 0) {

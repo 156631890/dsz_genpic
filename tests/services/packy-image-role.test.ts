@@ -115,6 +115,9 @@ describe("Packy fixed-role product images", () => {
       expect(form.get("quality")).toBe("high");
       expect(form.getAll("image")).toHaveLength(2);
       expect(String(form.get("prompt"))).toMatch(/feature main image/i);
+      expect(String(form.get("prompt"))).toContain(
+        "All visible readable text in the generated image must be English only."
+      );
       return new Response(
         JSON.stringify({ data: [{ url: "https://cdn.example.com/main.png" }] }),
         { status: 200 }

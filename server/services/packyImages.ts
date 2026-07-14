@@ -9,6 +9,13 @@ const PACKY_SHOPIFY_PRODUCT_IMAGE_MAX_ATTEMPTS = 3;
 const SHOPIFY_PRODUCT_IMAGE_COUNT = 5;
 export const PACKY_PRODUCT_IMAGE_ROLE_SIZE = "1024x1024";
 export const PACKY_PRODUCT_IMAGE_ROLE_QUALITY = "high";
+const ENGLISH_ONLY_IMAGE_TEXT_RULES = [
+  "All visible readable text in the generated image must be English only.",
+  "Remove all Chinese and other non-English text from the source image, including brand names, trademarks, product labels, and packaging text.",
+  "Translate source text into English only when its exact meaning is supported by the supplied product information or visible source context; otherwise remove it.",
+  "Do not invent English wording or claims, and do not generate misspellings, gibberish, or pseudo-text.",
+  "If correct English text cannot be guaranteed, generate the image with no readable text."
+];
 
 export const PRODUCT_IMAGE_ROLE_RULES: Record<ProductImageRole, string> = {
   main: "Feature main image. Use a clean premium neutral, softly lit studio, or subtle real-world background. Do not use a pure white or plain white background. Keep the full product visible, centered, and sharp.",
@@ -83,7 +90,8 @@ export function buildPackyEditRequest(input: PackyEditInput): PackyEditRequest {
   const prompt = [
     `Product type: ${input.productType}`,
     input.prompt,
-    "Generate ecommerce product images for an independent store product page. Keep the product clear, accurate, and free of watermarks."
+    "Generate ecommerce product images for an independent store product page. Keep the product clear, accurate, and free of watermarks.",
+    ...ENGLISH_ONLY_IMAGE_TEXT_RULES
   ].join("\n");
 
   return {
