@@ -136,7 +136,7 @@ describe("product research request", () => {
         "Use operator-provided lengthCm, widthCm, and heightCm exactly"
       );
       expect(serialized).not.toContain(
-        "weightKg and lengthCm x widthCm x heightCm"
+        "Return realistic conventional packed shipping estimates"
       );
       return new Response(JSON.stringify({
         output_text: JSON.stringify(researchFixture({
@@ -205,7 +205,7 @@ describe("product research request", () => {
       "Use operator-provided lengthCm, widthCm, and heightCm exactly"
     );
     expect(JSON.stringify(body)).not.toContain(
-      "weightKg and lengthCm x widthCm x heightCm"
+      "Return realistic conventional packed shipping estimates"
     );
     expect(JSON.stringify(body)).toContain(
       "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
