@@ -1,3 +1,6 @@
+// @vitest-environment node
+
+import { readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import {
   CATEGORY_MATCH_REQUIRED_MESSAGE,
@@ -16,6 +19,10 @@ const mapping = [
   "| Appliances / Kitchen Appliances / Kitchen Appliance Accessories | 1022 |",
   "| malformed | not-an-id |"
 ].join("\n");
+const liveMapping = readFileSync(
+  new URL("../../rules/Category_Mapping.md", import.meta.url),
+  "utf8"
+);
 
 describe("category matcher", () => {
   test("parses canonical rows and ignores duplicate IDs", () => {
@@ -48,6 +55,19 @@ describe("category matcher", () => {
       parseCategoryEntries(mapping),
       "Kitchen Appliance Accessory"
     )[0]).toMatchObject({ id: 1022, highConfidence: true });
+  });
+
+  test("parses the complete live Dropshipzone category snapshot", () => {
+    const entries = parseCategoryEntries(liveMapping);
+
+    expect(entries).toHaveLength(799);
+    expect(new Set(entries.map((entry) => entry.id)).size).toBe(799);
+    expect(entries).toContainEqual({
+      id: 1143,
+      name: "Home & Garden / Bedding"
+    });
+    expect(entries.some((entry) => entry.id === 1)).toBe(false);
+    expect(entries.some((entry) => entry.id === 12004)).toBe(false);
   });
 
   test("lets an unambiguous hint override a conflicting model category", () => {
