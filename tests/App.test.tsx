@@ -70,6 +70,14 @@ describe("DSZ product workbench layout", () => {
     render(<App />);
 
     for (const label of [
+      "Package length cm",
+      "Package width cm",
+      "Package height cm"
+    ]) {
+      expect(screen.getByLabelText(label)).toBeInTheDocument();
+    }
+
+    for (const label of [
       "Category", "Product Name", "SKU", "Status", "EAN Code", "Quantity",
       "Package Weight kg", "Length cm", "Width cm", "Height cm", "CBM m3",
       "Brand Name", "Colour", "Enable Product", "Vendor Product Description"
@@ -83,6 +91,10 @@ describe("DSZ product workbench layout", () => {
     ]);
     expect(screen.getByLabelText("Colour").closest("label")).not.toHaveAttribute("data-ai-field");
     expect(screen.getByLabelText("CBM m3")).toHaveAttribute("readonly");
+    for (const label of ["Length cm", "Width cm", "Height cm"]) {
+      expect(screen.getByLabelText(label).closest("label"))
+        .toHaveTextContent("User-provided");
+    }
   });
 
   test("switches tabs and exposes price and approved shipping ownership", async () => {
@@ -324,12 +336,25 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-async function fillRequiredInputs(user: ReturnType<typeof userEvent.setup>) {
+async function fillSourceBasics(user: ReturnType<typeof userEvent.setup>) {
   await user.upload(
     screen.getByLabelText("原始产品图片"),
     new File(["image"], "source.png", { type: "image/png" })
   );
   await user.type(screen.getByLabelText("卖点"), "Soft breathable cotton stretch");
+}
+
+async function fillRequiredInputs(user: ReturnType<typeof userEvent.setup>) {
+  await fillSourceBasics(user);
+  for (const [label, value] of [
+    ["Package length cm", "12"],
+    ["Package width cm", "8"],
+    ["Package height cm", "3"]
+  ] as const) {
+    await user.clear(screen.getByLabelText(label));
+    await user.type(screen.getByLabelText(label), value);
+    await user.tab();
+  }
 }
 
 async function fillSubmissionFields(user: ReturnType<typeof userEvent.setup>) {
@@ -418,6 +443,56 @@ describe("browser product workflow helpers", () => {
 });
 
 describe("App independent AI workflow", () => {
+  test("blocks all AI requests until manual package dimensions are positive", async () => {
+    const user = userEvent.setup();
+    const fetchMock = appFetch(() => {
+      throw new Error("Generation must not start");
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    await fillSourceBasics(user);
+    await user.click(screen.getByRole("button", { name: /AI/ }));
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Enter package length, width, and height before generation."
+    );
+    expect(fetchMock.mock.calls.filter(([url]) => url !== "/api/health"))
+      .toHaveLength(0);
+  });
+
+  test("sends exact Source dimensions and preserves them over AI output", async () => {
+    const user = userEvent.setup();
+    let requestInput: ProductInput | undefined;
+    vi.stubGlobal("fetch", appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") {
+        requestInput = JSON.parse(String((init?.body as FormData).get("input")));
+        return response({
+          result: {
+            fields: { ...completeFields, length: 999, width: 999, height: 999 },
+            source: "ai",
+            issues: []
+          }
+        });
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: /AI/ }));
+
+    await waitFor(() => expect(requestInput).toBeDefined());
+    expect(requestInput).toMatchObject({ lengthCm: 12, widthCm: 8, heightCm: 3 });
+    expect(screen.getByLabelText("Length cm")).toHaveValue("12");
+    expect(screen.getByLabelText("Width cm")).toHaveValue("8");
+    expect(screen.getByLabelText("Height cm")).toHaveValue("3");
+  });
+
   test("one click fills complete DSZ fields while image roles stay independent", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", appFetch(async (url, init) => {
