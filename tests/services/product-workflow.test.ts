@@ -230,6 +230,9 @@ describe("complete DSZ field generation", () => {
         sellingPoints: "Multicolour tourmaline style stone and pearl necklace",
         categoryHint: "Women's Jewellery",
         purchasePriceCny: 20,
+        lengthCm: 15,
+        widthCm: 10,
+        heightCm: 4,
         images: ["source.png"],
         imageUrls: []
       },
@@ -250,27 +253,27 @@ describe("complete DSZ field generation", () => {
       ean_code: "4748549810",
       stock: 1000,
       weight: 0.12,
-      length: 12,
-      width: 8,
-      height: 3,
+      length: 15,
+      width: 10,
+      height: 4,
       brand_name: "Elosung",
       colour: "Multicolor",
       enabled: true,
       description: workflowDescription
     });
-    expect(result.fields.cbm).toBe(calculateCbm(12, 8, 3));
+    expect(result.fields.cbm).toBe(calculateCbm(15, 10, 4));
     expect(result.fields.vendor_price).toBe(calculateVendorPrice({
       weightKg: 0.12,
-      lengthCm: 12,
-      widthCm: 8,
-      heightCm: 3,
+      lengthCm: 15,
+      widthCm: 10,
+      heightCm: 4,
       purchasePriceCny: 20
     }));
     expect(result.fields.zone_rates.nz).toBe(20);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  test("uses conventional package defaults without exact evidence", async () => {
+  test("uses manual dimensions with a conventional package weight", async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body)) as { instructions?: string };
       if (body.instructions?.startsWith("Generate complete DSZ product research JSON")) {
@@ -283,6 +286,9 @@ describe("complete DSZ field generation", () => {
         sellingPoints: "Multicolour tourmaline style stone and pearl necklace",
         categoryHint: "Women's Jewellery",
         purchasePriceCny: 20,
+        lengthCm: 15,
+        widthCm: 10,
+        heightCm: 4,
         images: ["source.png"],
         imageUrls: []
       },
@@ -295,19 +301,33 @@ describe("complete DSZ field generation", () => {
 
     expect(result.fields).toMatchObject({
       weight: 0.12,
-      length: 12,
-      width: 8,
-      height: 3,
-      cbm: calculateCbm(12, 8, 3)
+      length: 15,
+      width: 10,
+      height: 4,
+      cbm: calculateCbm(15, 10, 4)
     });
     expect(result.issues).toContain(
-      "Package weight and dimensions use conventional estimates."
+      "Package weight uses a conventional estimate."
     );
     expect(result.issues).not.toContain(
       "Verified package measurements are required to calculate Vendor Price and RRP."
     );
     expect(result.issues).not.toContain(
       "Purchase price is required to calculate Vendor Price and RRP."
+    );
+  });
+
+  test("rejects field generation without manual package dimensions", async () => {
+    await expect(generateDszFieldsWithPacky({
+      productInput: {
+        ...input,
+        lengthCm: undefined,
+        widthCm: undefined,
+        heightCm: undefined
+      },
+      env: {}
+    })).rejects.toThrow(
+      "Package length, width, and height are required."
     );
   });
 });
@@ -328,6 +348,9 @@ describe("DSZ field rules", () => {
     });
 
     expect(messages).toHaveLength(2);
+    expect(messages[1].content).toContain(
+      "Copy length, width and height exactly from INPUT; do not estimate or replace them."
+    );
     expect(messages[0].role).toBe("system");
     expect(messages[1].content).toContain("Soft cotton blend thong underwear");
     expect(messages[1].content).toContain("https://cdn.example.com/1.jpg");
@@ -578,6 +601,16 @@ ${JSON.stringify(fields)}
 
     expect(result.source).toBe("fallback");
     expect(result.fields.images).toEqual(input.imageUrls);
+    expect(result.fields).toMatchObject({
+      length: input.lengthCm,
+      width: input.widthCm,
+      height: input.heightCm,
+      cbm: calculateCbm(
+        input.lengthCm as number,
+        input.widthCm as number,
+        input.heightCm as number
+      )
+    });
     expect(result.fields.review_notes).toContain(
       "Packy field generation failed with 503. Local fallback fields were generated."
     );
@@ -591,6 +624,65 @@ ${JSON.stringify(fields)}
     expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
     expect(result.fields.description).not.toContain("<p><strong>Ideal For</strong></p>");
     expect(result.fields.description).not.toMatch(/\r|\n/);
+  });
+
+  test("keeps manual dimensions when AI returns different values", async () => {
+    const manualInput: ProductInput = {
+      ...input,
+      lengthCm: 21,
+      widthCm: 13,
+      heightCm: 7
+    };
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [{
+            message: {
+              content: JSON.stringify({
+                ...fields,
+                length: 99,
+                width: 98,
+                height: 97,
+                cbm: calculateCbm(99, 98, 97),
+                vendor_price: 999,
+                rrp: 1998
+              })
+            }
+          }]
+        }),
+        { status: 200 }
+      )
+    ) as unknown as typeof fetch;
+
+    const result = await generateDszFieldsWithPacky({
+      productInput: manualInput,
+      env: { PACKY_API_KEY: "packy-key" },
+      ruleDocuments: {
+        fieldRules: "F2 Product Name. F13 Vendor Product Description.",
+        productPrompt: "Title must be pure English. HTML must be single line.",
+        categoryMapping: "Women's Intimates | 947",
+        uploadSop: "Full upload SOP.",
+        productUploadAu: "AU product content rules."
+      },
+      fetchImpl
+    });
+
+    const vendorPrice = calculateVendorPrice({
+      weightKg: fields.weight,
+      lengthCm: 21,
+      widthCm: 13,
+      heightCm: 7,
+      purchasePriceCny: manualInput.purchasePriceCny as number
+    });
+    expect(result.fields).toMatchObject({
+      length: 21,
+      width: 13,
+      height: 7,
+      cbm: calculateCbm(21, 13, 7),
+      vendor_price: vendorPrice,
+      rrp: Math.round(vendorPrice * 200) / 100
+    });
+    expect(result.fields.zone_rates.nz).toBe(20);
   });
 
   test("repairs invalid AI HTML descriptions through Packy with the DSZ product prompt", async () => {
