@@ -1,6 +1,7 @@
 // @vitest-environment node
 
 import { describe, expect, test, vi } from "vitest";
+import { CATEGORY_MATCH_REQUIRED_MESSAGE } from "../../server/services/categoryMatcher";
 import {
   buildProductResearchRequest,
   generateProductResearchWithPacky,
@@ -22,7 +23,6 @@ const manualInput = {
   heightCm: 4
 };
 const categoryMapping = [
-  "| General Goods | default / unclassified | ID: 1 |",
   "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
   "| Fashion / Women's Fashion / Women's Swimwear | 956 |"
 ].join("\n");
@@ -403,9 +403,10 @@ describe("product research request", () => {
     }
   );
 
-  test("defaults an invalid semantic ID to mapped General Goods", () => {
+  test("requires a category hint when an invalid semantic ID has no local match", () => {
     const raw = researchFixture();
-    const result = validateProductResearch({
+
+    expect(() => validateProductResearch({
       raw: {
         ...raw,
         category: { id: 999999, name: "Invented category" }
@@ -413,12 +414,7 @@ describe("product research request", () => {
       annotatedUrls: ["https://supplier.example.com/item"],
       categoryMapping,
       input: { ...manualInput, categoryHint: "unclassifiable phrase" }
-    });
-
-    expect(result.category).toEqual({ id: 1, name: "General Goods" });
-    expect(result.issues).toContain(
-      "Category defaulted to General Goods because no closer mapping match was found."
-    );
+    })).toThrow(CATEGORY_MATCH_REQUIRED_MESSAGE);
   });
 
   test("preserves verified manual measurements over web research", () => {

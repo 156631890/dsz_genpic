@@ -11,6 +11,7 @@ import {
   uploadProduct,
   validateDszProductFields
 } from "../../server/services/adminUploader";
+import { CATEGORY_MATCH_REQUIRED_MESSAGE } from "../../server/services/categoryMatcher";
 import {
   buildDszGenerationMessages,
   calculateCbm,
@@ -93,7 +94,6 @@ const workflowFooter = extractCanonicalProductFooter(await loadProductSystemProm
 const workflowDescription =
   `<p><strong>Product Overview</strong></p><p>A multicolour necklace for everyday styling.</p>${workflowFooter}`;
 const mappedCategories = [
-  "| General Goods | default / unclassified | ID: 1 |",
   "| Fashion / Men's Fashion / Men's Swimwear | 961 |",
   "| Fashion / Women's Fashion / Women's Intimates | 947 |",
   "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
@@ -656,7 +656,6 @@ ${JSON.stringify(fields)}
         fieldRules: "Current DSZ field rules.",
         productPrompt: "Current product prompt.",
         categoryMapping: [
-          "| General Goods | default / unclassified | ID: 1 |",
           "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
         ].join("\n"),
         uploadSop: "Current upload SOP.",
@@ -673,8 +672,8 @@ ${JSON.stringify(fields)}
     });
   });
 
-  test("defaults an unknown local fallback category to mapped General Goods", async () => {
-    const result = await generateDszFieldsWithPacky({
+  test("requires a category hint for an unknown local fallback category", async () => {
+    await expect(generateDszFieldsWithPacky({
       productInput: {
         ...input,
         categoryHint: "unclassifiable phrase"
@@ -683,23 +682,12 @@ ${JSON.stringify(fields)}
       ruleDocuments: {
         fieldRules: "Current DSZ field rules.",
         productPrompt: "Current product prompt.",
-        categoryMapping: [
-          "| General Goods | default / unclassified | ID: 1 |",
-          "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
-        ].join("\n"),
+        categoryMapping:
+          "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
         uploadSop: "Current upload SOP.",
         productUploadAu: "Current AU rules."
       }
-    });
-
-    expect(result.fields).toMatchObject({
-      category: 1,
-      categories: "1",
-      categoryName: "General Goods"
-    });
-    expect(result.fields.review_notes).toContain(
-      "Category defaulted to General Goods because no closer mapping match was found."
-    );
+    })).rejects.toThrow(CATEGORY_MATCH_REQUIRED_MESSAGE);
   });
 
   test("keeps all operator package measurements when AI returns different values", async () => {
@@ -875,8 +863,8 @@ ${JSON.stringify(fields)}
     expect(result.fields.categoryName).toBe("Fashion / Women's Fashion / Women's Swimwear");
   });
 
-  test("defaults an unmatched Chinese hint when semantic AI is unavailable", async () => {
-    const result = await generateDszFieldsWithPacky({
+  test("requires a more specific unmatched Chinese hint when semantic AI is unavailable", async () => {
+    await expect(generateDszFieldsWithPacky({
       productInput: {
         ...input,
         categoryHint: "女士泳装",
@@ -890,15 +878,7 @@ ${JSON.stringify(fields)}
         uploadSop: "Full upload SOP.",
         productUploadAu: "AU product content rules."
       }
-    });
-
-    expect(result.source).toBe("fallback");
-    expect(result.fields.category).toBe(1);
-    expect(result.fields.categories).toBe("1");
-    expect(result.fields.categoryName).toBe("General Goods");
-    expect(result.fields.review_notes).toContain(
-      "Category defaulted to General Goods because no closer mapping match was found."
-    );
+    })).rejects.toThrow(CATEGORY_MATCH_REQUIRED_MESSAGE);
   });
 
   test("prefers specific gendered category hints over generic keywords", async () => {
