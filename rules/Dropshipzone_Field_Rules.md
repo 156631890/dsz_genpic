@@ -1,6 +1,6 @@
 # Dropshipzone 自动化上品规则 v1.0
 
-> 版本：v1.0 | 日期：2026-03-19 | 适用：Dropshipzone 后台批量上品
+> 版本：v1.0 | 日期：2026-07-14 | 适用：Dropshipzone 后台批量上品
 > 核心逻辑：输入产品链接 → AI 全自动填满 16 个字段 → 可直接提交
 
 ---
@@ -13,7 +13,7 @@
 
 **规则：**
 1. 从产品链接抓取标题和类目关键词
-2. 匹配 Dropshipzone 类目查找表（见附录A）
+2. 匹配 `Category_Mapping.md` 中的当前有效类目
 3. 如果链接类目不明确，调用 AI 搜索同款商品确定类目
 4. 填写格式：`Category ID` + `Category Name`
 
@@ -23,7 +23,7 @@
 ```
 
 **优先级：**
-- 用户指定类目 > AI 识别类目 > 默认 "General Goods"
+- 用户指定类目 > AI 识别类目；如果均无法命中 `Category_Mapping.md` 中的有效 ID，要求用户提供更具体的类目提示，不生成默认类目
 
 ---
 
@@ -331,7 +331,7 @@ Step 7: 粘贴至 Dropshipzone 后台
 
 ---
 
-## API 字段格式（经 Swagger 与 /new_categories 验证，2026-06-24）
+## API 字段格式（经 Swagger 与 /new_categories 验证，2026-07-14）
 
 > ⚠️ 以下为 Dropshipzone Supplier API 的实际验证格式，与后台字段名可能不同！
 
@@ -366,10 +366,10 @@ Step 7: 粘贴至 Dropshipzone 后台
 - New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg.
 
 ### 类目 ID 重要说明
-- 上传产品应优先使用 `GET /new_categories` 返回的 ID
-- Fashion 旧本地 7000 段 ID 不可直接上传；例如 Women's Intimates 旧 `7032` 必须转换为 `947`
-- 现有产品使用的类目 ID（如 1364）可能不在公开列表中
-- **解决方案**：从现有产品获取类目ID，或测试不同类目
+- 上传产品只能使用当前 `GET /new_categories` 返回并记录在 `Category_Mapping.md` 中的 ID
+- 接口路径前缀 `1/342` 是结构节点，不是可上传类目
+- 禁止把 ID `1` 当作默认类目或 "General Goods"
+- 如果没有有效匹配，必须要求用户提供更具体的类目提示后重新生成
 
 ### EAN 生成规则
 - 格式：**10位数字字符串**（不是13位EAN-13）
@@ -385,28 +385,11 @@ Vendor RRP = Vendor Price × 2
 ### 完整 Python 上传脚本
 见：`scripts/upload_real_product.py`
 
-> 完整版见：`SOP/Category_Mapping.md`
-> **核心原则：优先匹配 Sub-subcategory（最精确子类），其次 Subcategory，最后 Category**
-
-| 主类目 | 子类目 | 最细类目路径 | Category ID |
-|--------|--------|-------------|-------------|
-| Electronics | Headphones and Earphones | Electronics / Headphones and Earphones / Wireless Headphones & Earbuds | 6025 |
-| Electronics | Gadgets | Electronics / Gadgets | 6024 |
-| Electronics | Mobile Accessories | Electronics / Mobile Accessories / Phone Cases & Screen Protectors | 6028 |
-| Electronics | Mobile Accessories | Electronics / Mobile Accessories / Car Mounts | 6027 |
-| Appliances | Kitchen Appliances | Appliances / Kitchen Appliances / Ice Makers | 1020 |
-| Home & Garden | Kitchenware | Home & Garden / Kitchenware / Drinkware | 12018 |
-| Home & Garden | Storage | Home & Garden / Storage / Clothing & Wardrobe Storage | 12025 |
-| Health & Beauty | Skincare | Health & Beauty / Skincare | 11008 |
-| Health & Beauty | Personal Care | Health & Beauty / Personal Care | 11007 |
-| Health & Beauty | Massage & Relaxation | Health & Beauty / Massage & Relaxation | 11005 |
-| Baby & Kids | Baby & Kid's Toys | Baby & Kids / Baby & Kid's Toys | 4006 |
-| Sports & Fitness | Exercise, Gym & Fitness | Sports & Fitness / Exercise, Gym & Fitness | 15003 |
-| Pet Care | Cat Supplies | Pet Care / Cat Supplies | 14003 |
-| Fashion | Men's Fashion | Fashion / Men's Fashion / Men's Swimwear | 961 |
-| Fashion | Women's Fashion | Fashion / Women's Fashion / Women's Swimwear | 956 |
-| Commercial | Packaging | Commercial / Packaging / Packaging Tape | 5010 |
-| General Goods | — | — | 1 |
+### 类目映射来源
+- `Category_Mapping.md` 是唯一类目代码来源，由当前 `GET /new_categories` 响应生成
+- 优先匹配最具体且与类目提示相近的完整路径
+- 不维护静态速查 ID，避免 Dropshipzone 更新后继续使用旧代码
+- 没有有效匹配时停止生成并要求更具体的类目提示
 
 ---
 

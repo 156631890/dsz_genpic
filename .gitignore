@@ -10,3 +10,4 @@ tmp
 *.tsbuildinfo
 
 .vercel
+.worktrees/

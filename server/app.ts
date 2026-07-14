@@ -7,6 +7,7 @@ import {
   uploadProduct,
   validateDszProductFields
 } from "./services/adminUploader.js";
+import { CategoryMatchRequiredError } from "./services/categoryMatcher.js";
 import { generateDszFieldsWithPacky } from "./services/dszRules.js";
 import { uploadImagesToImgbb } from "./services/imageUploader.js";
 import {
@@ -788,6 +789,10 @@ function mapGenerationError(
 
   if (kind === "fields" && error instanceof ProductFieldRequestError) {
     return { status: 400, message: error.message };
+  }
+
+  if (kind === "fields" && error instanceof CategoryMatchRequiredError) {
+    return { status: 422, message: error.message };
   }
 
   if (kind === "fields" && error instanceof TypeError) {

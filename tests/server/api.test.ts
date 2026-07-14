@@ -3,6 +3,10 @@
 import request from "supertest";
 import { describe, expect, expectTypeOf, test, vi } from "vitest";
 import { createApp, type AppDependencies } from "../../server/app";
+import {
+  CATEGORY_MATCH_REQUIRED_MESSAGE,
+  CategoryMatchRequiredError
+} from "../../server/services/categoryMatcher";
 import { standardZoneRates } from "../../server/services/dszRules";
 import {
   extractCanonicalProductFooter,
@@ -1000,6 +1004,27 @@ describe("API app", () => {
 
     expect(response.body).toEqual({ error: message });
     expect(response.text).not.toContain("token-secret");
+  });
+
+  test("asks for a more specific category hint when no live category matches", async () => {
+    const response = await request(createApp({
+      generateProductFields: async () => {
+        throw new CategoryMatchRequiredError();
+      }
+    }))
+      .post("/api/generate-product-fields")
+      .field("input", JSON.stringify(productInput))
+      .field("identity", JSON.stringify({
+        sku: "Elosung10000",
+        eanCode: "4748549810"
+      }))
+      .attach("images", pngImage, {
+        filename: "product.png",
+        contentType: "image/png"
+      })
+      .expect(422);
+
+    expect(response.body).toEqual({ error: CATEGORY_MATCH_REQUIRED_MESSAGE });
   });
 
   test("passes validated source images, product facts and identity to full-field generation", async () => {

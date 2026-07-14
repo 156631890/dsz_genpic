@@ -8,10 +8,19 @@ export interface RankedCategory extends CategoryEntry {
   highConfidence: boolean;
 }
 
+export const CATEGORY_MATCH_REQUIRED_MESSAGE =
+  "No valid Dropshipzone category matched. Enter a more specific category hint and generate again.";
+
+export class CategoryMatchRequiredError extends Error {
+  constructor() {
+    super(CATEGORY_MATCH_REQUIRED_MESSAGE);
+    this.name = "CategoryMatchRequiredError";
+  }
+}
+
 export interface CategoryResolution {
   category: CategoryEntry;
-  source: "manual" | "hint" | "model" | "local" | "default";
-  defaulted: boolean;
+  source: "manual" | "hint" | "model" | "local";
   invalidManualCategory: boolean;
 }
 
@@ -33,10 +42,8 @@ export function parseCategoryEntries(value: string): CategoryEntry[] {
 
   for (const line of value.split(/\r?\n/)) {
     const ordinary = /^\|\s*(.+?)\s*\|\s*(\d+)\s*\|$/.exec(line);
-    const general = /^\|\s*(General Goods)\s*\|[^|]*\|\s*ID:\s*(\d+)\s*\|$/i
-      .exec(line);
-    const id = ordinary ? Number(ordinary[2]) : general ? Number(general[2]) : 0;
-    const name = ordinary ? ordinary[1].trim() : general ? general[1].trim() : "";
+    const id = ordinary ? Number(ordinary[2]) : 0;
+    const name = ordinary ? ordinary[1].trim() : "";
 
     if (id > 0 && name && !ids.has(id)) {
       ids.add(id);
@@ -163,7 +170,6 @@ export function resolveMappedCategory(
     return {
       category: manual,
       source: "manual",
-      defaulted: false,
       invalidManualCategory: false
     };
   }
@@ -175,7 +181,6 @@ export function resolveMappedCategory(
     return {
       category: categoryOnly(ranked[0]),
       source: "hint",
-      defaulted: false,
       invalidManualCategory
     };
   }
@@ -187,7 +192,6 @@ export function resolveMappedCategory(
     return {
       category: generated,
       source: "model",
-      defaulted: false,
       invalidManualCategory
     };
   }
@@ -196,19 +200,9 @@ export function resolveMappedCategory(
     return {
       category: categoryOnly(ranked[0]),
       source: "local",
-      defaulted: false,
       invalidManualCategory
     };
   }
 
-  const general = byId.get(1);
-  if (!general) {
-    throw new Error("Category mapping is unavailable.");
-  }
-  return {
-    category: general,
-    source: "default",
-    defaulted: true,
-    invalidManualCategory
-  };
+  throw new CategoryMatchRequiredError();
 }

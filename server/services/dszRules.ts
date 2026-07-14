@@ -119,7 +119,6 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
     FOOTER
   ].join("\n"),
   categoryMapping: [
-    "| General Goods | default / unclassified | ID: 1 |",
     "| Fashion / Women's Fashion / Women's Intimates | 947 |"
   ].join("\n"),
   uploadSop: [
@@ -671,9 +670,6 @@ function buildFallbackFields(
     risk_flags: [],
     review_notes: [
       ...(reason ? [reason] : []),
-      ...(categoryResolution.defaulted
-        ? ["Category defaulted to General Goods because no closer mapping match was found."]
-        : []),
       "AI field generation fallback used. Review title, category, colour and price before live upload."
     ]
   };
@@ -721,17 +717,6 @@ function completeGeneratedFields(
     merged.description = `${merged.description}${FOOTER}`;
   }
   merged.description = normalizeDescriptionHtml(merged.description);
-  if (
-    categoryResolution.defaulted &&
-    !merged.review_notes.includes(
-      "Category defaulted to General Goods because no closer mapping match was found."
-    )
-  ) {
-    merged.review_notes = [
-      ...merged.review_notes,
-      "Category defaulted to General Goods because no closer mapping match was found."
-    ];
-  }
   if (!isValidSku(merged.sku)) {
     merged.sku = fallback.sku;
   }

@@ -280,11 +280,6 @@ export function validateProductResearch(options: {
   if (categoryResolution.invalidManualCategory) {
     issues.push("The manual category ID is not in the current mapping.");
   }
-  if (categoryResolution.defaulted) {
-    issues.push(
-      "Category defaulted to General Goods because no closer mapping match was found."
-    );
-  }
   if (sourcesConflict) {
     issues.push("Package sources conflict and need review.");
   }
