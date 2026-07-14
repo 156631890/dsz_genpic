@@ -262,10 +262,13 @@ describe("API app", () => {
     [{ ...productInput, categoryHint: 3 }, "Category hint is invalid"],
     [{ ...productInput, categoryHint: "x".repeat(501) }, "Category hint is invalid"],
     [{ ...productInput, purchasePriceCny: -1 }, "Product numeric facts are invalid"],
-    [{ ...productInput, packageWeightKg: Number.NaN }, "Product numeric facts are invalid"],
+    [
+      { ...productInput, packageWeightKg: Number.NaN },
+      "Package weight, length, width, and height are required."
+    ],
     [
       { ...productInput, lengthCm: Number.POSITIVE_INFINITY },
-      "Package length, width, and height are required."
+      "Package weight, length, width, and height are required."
     ]
   ])("rejects invalid independent product copy input", async (input, error) => {
     const generateProductCopy = vi.fn();
@@ -1100,6 +1103,13 @@ describe("API app", () => {
   });
 
   test.each([
+    ["missing weight", { ...productInput, packageWeightKg: undefined }],
+    ["zero weight", { ...productInput, packageWeightKg: 0 }],
+    ["negative weight", { ...productInput, packageWeightKg: -1 }],
+    [
+      "non-finite weight",
+      { ...productInput, packageWeightKg: Number.POSITIVE_INFINITY }
+    ],
     ["missing length", { ...productInput, lengthCm: undefined }],
     ["zero width", { ...productInput, widthCm: 0 }],
     ["negative height", { ...productInput, heightCm: -1 }],
@@ -1123,7 +1133,7 @@ describe("API app", () => {
       .expect(400);
 
     expect(response.body).toEqual({
-      error: "Package length, width, and height are required."
+      error: "Package weight, length, width, and height are required."
     });
     expect(generateProductFields).not.toHaveBeenCalled();
   });

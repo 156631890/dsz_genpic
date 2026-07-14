@@ -52,7 +52,8 @@ const PRODUCT_INPUT_NUMERIC_KEYS: Array<
   "widthCm",
   "heightCm"
 ];
-const REQUIRED_PACKAGE_DIMENSION_KEYS = [
+const REQUIRED_PACKAGE_MEASUREMENT_KEYS = [
+  "packageWeightKg",
   "lengthCm",
   "widthCm",
   "heightCm"
@@ -612,15 +613,15 @@ function parseProductInput(value: unknown): ProductInputValidation {
     return { valid: false, error: "Colour is invalid" };
   }
 
-  if (!REQUIRED_PACKAGE_DIMENSION_KEYS.every((key) => {
-    const dimension = value[key];
-    return typeof dimension === "number" &&
-      Number.isFinite(dimension) &&
-      dimension > 0;
+  if (!REQUIRED_PACKAGE_MEASUREMENT_KEYS.every((key) => {
+    const measurement = value[key];
+    return typeof measurement === "number" &&
+      Number.isFinite(measurement) &&
+      measurement > 0;
   })) {
     return {
       valid: false,
-      error: "Package length, width, and height are required."
+      error: "Package weight, length, width, and height are required."
     };
   }
 
