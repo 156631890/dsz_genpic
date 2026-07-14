@@ -263,7 +263,10 @@ describe("API app", () => {
     [{ ...productInput, categoryHint: "x".repeat(501) }, "Category hint is invalid"],
     [{ ...productInput, purchasePriceCny: -1 }, "Product numeric facts are invalid"],
     [{ ...productInput, packageWeightKg: Number.NaN }, "Product numeric facts are invalid"],
-    [{ ...productInput, lengthCm: Number.POSITIVE_INFINITY }, "Product numeric facts are invalid"]
+    [
+      { ...productInput, lengthCm: Number.POSITIVE_INFINITY },
+      "Package length, width, and height are required."
+    ]
   ])("rejects invalid independent product copy input", async (input, error) => {
     const generateProductCopy = vi.fn();
     const response = await request(createApp({ generateProductCopy }))
@@ -1094,6 +1097,35 @@ describe("API app", () => {
         contentType: "image/png"
       })
       .expect(400, { error: "Product identity is invalid" });
+  });
+
+  test.each([
+    ["missing length", { ...productInput, lengthCm: undefined }],
+    ["zero width", { ...productInput, widthCm: 0 }],
+    ["negative height", { ...productInput, heightCm: -1 }],
+    [
+      "non-finite length",
+      { ...productInput, lengthCm: Number.POSITIVE_INFINITY }
+    ]
+  ])("rejects %s before product field generation", async (_name, input) => {
+    const generateProductFields = vi.fn();
+    const response = await request(createApp({ generateProductFields }))
+      .post("/api/generate-product-fields")
+      .field("input", JSON.stringify(input))
+      .field("identity", JSON.stringify({
+        sku: "Elosung10000",
+        eanCode: "4748549810"
+      }))
+      .attach("images", pngImage, {
+        filename: "source.png",
+        contentType: "image/png"
+      })
+      .expect(400);
+
+    expect(response.body).toEqual({
+      error: "Package length, width, and height are required."
+    });
+    expect(generateProductFields).not.toHaveBeenCalled();
   });
 
   test("rejects a full-field generation image batch above four million bytes", async () => {

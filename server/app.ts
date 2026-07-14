@@ -52,6 +52,11 @@ const PRODUCT_INPUT_NUMERIC_KEYS: Array<
   "widthCm",
   "heightCm"
 ];
+const REQUIRED_PACKAGE_DIMENSION_KEYS = [
+  "lengthCm",
+  "widthCm",
+  "heightCm"
+] as const;
 
 type ProductInputValidation =
   | { valid: true; input: ProductInput }
@@ -605,6 +610,18 @@ function parseProductInput(value: unknown): ProductInputValidation {
     (typeof value.colour !== "string" || value.colour.length > 100)
   ) {
     return { valid: false, error: "Colour is invalid" };
+  }
+
+  if (!REQUIRED_PACKAGE_DIMENSION_KEYS.every((key) => {
+    const dimension = value[key];
+    return typeof dimension === "number" &&
+      Number.isFinite(dimension) &&
+      dimension > 0;
+  })) {
+    return {
+      valid: false,
+      error: "Package length, width, and height are required."
+    };
   }
 
   const input: ProductInput = {
