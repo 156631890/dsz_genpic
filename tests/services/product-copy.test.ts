@@ -15,6 +15,15 @@ import {
 import { PRODUCT_IMAGE_ROLES, type ProductInput } from "../../shared/product";
 
 const validTitle = "Compact Storage Organiser - Practical Space Saving Design, Easy Everyday Access, Versatile Home and Travel Use";
+const suppliedFooterSource = [
+  "<h2>Returns, Refunds and Replacements</h2>",
+  "<p>Products received faulty, damaged, or not as described are eligible for a return, refund, or replacement in accordance with local consumer laws. We are committed to ensuring all products meet the standards of quality and reliability expected by our customers.</p >",
+  "<p>Please note that we do not accept returns or provide refunds for change of mind. We encourage you to carefully consider your purchase to ensure it meets your needs and expectations.</p >",
+  "",
+  "<h2>Delivery Timeframe</h2>",
+  "<p>Delivery is approximately 5–12 business days (excluding weekends and public holidays).</p >"
+].join("\n");
+const suppliedFooterSingleLine = suppliedFooterSource.replace(/\n/g, " ");
 const exactSystemPrompt = await readFile(resolve("rules/DSZ系统prompt 4月20版本.txt"), "utf8");
 const canonicalFooter = extractCanonicalProductFooter(exactSystemPrompt);
 const descriptionPrefix = "<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p>";
@@ -169,6 +178,25 @@ describe("product copy validation", () => {
     "Title contains a character outside the approved ecommerce punctuation set.";
   const titleMarkdownError = "Title must not contain Markdown.";
 
+  test("accepts the exact supplied h2 footer without rewriting its tokens", () => {
+    const suppliedPrompt = [
+      "【固定页脚规则】",
+      "- 固定页脚如下：",
+      suppliedFooterSource,
+      "【格式清洗规则】"
+    ].join("\n");
+
+    const extracted = extractCanonicalProductFooter(suppliedPrompt);
+
+    expect(extracted).toBe(suppliedFooterSingleLine);
+    expect(extracted).toContain("</p >");
+    expect(extracted).toContain("5–12");
+    expect(validateProductCopy({
+      title: validTitle,
+      description: `${descriptionPrefix}${extracted}`
+    }, extracted)).toEqual([]);
+  });
+
   test("extracts only the exact HTML footer from the loaded system prompt", () => {
     expect(canonicalFooter).toMatch(/^<p>/);
     expect(canonicalFooter).toMatch(/<\/ul>$/);
@@ -282,7 +310,7 @@ describe("product copy validation", () => {
     ["anchor tag", `${descriptionPrefix}<a>More</a>${canonicalFooter}`, unsupportedTagError],
     ["image tag", `${descriptionPrefix}<img>${canonicalFooter}`, unsupportedTagError],
     ["table tag", `${descriptionPrefix}<table></table>${canonicalFooter}`, unsupportedTagError],
-    ["h2 tag", `${descriptionPrefix}<h2>More</h2>${canonicalFooter}`, unsupportedTagError],
+    ["h3 tag", `${descriptionPrefix}<h3>More</h3>${canonicalFooter}`, unsupportedTagError],
     ["span tag", `${descriptionPrefix}<span>More</span>${canonicalFooter}`, unsupportedTagError]
   ])("rejects %s while all other fields remain valid", (_label, description, expectedError) => {
     expect(validateCopy({ title: validTitle, description })).toContain(expectedError);
@@ -351,6 +379,7 @@ describe("product copy validation", () => {
     ["alternate br", `<p>Invalid<br>break</p>${canonicalFooter}`],
     ["br with attributes", `<p>Invalid<br class="gap" />break</p>${canonicalFooter}`],
     ["tag with attributes", `<p class="copy">Invalid</p>${canonicalFooter}`],
+    ["unsupported spaced closing p", `<p>Invalid</p  >${canonicalFooter}`],
     ["stray markup", `<p>Invalid <<strong>text</strong></p>${canonicalFooter}`]
   ])("rejects structurally invalid HTML with an %s", (_label, description) => {
     expect(validateCopy({ title: validTitle, description })).toContain(htmlStructureError);

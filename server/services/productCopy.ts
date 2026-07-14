@@ -17,8 +17,11 @@ const PRODUCT_PROMPT_URL = new URL(
   import.meta.url
 );
 const ALLOWED_HTML_TAGS = new Set([
+  "<h2>",
+  "</h2>",
   "<p>",
   "</p>",
+  "</p >",
   "<strong>",
   "</strong>",
   "<ul>",
@@ -65,7 +68,10 @@ export function extractCanonicalProductFooter(systemPrompt: string): string {
     tags.some((tag) => !ALLOWED_HTML_TAGS.has(tag)) ||
     /[<>]/.test(textNodes) ||
     hasInvalidHtmlStructure(footer) ||
-    !footer.includes("Australian Consumer Law (ACL)") ||
+    !(
+      footer.includes("local consumer laws") ||
+      footer.includes("Australian Consumer Law (ACL)")
+    ) ||
     !footer.includes("Delivery Timeframe")
   ) {
     throw new Error("DSZ system prompt does not contain the canonical product footer.");
@@ -160,7 +166,7 @@ export function validateProductCopy(
   if (
     !decodedDescription.valid ||
     !decodedTextNodes.valid ||
-    !/^[\x20-\x7E]*$/.test(decodedTextNodes.value) ||
+    !/^[\x20-\x7E\u2013]*$/.test(decodedTextNodes.value) ||
     /[?*<>]/.test(decodedTextNodes.value)
   ) {
     errors.push("Description text contains a forbidden character.");
@@ -382,6 +388,10 @@ function decodeHtmlCharacterReferences(value: string): {
   return { value: decoded, valid };
 }
 
+function normalizeStructuralTag(token: string): string {
+  return token === "</p >" ? "</p>" : token;
+}
+
 function hasInvalidHtmlStructure(value: string): boolean {
   const stack: string[] = [];
   const tokens = value.match(/<[^>]*>|[^<>]+|[<>]/g) || [];
@@ -395,13 +405,14 @@ function hasInvalidHtmlStructure(value: string): boolean {
 
     if (!ALLOWED_HTML_TAGS.has(token)) return true;
     hasAllowedElement = true;
+    const structuralToken = normalizeStructuralTag(token);
 
-    if (token === "<br />") {
+    if (structuralToken === "<br />") {
       if (!isTextContainer(stack.at(-1))) return true;
       continue;
     }
 
-    const match = token.match(/^<(\/)?(p|strong|ul|li)>$/);
+    const match = structuralToken.match(/^<(\/)?(h2|p|strong|ul|li)>$/);
 
     if (!match) return true;
     const [, closing, name] = match;
@@ -409,7 +420,7 @@ function hasInvalidHtmlStructure(value: string): boolean {
     if (!closing) {
       const parent = stack.at(-1);
 
-      if (name === "p" && parent !== undefined) return true;
+      if ((name === "h2" || name === "p") && parent !== undefined) return true;
       if (name === "ul" && parent !== undefined) return true;
       if (name === "li" && parent !== "ul") return true;
       if (name === "strong" && !isTextContainer(parent)) return true;
@@ -438,7 +449,8 @@ function extractRootText(value: string): string {
     }
 
     rootText += "\n";
-    const match = token.match(/^<(\/)?(p|strong|ul|li)>$/);
+    const structuralToken = normalizeStructuralTag(token);
+    const match = structuralToken.match(/^<(\/)?(h2|p|strong|ul|li)>$/);
 
     if (!match) continue;
     const [, closing, name] = match;
