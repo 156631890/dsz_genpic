@@ -275,6 +275,7 @@ export function buildDszGenerationMessages(input: {
         "INPUT:",
         JSON.stringify(input.input, null, 2),
         "Return JSON with these keys: category, categories, categoryName, product_name, sku, status, ean_code, stock, weight, length, width, height, cbm, brand_name, colour, enabled, description, vendor_price, rrp, images, risk_flags, review_notes.",
+        "Copy length, width and height exactly from INPUT; do not estimate or replace them.",
         "product_name and description must follow the DSZ system prompt rules. If the DSZ system prompt says to output only two final lines, use that as content guidance only; return strict JSON for this API call.",
         "For product_name and description, PRODUCT PROMPT is the only writing rule source. Do not add, override, shorten or reinterpret title and HTML description rules outside PRODUCT PROMPT.",
         "Choose exactly one best matching Category_Mapping ID from the category mapping. Prefer the most specific sub-subcategory that matches categoryHint, selling points, product type and image context. Do not default every product to Women's Intimates.",
@@ -406,6 +407,8 @@ export async function generateDszFieldsWithPacky(input: {
   fetchImpl?: typeof fetch;
   ruleDocuments?: RuleDocuments;
 }): Promise<ProductGenerationResult> {
+  requireManualPackageDimensions(input.productInput);
+
   if (input.images && input.identity) {
     return generateEvidenceBackedDszFields({
       ...input,
@@ -527,9 +530,9 @@ async function generateEvidenceBackedDszFields(input: {
     })
   ]);
   const weight = research.package.weightKg || 0;
-  const length = research.package.lengthCm || 0;
-  const width = research.package.widthCm || 0;
-  const height = research.package.heightCm || 0;
+  const { length, width, height } = requireManualPackageDimensions(
+    input.productInput
+  );
   const hasMeasurements = [weight, length, width, height].every(
     (value) => value > 0
   );
@@ -550,9 +553,7 @@ async function generateEvidenceBackedDszFields(input: {
   if (!hasPurchasePrice) {
     issues.push("Purchase price is required to calculate Vendor Price and RRP.");
   } else if (!hasMeasurements) {
-    issues.push(
-      "Verified package measurements are required to calculate Vendor Price and RRP."
-    );
+    issues.push("Package weight is required to calculate Vendor Price and RRP.");
   }
 
   const fields: DszProductFields = {
@@ -659,6 +660,24 @@ export function calculateCbm(lengthCm: number, widthCm: number, heightCm: number
   return round((lengthCm * widthCm * heightCm) / 1_000_000, 6);
 }
 
+function requireManualPackageDimensions(input: ProductInput): {
+  length: number;
+  width: number;
+  height: number;
+} {
+  const length = Number(input.lengthCm);
+  const width = Number(input.widthCm);
+  const height = Number(input.heightCm);
+
+  if (![length, width, height].every(
+    (value) => Number.isFinite(value) && value > 0
+  )) {
+    throw new Error("Package length, width, and height are required.");
+  }
+
+  return { length, width, height };
+}
+
 export function calculateVendorPrice(input: {
   weightKg: number;
   lengthCm: number;
@@ -706,9 +725,7 @@ function buildFallbackFields(
   reason?: string
 ): DszProductFields {
   const weight = input.packageWeightKg || 0.1;
-  const length = input.lengthCm || 15;
-  const width = input.widthCm || 17;
-  const height = input.heightCm || 3;
+  const { length, width, height } = requireManualPackageDimensions(input);
   const vendorPrice = calculateVendorPrice({
     weightKg: weight,
     lengthCm: length,
@@ -749,7 +766,7 @@ function buildFallbackFields(
     risk_flags: [],
     review_notes: [
       ...(reason ? [reason] : []),
-      "AI field generation fallback used. Review title, category, colour, weight, dimensions and price before live upload."
+      "AI field generation fallback used. Review title, category, colour, weight and price before live upload."
     ]
   };
 }
@@ -765,12 +782,16 @@ function completeGeneratedFields(
     ...fields,
     sku: fields.sku || fallback.sku,
     ean_code: fields.ean_code || fallback.ean_code,
+    length: fallback.length,
+    width: fallback.width,
+    height: fallback.height,
+    cbm: fallback.cbm,
     images: fields.images?.length ? fields.images : input.imageUrls,
     zone_rates: standardZoneRates({
       actualWeightKg: fields.weight,
-      lengthCm: fields.length,
-      widthCm: fields.width,
-      heightCm: fields.height
+      lengthCm: fallback.length,
+      widthCm: fallback.width,
+      heightCm: fallback.height
     })
   });
   const hintedCategory = resolveCategoryHint(input.categoryHint);
@@ -793,12 +814,14 @@ function completeGeneratedFields(
   if (!isValidApiEan(merged.ean_code)) {
     merged.ean_code = fallback.ean_code;
   }
-  if (!Number.isFinite(merged.vendor_price) || merged.vendor_price <= 0) {
-    merged.vendor_price = fallback.vendor_price;
-  }
-  if (!Number.isFinite(merged.rrp) || merged.rrp < merged.vendor_price) {
-    merged.rrp = round(merged.vendor_price * 2, 2);
-  }
+  merged.vendor_price = calculateVendorPrice({
+    weightKg: merged.weight,
+    lengthCm: merged.length,
+    widthCm: merged.width,
+    heightCm: merged.height,
+    purchasePriceCny: input.purchasePriceCny || 0
+  });
+  merged.rrp = round(merged.vendor_price * 2, 2);
   merged.zone_rates = standardZoneRates({
     actualWeightKg: merged.weight,
     lengthCm: merged.length,

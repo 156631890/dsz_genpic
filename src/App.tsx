@@ -108,12 +108,16 @@ function NumericInput({
   value,
   onCommit,
   inputMode = "decimal",
-  ariaLabel
+  ariaLabel,
+  required = false,
+  ariaInvalid = false
 }: {
   value: number;
   onCommit: (value: number) => void;
   inputMode?: "decimal" | "numeric";
   ariaLabel?: string;
+  required?: boolean;
+  ariaInvalid?: boolean;
 }) {
   const [buffer, setBuffer] = useState(String(value));
   const editingRef = useRef(false);
@@ -136,6 +140,8 @@ function NumericInput({
   }
 
   return <input inputMode={inputMode} value={buffer} aria-label={ariaLabel}
+    aria-required={required || undefined}
+    aria-invalid={ariaInvalid || undefined}
     onFocus={() => { editingRef.current = true; }}
     onChange={(event) => setBuffer(event.target.value)}
     onBlur={commit}
@@ -285,11 +291,11 @@ function DetailsPanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate
         onCommit={(value) => onUpdate("stock", value)} /></label>
       <label>Package Weight kg <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Package Weight kg" value={fields.weight}
         onCommit={(value) => onUpdate("weight", value)} /></label>
-      <label>Length cm <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Length cm" value={fields.length}
+      <label>Length cm <span className="field-origin">User-provided</span><NumericInput ariaLabel="Length cm" value={fields.length}
         onCommit={(value) => onUpdate("length", value)} /></label>
-      <label>Width cm <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Width cm" value={fields.width}
+      <label>Width cm <span className="field-origin">User-provided</span><NumericInput ariaLabel="Width cm" value={fields.width}
         onCommit={(value) => onUpdate("width", value)} /></label>
-      <label>Height cm <span className="field-origin">GPT-assisted</span><NumericInput ariaLabel="Height cm" value={fields.height}
+      <label>Height cm <span className="field-origin">User-provided</span><NumericInput ariaLabel="Height cm" value={fields.height}
         onCommit={(value) => onUpdate("height", value)} /></label>
       <label>CBM m3 <span className="automatic-marker">Rule-calculated</span>
         <input aria-label="CBM m3" readOnly value={fields.cbm} /></label>
@@ -348,6 +354,7 @@ export default function App() {
   const [healthStatus, setHealthStatus] = useState<"loading" | "success" | "error">("loading");
   const [researchEvidence, setResearchEvidence] = useState<ProductResearchEvidence | null>(null);
   const [researchIssues, setResearchIssues] = useState<string[]>([]);
+  const [showDimensionError, setShowDimensionError] = useState(false);
   const copyOperationIdRef = useRef(0);
   const imageOperationIdRef = useRef(0);
   const copyControllersRef = useRef(new Set<AbortController>());
@@ -374,6 +381,8 @@ export default function App() {
   const failedImageCount = PRODUCT_IMAGE_ROLES.filter((role) =>
     imageRoles[role].status === "error"
   ).length;
+  const hasValidPackageDimensions = [fields.length, fields.width, fields.height]
+    .every((value) => Number.isFinite(value) && value > 0);
   const workflowLoading = copyTask.status === "loading" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "loading"
   );
@@ -431,6 +440,10 @@ export default function App() {
     });
     return () => controller.abort();
   }, []);
+
+  useEffect(() => {
+    if (hasValidPackageDimensions) setShowDimensionError(false);
+  }, [hasValidPackageDimensions]);
 
   function clearUploadResult() {
     uploadAttemptRef.current += 1;
@@ -733,6 +746,11 @@ export default function App() {
       setMessage("请填写卖点");
       return;
     }
+    if (!hasValidPackageDimensions) {
+      setShowDimensionError(true);
+      setMessage("Enter package length, width, and height before generation.");
+      return;
+    }
 
     invalidateGeneration("all");
     const copyOperationId = copyOperationIdRef.current;
@@ -843,6 +861,34 @@ export default function App() {
             </label>
             <label>采购价 CNY<input inputMode="decimal" value={optionalInputs.purchasePriceCny}
               onChange={(event) => updateOptionalInput("purchasePriceCny", event.target.value)} /></label>
+            <fieldset className="package-dimensions">
+              <legend>Package dimensions (required)</legend>
+              <div className="package-dimension-grid">
+                <label>Length
+                  <NumericInput ariaLabel="Package length cm" value={fields.length}
+                    required ariaInvalid={showDimensionError && !(fields.length > 0)}
+                    onCommit={(value) => updateField("length", value)} />
+                  <span>cm</span>
+                </label>
+                <label>Width
+                  <NumericInput ariaLabel="Package width cm" value={fields.width}
+                    required ariaInvalid={showDimensionError && !(fields.width > 0)}
+                    onCommit={(value) => updateField("width", value)} />
+                  <span>cm</span>
+                </label>
+                <label>Height
+                  <NumericInput ariaLabel="Package height cm" value={fields.height}
+                    required ariaInvalid={showDimensionError && !(fields.height > 0)}
+                    onCommit={(value) => updateField("height", value)} />
+                  <span>cm</span>
+                </label>
+              </div>
+              {showDimensionError && !hasValidPackageDimensions && (
+                <p className="inline-error" role="alert">
+                  Enter package length, width, and height before generation.
+                </p>
+              )}
+            </fieldset>
           </div>
           <button className="generate-button" onClick={startGeneration}>
             {workflowLoading ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}

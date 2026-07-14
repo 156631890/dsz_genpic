@@ -202,9 +202,9 @@ export function buildProductResearchRequest(
           text: [
             "Identify the most likely product and variant from the input and source images.",
             "Choose exactly one most-specific category ID and path from CATEGORY CANDIDATES.",
-            "Return realistic conventional packed shipping estimates for one sellable unit: weightKg and lengthCm x widthCm x heightCm.",
-            "Estimates must include normal protective retail packaging, be positive numbers and must not be presented as verified measurements.",
-            "Use package confidence low for conventional estimates.",
+            "Use operator-provided lengthCm, widthCm, and heightCm exactly; do not estimate, change, or replace them.",
+            "Estimate only package weightKg when the operator did not provide packageWeightKg.",
+            "A conventional weight estimate must include normal protective retail packaging, be positive and use package confidence low.",
             "Use the DSZ colour Multicolor for a multicolour product; otherwise use N/A or one to three allowed colour names separated by ' / '.",
             "Return keys identity, category, colour, package, sources, riskFlags and reviewNotes.",
             "identity requires productType, variant and matchSummary strings.",
@@ -361,33 +361,24 @@ export function validateProductResearch(options: {
     issues.push("Colour needs review.");
   }
 
-  const researched = aggregatePackage
-    ? {
-        weightKg: aggregatePackage.weightKg,
-        lengthCm: aggregatePackage.lengthCm,
-        widthCm: aggregatePackage.widthCm,
-        heightCm: aggregatePackage.heightCm
-      }
-    : {};
+  const researchedWeight = aggregatePackage?.weightKg;
   const packageFacts = {
-    weightKg: positiveNumber(options.input.packageWeightKg) ?? researched.weightKg,
-    lengthCm: positiveNumber(options.input.lengthCm) ?? researched.lengthCm,
-    widthCm: positiveNumber(options.input.widthCm) ?? researched.widthCm,
-    heightCm: positiveNumber(options.input.heightCm) ?? researched.heightCm
+    weightKg: positiveNumber(options.input.packageWeightKg) ?? researchedWeight,
+    lengthCm: positiveNumber(options.input.lengthCm),
+    widthCm: positiveNumber(options.input.widthCm),
+    heightCm: positiveNumber(options.input.heightCm)
   };
   const completePackage = Object.values(packageFacts).every(
     (value) => value !== undefined
   );
-  const usesConventionalEstimate = !evidenceValid && [
-    options.input.packageWeightKg,
-    options.input.lengthCm,
-    options.input.widthCm,
-    options.input.heightCm
-  ].some((value) => positiveNumber(value) === undefined);
-  if (usesConventionalEstimate && completePackage) {
-    issues.push("Package weight and dimensions use conventional estimates.");
+  const usesConventionalWeightEstimate =
+    !evidenceValid &&
+    positiveNumber(options.input.packageWeightKg) === undefined &&
+    positiveNumber(researchedWeight) !== undefined;
+  if (usesConventionalWeightEstimate && completePackage) {
+    issues.push("Package weight uses a conventional estimate.");
   } else if (!completePackage) {
-    issues.push("Package weight and dimensions need verified same-product evidence.");
+    issues.push("Package weight or required operator dimensions are unavailable.");
   }
 
   return {

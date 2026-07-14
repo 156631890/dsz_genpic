@@ -13,6 +13,14 @@ const png: ProductResearchImage = {
   mimeType: "image/png",
   buffer: Buffer.from("89504e470d0a1a0a", "hex")
 };
+const manualInput = {
+  sellingPoints: "Multicolour stone and pearl necklace",
+  images: [],
+  imageUrls: [],
+  lengthCm: 15,
+  widthCm: 10,
+  heightCm: 4
+};
 
 function researchFixture(options: {
   sourceUrl?: string;
@@ -79,11 +87,7 @@ describe("product research request", () => {
     );
 
     await expect(generateProductResearchWithPacky({
-      input: {
-        sellingPoints: "Multicolour stone and pearl necklace",
-        images: [],
-        imageUrls: []
-      },
+      input: manualInput,
       images: [png],
       fieldRules: "Current DSZ field rules.",
       categoryMapping:
@@ -104,11 +108,7 @@ describe("product research request", () => {
     const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
 
     await expect(generateProductResearchWithPacky({
-      input: {
-        sellingPoints: "Multicolour stone and pearl necklace",
-        images: [],
-        imageUrls: []
-      },
+      input: manualInput,
       images: [png],
       fieldRules: "Current DSZ field rules.",
       categoryMapping:
@@ -125,13 +125,19 @@ describe("product research request", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(3);
   });
 
-  test("generates conventional defaults in one structured request", async () => {
+  test("generates a conventional weight in one structured request", async () => {
     const fetchImpl = vi.fn(async (_url, init) => {
       const body = JSON.parse(String(init?.body));
       const serialized = JSON.stringify(body);
       expect(body.tools).toBeUndefined();
       expect(serialized).toContain("input_image");
-      expect(serialized).toContain("conventional packed shipping estimates");
+      expect(serialized).toContain("Estimate only package weightKg");
+      expect(serialized).toContain(
+        "Use operator-provided lengthCm, widthCm, and heightCm exactly"
+      );
+      expect(serialized).not.toContain(
+        "Return realistic conventional packed shipping estimates"
+      );
       return new Response(JSON.stringify({
         output_text: JSON.stringify(researchFixture({
           confidence: "low",
@@ -145,10 +151,8 @@ describe("product research request", () => {
 
     const result = await generateProductResearchWithPacky({
       input: {
-        sellingPoints: "Multicolour stone and pearl necklace",
+        ...manualInput,
         categoryHint: "Women's Jewellery",
-        images: [],
-        imageUrls: []
       },
       images: [png],
       fieldRules: "Current DSZ field rules.",
@@ -166,19 +170,18 @@ describe("product research request", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(result.package).toEqual({
       weightKg: 0.12,
-      lengthCm: 12,
-      widthCm: 8,
-      heightCm: 3
+      lengthCm: 15,
+      widthCm: 10,
+      heightCm: 4
     });
   });
 
-  test("builds a vision-assisted conventional default request for GPT-5.6 SOL", () => {
+  test("builds a vision-assisted conventional weight request for GPT-5.6 SOL", () => {
     const body = buildProductResearchRequest({
       input: {
-        sellingPoints: "Multicolour stone and pearl necklace",
+        ...manualInput,
         categoryHint: "Women's Jewellery",
-        images: ["source.png"],
-        imageUrls: []
+        images: ["source.png"]
       },
       images: [png],
       fieldRules: "Current DSZ field rules.",
@@ -197,7 +200,13 @@ describe("product research request", () => {
     expect(body).not.toHaveProperty("tools");
     expect(JSON.stringify(body)).toContain("input_image");
     expect(JSON.stringify(body)).toContain("strict JSON");
-    expect(JSON.stringify(body)).toContain("conventional packed shipping estimates");
+    expect(JSON.stringify(body)).toContain("Estimate only package weightKg");
+    expect(JSON.stringify(body)).toContain(
+      "Use operator-provided lengthCm, widthCm, and heightCm exactly"
+    );
+    expect(JSON.stringify(body)).not.toContain(
+      "Return realistic conventional packed shipping estimates"
+    );
     expect(JSON.stringify(body)).toContain(
       "| Fashion / Women's Fashion / Women's Jewellery | 950 |"
     );
@@ -244,7 +253,7 @@ describe("product research request", () => {
       confidence: "high" as const,
       sourcePackageAvailable: false
     }
-  ])("uses conventional package defaults for $name", ({
+  ])("keeps manual dimensions and uses a conventional weight for $name", ({
     annotatedUrls,
     sourceUrl,
     exactProductMatch,
@@ -260,18 +269,19 @@ describe("product research request", () => {
       }),
       annotatedUrls,
       categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
-      input: { sellingPoints: "necklace", images: [], imageUrls: [] }
+      input: { ...manualInput, sellingPoints: "necklace" }
     });
 
     expect(result.package).toEqual({
       weightKg: 0.12,
-      lengthCm: 12,
-      widthCm: 8,
-      heightCm: 3
+      lengthCm: 15,
+      widthCm: 10,
+      heightCm: 4
     });
     expect(result.issues).toContain(
-      "Package weight and dimensions use conventional estimates."
+      "Package weight uses a conventional estimate."
     );
+    expect(result.issues.join(" ")).not.toContain("dimensions use conventional");
   });
 
   test("rejects conflicting exact-product package facts", () => {
@@ -289,22 +299,22 @@ describe("product research request", () => {
         "https://manufacturer.example.com/item"
       ],
       categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
-      input: { sellingPoints: "necklace", images: [], imageUrls: [] }
+      input: { ...manualInput, sellingPoints: "necklace" }
     });
 
     expect(result.package).toEqual({
       weightKg: 0.12,
-      lengthCm: 12,
-      widthCm: 8,
-      heightCm: 3
+      lengthCm: 15,
+      widthCm: 10,
+      heightCm: 4
     });
     expect(result.issues).toContain("Package sources conflict and need review.");
     expect(result.issues).toContain(
-      "Package weight and dimensions use conventional estimates."
+      "Package weight uses a conventional estimate."
     );
   });
 
-  test("accepts low-confidence conventional package defaults without sources", () => {
+  test("accepts a low-confidence conventional weight without sources", () => {
     const raw = researchFixture({
       confidence: "low",
       includeSources: false
@@ -313,18 +323,38 @@ describe("product research request", () => {
       raw,
       annotatedUrls: [],
       categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
-      input: { sellingPoints: "necklace", images: [], imageUrls: [] }
+      input: { ...manualInput, sellingPoints: "necklace" }
     });
 
     expect(result.package).toEqual({
       weightKg: 0.12,
-      lengthCm: 12,
-      widthCm: 8,
-      heightCm: 3
+      lengthCm: 15,
+      widthCm: 10,
+      heightCm: 4
     });
     expect(result.issues).toContain(
-      "Package weight and dimensions use conventional estimates."
+      "Package weight uses a conventional estimate."
     );
+  });
+
+  test("ignores model dimensions and keeps operator dimensions", () => {
+    const result = validateProductResearch({
+      raw: researchFixture({ confidence: "low", includeSources: false }),
+      annotatedUrls: [],
+      categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
+      input: manualInput
+    });
+
+    expect(result.package).toEqual({
+      weightKg: 0.12,
+      lengthCm: 15,
+      widthCm: 10,
+      heightCm: 4
+    });
+    expect(result.issues).toContain(
+      "Package weight uses a conventional estimate."
+    );
+    expect(result.issues.join(" ")).not.toContain("dimensions use conventional");
   });
 
   test("accepts a category only when ID and path match the mapping", () => {
@@ -358,7 +388,7 @@ describe("product research request", () => {
       heightCm: 4
     });
     expect(result.issues).not.toContain(
-      "Package weight and dimensions use conventional estimates."
+      "Package weight uses a conventional estimate."
     );
   });
 
@@ -368,9 +398,8 @@ describe("product research request", () => {
       annotatedUrls: ["https://supplier.example.com/item"],
       categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
       input: {
+        ...manualInput,
         sellingPoints: "necklace",
-        images: [],
-        imageUrls: [],
         categoryId: 950,
         categoryName: "Fashion / Women's Fashion / Women's Jewellery",
         colour: "Black / White / Beige"
@@ -394,9 +423,8 @@ describe("product research request", () => {
       annotatedUrls: ["https://supplier.example.com/item"],
       categoryMapping: "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
       input: {
+        ...manualInput,
         sellingPoints: "Multicolour tourmaline and pearl necklace",
-        images: [],
-        imageUrls: []
       }
     });
 
