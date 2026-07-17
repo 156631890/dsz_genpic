@@ -10,3 +10,4 @@ tmp
 *.tsbuildinfo
 
 .vercel
+.env*.local
