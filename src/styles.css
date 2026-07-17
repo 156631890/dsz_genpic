@@ -115,6 +115,68 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .health-loading strong::before { content: "↻"; margin-right: 6px; }
 .health-error strong::before { content: "?"; margin-right: 6px; color: var(--error); }
 
+.product-queue {
+  max-width: 1460px;
+  margin: 0 auto;
+  border-bottom: 1px solid var(--line-strong);
+  padding: 18px 0 0;
+}
+
+.product-queue-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 12px;
+}
+
+.product-queue-heading > div { display: grid; gap: 3px; }
+.product-queue-heading span { color: var(--faint); font-size: 9px; font-weight: 750; letter-spacing: .12em; }
+.product-queue-heading strong { color: #4f4c54; font-size: 12px; }
+
+.new-product-button {
+  min-height: 34px;
+  border: 1px solid var(--violet);
+  border-radius: 5px;
+  padding: 0 14px;
+  background: var(--violet);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.new-product-button:hover { background: #49304d; }
+
+.product-job-tabs {
+  display: flex;
+  gap: 5px;
+  overflow-x: auto;
+  padding-bottom: 10px;
+  scrollbar-width: thin;
+}
+
+.product-job-tabs button {
+  display: grid;
+  flex: 0 0 auto;
+  min-width: 142px;
+  gap: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px 3px 6px 3px;
+  padding: 8px 11px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+}
+
+.product-job-tabs button[aria-selected="true"] {
+  border-color: var(--violet);
+  background: var(--violet-wash);
+  box-shadow: inset 3px 0 0 var(--violet);
+}
+
+.product-job-tabs button strong { font-size: 11px; }
+.product-job-tabs button span { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+
 .workspace {
   display: grid;
   grid-template-columns: minmax(270px, 330px) minmax(0, 1fr);
@@ -336,6 +398,12 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
   .brand-lockup > div { display: block; }
   .topbar p { margin-top: 4px; }
   .service-context { text-align: left; }
+  .product-queue { padding-top: 14px; }
+  .product-queue-heading { align-items: flex-start; }
+  .product-queue-heading strong { font-size: 11px; }
+  .new-product-button { flex: 0 0 auto; }
+  .product-job-tabs { margin-right: -14px; padding-right: 14px; }
+  .product-job-tabs button { min-width: 132px; }
   .workspace { padding-top: 25px; }
   .source-rail { display: block; }
   .editor-intro { align-items: flex-start; flex-direction: column; }

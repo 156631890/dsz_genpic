@@ -4,7 +4,7 @@ import {
   Sparkles,
   Upload
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PRODUCT_IMAGE_ROLES,
   type DszProductFields,
@@ -22,6 +22,10 @@ import {
   uploadProductFields
 } from "./productWorkflow";
 import { reserveProductIdentity } from "./productIdentity";
+import {
+  canOptimizeSourceImages,
+  prepareSourceImages
+} from "./imageProcessing";
 
 type Status = "idle" | "loading" | "success" | "error" | "stale";
 
@@ -42,10 +46,41 @@ interface OptionalInputs {
   purchasePriceCny: string;
 }
 
+interface ProductJobDefinition {
+  id: string;
+  number: number;
+}
+
+interface ProductJobSummary {
+  phase: Status;
+  completedImages: number;
+  failedImages: number;
+  ready: boolean;
+  submitted: boolean;
+}
+
+interface ImageTaskScheduler {
+  schedule<T>(task: () => Promise<T>): Promise<T>;
+}
+
+interface ProductWorkspaceProps {
+  jobId: string;
+  domIdPrefix: string;
+  imageScheduler: ImageTaskScheduler;
+  onSummaryChange: (jobId: string, summary: ProductJobSummary) => void;
+}
+
 const idleTask: TaskState = { status: "idle", error: "" };
 const MAX_SOURCE_IMAGES = 4;
 const MAX_SOURCE_IMAGE_BATCH_BYTES = 4_000_000;
-const IMAGE_ROLE_CONCURRENCY = 2;
+const IMAGE_ROLE_CONCURRENCY = 3;
+const initialJobSummary: ProductJobSummary = {
+  phase: "idle",
+  completedImages: 0,
+  failedImages: 0,
+  ready: false,
+  submitted: false
+};
 const OPERATOR_PACKAGE_FIELDS = new Set<keyof DszProductFields>([
   "weight",
   "length",
@@ -156,17 +191,18 @@ function NumericInput({
     }} />;
 }
 
-function ImageRoleCard({ role, index, state, onRetry, onReplace }: {
+function ImageRoleCard({ role, index, state, idPrefix, onRetry, onReplace }: {
   role: ProductImageRole;
   index: number;
   state: ImageRoleState;
+  idPrefix: string;
   onRetry: (role: ProductImageRole) => void;
   onReplace: (role: ProductImageRole, imageUrl: string) => void;
 }) {
   const [replacementUrl, setReplacementUrl] = useState("");
   const [replacementError, setReplacementError] = useState("");
   const replacementDisabled = state.status === "loading";
-  const replacementStatusId = `replacement-${role}-status`;
+  const replacementStatusId = `${idPrefix}replacement-${role}-status`;
 
   function applyReplacement() {
     if (replacementDisabled) return;
@@ -213,8 +249,9 @@ function ImageRoleCard({ role, index, state, onRetry, onReplace }: {
   );
 }
 
-function ImagesPanel({ imageRoles, onRetry, onReplace }: {
+function ImagesPanel({ imageRoles, idPrefix, onRetry, onReplace }: {
   imageRoles: Record<ProductImageRole, ImageRoleState>;
+  idPrefix: string;
   onRetry: (role: ProductImageRole) => void;
   onReplace: (role: ProductImageRole, imageUrl: string) => void;
 }) {
@@ -222,7 +259,7 @@ function ImagesPanel({ imageRoles, onRetry, onReplace }: {
     <div className="image-role-grid" aria-label="Generated product images">
       {PRODUCT_IMAGE_ROLES.map((role, index) => (
         <ImageRoleCard key={role} role={role} index={index} state={imageRoles[role]}
-          onRetry={onRetry} onReplace={onReplace} />
+          idPrefix={idPrefix} onRetry={onRetry} onReplace={onReplace} />
       ))}
     </div>
   );
@@ -255,7 +292,7 @@ function TaskStatusCards({
         <div className="task-title"><span>GPT-5.6 SOL</span><strong>Complete product data & copy</strong></div>
         <span className="state-label">{statusLabel(copyTask.status)}</span>
         <span className="sr-only">{copyTask.status}</span>
-        {uploadSourceTask.status === "loading" && <small>正在上传源图</small>}
+        {uploadSourceTask.status === "loading" && <small>正在优化源图</small>}
         {copyTask.error && <span className="inline-error" role="alert">{copyTask.error}</span>}
         {copyTask.status === "error" && (
           <button className="text-button" onClick={onRetryCopy}
@@ -345,6 +382,129 @@ function ShippingPanel({ billableWeight }: { billableWeight: number }) {
 }
 
 export default function App() {
+  const [jobs, setJobs] = useState<ProductJobDefinition[]>([
+    { id: "product-1", number: 1 }
+  ]);
+  const [activeJobId, setActiveJobId] = useState("product-1");
+  const [jobSummaries, setJobSummaries] = useState<Record<string, ProductJobSummary>>({
+    "product-1": initialJobSummary
+  });
+  const [serviceHealth, setServiceHealth] = useState<ServiceHealth | null>(null);
+  const [healthStatus, setHealthStatus] = useState<"loading" | "success" | "error">("loading");
+  const [imageScheduler] = useState(() =>
+    createImageTaskScheduler(IMAGE_ROLE_CONCURRENCY)
+  );
+  const nextJobNumberRef = useRef(2);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    requestServiceHealth(controller.signal).then((health) => {
+      if (controller.signal.aborted) return;
+      setServiceHealth(health);
+      setHealthStatus("success");
+    }).catch(() => {
+      if (controller.signal.aborted) return;
+      setHealthStatus("error");
+    });
+    return () => controller.abort();
+  }, []);
+
+  const updateJobSummary = useCallback((jobId: string, summary: ProductJobSummary) => {
+    setJobSummaries((current) => {
+      const previous = current[jobId];
+      return previous && sameJobSummary(previous, summary)
+        ? current
+        : { ...current, [jobId]: summary };
+    });
+  }, []);
+
+  function addProductJob() {
+    const number = nextJobNumberRef.current;
+    nextJobNumberRef.current += 1;
+    const job = { id: `product-${number}`, number };
+    setJobs((current) => [...current, job]);
+    setJobSummaries((current) => ({
+      ...current,
+      [job.id]: initialJobSummary
+    }));
+    setActiveJobId(job.id);
+  }
+
+  return (
+    <>
+      <a className="skip-link" href="#main-content">Skip to product editor</a>
+      <main className="app-shell" id="main-content" tabIndex={-1}>
+        <header className="topbar">
+          <div className="brand-lockup">
+            <span className="brand-mark" aria-hidden="true">DSZ</span>
+            <div>
+              <h1>DSZ Product Studio</h1>
+              <p>商品资料生成与提交流程工作台</p>
+            </div>
+          </div>
+          <div className={`service-context health-${healthStatus}`} aria-label="Service health"
+            role="status" aria-live="polite">
+            {healthStatus === "loading" && <><span>Service health</span><strong>Checking services</strong></>}
+            {healthStatus === "error" && <><span>Service health</span><strong>Service status unavailable</strong></>}
+            {healthStatus === "success" && serviceHealth && (
+              serviceHealth.textConfigured && serviceHealth.imageConfigured
+                ? <><span>AI services configured</span><strong>{serviceHealth.textModel} · {serviceHealth.imageModel}</strong></>
+                : <><span>Service setup incomplete</span><strong>
+                  Text {serviceHealth.textConfigured ? "ready" : "missing"} · Image {serviceHealth.imageConfigured ? "ready" : "missing"}
+                </strong></>
+            )}
+          </div>
+        </header>
+
+        <section className="product-queue" aria-labelledby="product-queue-heading">
+          <div className="product-queue-heading">
+            <div>
+              <span>PRODUCT QUEUE</span>
+              <strong id="product-queue-heading">{jobs.length} 个商品 · 全局图片并发 {IMAGE_ROLE_CONCURRENCY}</strong>
+            </div>
+            <button type="button" className="new-product-button" onClick={addProductJob}>
+              新建商品
+            </button>
+          </div>
+          <nav className="product-job-tabs" role="tablist" aria-label="Product jobs">
+            {jobs.map((job) => {
+              const summary = jobSummaries[job.id] || initialJobSummary;
+              return (
+                <button key={job.id} id={`job-tab-${job.id}`} role="tab"
+                  aria-selected={activeJobId === job.id}
+                  aria-controls={`job-panel-${job.id}`}
+                  tabIndex={activeJobId === job.id ? 0 : -1}
+                  onClick={() => setActiveJobId(job.id)}>
+                  <strong>商品 {job.number}</strong>
+                  <span>{productJobSummaryLabel(summary)}</span>
+                </button>
+              );
+            })}
+          </nav>
+        </section>
+
+        {jobs.map((job, index) => (
+          <div key={job.id} id={`job-panel-${job.id}`} role="tabpanel"
+            aria-labelledby={`job-tab-${job.id}`}
+            data-testid={`product-job-${job.id}`}
+            hidden={activeJobId !== job.id}>
+            <ProductWorkspace jobId={job.id}
+              domIdPrefix={index === 0 ? "" : `${job.id}-`}
+              imageScheduler={imageScheduler}
+              onSummaryChange={updateJobSummary} />
+          </div>
+        ))}
+      </main>
+    </>
+  );
+}
+
+function ProductWorkspace({
+  jobId,
+  domIdPrefix,
+  imageScheduler,
+  onSummaryChange
+}: ProductWorkspaceProps) {
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sellingPoints, setSellingPoints] = useState("");
   const [optionalInputs, setOptionalInputs] = useState(emptyOptionalInputs);
@@ -356,8 +516,6 @@ export default function App() {
   const [message, setMessage] = useState("等待上传原始产品图片");
   const [uploadResult, setUploadResult] = useState<unknown>(null);
   const [activeTab, setActiveTab] = useState<EditorTab>("details");
-  const [serviceHealth, setServiceHealth] = useState<ServiceHealth | null>(null);
-  const [healthStatus, setHealthStatus] = useState<"loading" | "success" | "error">("loading");
   const [researchEvidence, setResearchEvidence] = useState<ProductResearchEvidence | null>(null);
   const [researchIssues, setResearchIssues] = useState<string[]>([]);
   const [showMeasurementError, setShowMeasurementError] = useState(false);
@@ -373,6 +531,7 @@ export default function App() {
   const manualFieldsRef = useRef(new Set<keyof DszProductFields>());
   const uploadAttemptRef = useRef(0);
   const uploadControllerRef = useRef<AbortController | null>(null);
+  const sourceSelectionIdRef = useRef(0);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const generatedImages = useMemo(
@@ -427,8 +586,35 @@ export default function App() {
     heightCm: fields.height
   });
   const submitReason = submissionReason(fields, imageRoles, copyTask, workflowLoading, hasTaskError);
+  const jobPhase: Status = uploadSourceTask.status === "loading" || workflowLoading || uploadStatus === "loading"
+    ? "loading"
+    : hasTaskError || uploadStatus === "error"
+      ? "error"
+      : isReadyToSubmit || uploadStatus === "success" ||
+          (copyTask.status === "success" && completedImageCount === PRODUCT_IMAGE_ROLES.length)
+        ? "success"
+        : hasStaleOutput ? "stale" : "idle";
+
+  useEffect(() => {
+    onSummaryChange(jobId, {
+      phase: jobPhase,
+      completedImages: completedImageCount,
+      failedImages: failedImageCount,
+      ready: isReadyToSubmit,
+      submitted: uploadStatus === "success"
+    });
+  }, [
+    completedImageCount,
+    failedImageCount,
+    isReadyToSubmit,
+    jobId,
+    jobPhase,
+    onSummaryChange,
+    uploadStatus
+  ]);
 
   useEffect(() => () => {
+    sourceSelectionIdRef.current += 1;
     copyOperationIdRef.current += 1;
     imageOperationIdRef.current += 1;
     copyControllersRef.current.forEach((controller) => controller.abort());
@@ -437,19 +623,6 @@ export default function App() {
     imageControllersRef.current.clear();
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
-  }, []);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    requestServiceHealth(controller.signal).then((health) => {
-      if (controller.signal.aborted) return;
-      setServiceHealth(health);
-      setHealthStatus("success");
-    }).catch(() => {
-      if (controller.signal.aborted) return;
-      setHealthStatus("error");
-    });
-    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -471,7 +644,6 @@ export default function App() {
     setCopyTask((current) => current.status === "success" || current.status === "stale"
       ? { status: "stale", error: "" }
       : idleTask);
-    setUploadSourceTask(idleTask);
     setResearchEvidence(null);
     setResearchIssues([]);
     if (scope === "all") {
@@ -504,6 +676,29 @@ export default function App() {
     if (field === "purchasePriceCny") invalidateGeneration("copy");
     setOptionalInputs((current) => ({ ...current, [field]: value }));
     clearUploadResult();
+  }
+
+  async function selectSourceFiles(files: File[]) {
+    sourceSelectionIdRef.current += 1;
+    const selectionId = sourceSelectionIdRef.current;
+    invalidateGeneration("all");
+    setSourceFiles(files);
+    setUploadSourceTask(idleTask);
+    clearUploadResult();
+
+    if (files.length > MAX_SOURCE_IMAGES || !canOptimizeSourceImages(files)) return;
+    setUploadSourceTask({ status: "loading", error: "" });
+    setMessage("正在优化源图，完成后可直接生成");
+    const optimizedFiles = await prepareSourceImages(files);
+    if (selectionId !== sourceSelectionIdRef.current) return;
+
+    const bytesSaved = files.reduce((total, file) => total + file.size, 0) -
+      optimizedFiles.reduce((total, file) => total + file.size, 0);
+    setSourceFiles(optimizedFiles);
+    setUploadSourceTask({ status: "success", error: "" });
+    setMessage(bytesSaved > 0
+      ? `源图优化完成，减少 ${formatBytes(bytesSaved)} 上传量`
+      : "源图无需压缩，可以开始生成");
   }
 
   function markManualField(
@@ -688,12 +883,15 @@ export default function App() {
       [role]: { status: "loading", error: "", imageUrl: current[role].imageUrl }
     }));
     try {
-      const result = await requestProductImageRole({
-        role,
-        files: filesSnapshot,
-        productType: productTypeSnapshot,
-        sellingPoints: sellingPointsSnapshot
-      }, controller.signal);
+      const result = await imageScheduler.schedule(() => {
+        if (controller.signal.aborted) throw new Error("Image task cancelled");
+        return requestProductImageRole({
+          role,
+          files: filesSnapshot,
+          productType: productTypeSnapshot,
+          sellingPoints: sellingPointsSnapshot
+        }, controller.signal);
+      });
       if (operationId !== imageOperationIdRef.current) return;
       setImageRoles((current) => ({
         ...current,
@@ -760,8 +958,6 @@ export default function App() {
     }
     if (!hasValidPackageMeasurements) {
       setShowMeasurementError(true);
-      setMessage("Enter package weight, length, width, and height before generation.");
-      return;
     }
 
     invalidateGeneration("all");
@@ -800,35 +996,11 @@ export default function App() {
 
   return (
     <>
-      <a className="skip-link" href="#main-content">Skip to product editor</a>
-      <main className="app-shell" id="main-content" tabIndex={-1}>
-      <header className="topbar">
-        <div className="brand-lockup">
-          <span className="brand-mark" aria-hidden="true">DSZ</span>
-          <div>
-            <h1>DSZ Product Studio</h1>
-            <p>商品资料生成与提交流程工作台</p>
-          </div>
-        </div>
-        <div className={`service-context health-${healthStatus}`} aria-label="Service health"
-          role="status" aria-live="polite">
-          {healthStatus === "loading" && <><span>Service health</span><strong>Checking services</strong></>}
-          {healthStatus === "error" && <><span>Service health</span><strong>Service status unavailable</strong></>}
-          {healthStatus === "success" && serviceHealth && (
-            serviceHealth.textConfigured && serviceHealth.imageConfigured
-              ? <><span>AI services configured</span><strong>{serviceHealth.textModel} · {serviceHealth.imageModel}</strong></>
-              : <><span>Service setup incomplete</span><strong>
-                Text {serviceHealth.textConfigured ? "ready" : "missing"} · Image {serviceHealth.imageConfigured ? "ready" : "missing"}
-              </strong></>
-          )}
-        </div>
-      </header>
-
       <section className="workspace" aria-label="DSZ product workspace">
-        <aside className="source-rail" aria-labelledby="source-heading">
+        <aside className="source-rail" aria-labelledby={`${domIdPrefix}source-heading`}>
           <div className="section-heading">
             <span className="section-index">01</span>
-            <div><h2 id="source-heading">Source</h2><p>生成依据</p></div>
+            <div><h2 id={`${domIdPrefix}source-heading`}>Source</h2><p>生成依据</p></div>
           </div>
           <label className="file-picker">
             <span><Upload size={17} aria-hidden="true" /> 原始产品图片</span>
@@ -837,11 +1009,9 @@ export default function App() {
               type="file"
               accept="image/png,image/jpeg,image/webp"
               multiple
-              onChange={(event) => {
-                invalidateGeneration("all");
-                setSourceFiles(Array.from(event.target.files || []));
-                clearUploadResult();
-              }}
+              onChange={(event) => void selectSourceFiles(
+                Array.from(event.target.files || [])
+              )}
             />
             <strong>{sourceFiles.length ? `已选择 ${sourceFiles.length} 张` : "选择 JPG / PNG / WebP"}</strong>
             <small>支持多图，AI 将识别产品主体与细节</small>
@@ -874,7 +1044,7 @@ export default function App() {
             <label>采购价 CNY<input inputMode="decimal" value={optionalInputs.purchasePriceCny}
               onChange={(event) => updateOptionalInput("purchasePriceCny", event.target.value)} /></label>
             <fieldset className="package-measurements">
-              <legend>Package measurements (required)</legend>
+              <legend>Package measurements (required for submission)</legend>
               <div className="package-measurement-grid">
                 <label>Weight
                   <NumericInput ariaLabel="Package weight kg" value={fields.weight}
@@ -903,20 +1073,23 @@ export default function App() {
               </div>
               {showMeasurementError && !hasValidPackageMeasurements && (
                 <p className="inline-error" role="alert">
-                  Enter package weight, length, width, and height before generation.
+                  Add package weight, length, width, and height before final submission.
                 </p>
               )}
             </fieldset>
           </div>
-          <button className="generate-button" onClick={startGeneration}>
-            {workflowLoading ? <Loader2 className="spin" size={16} /> : <Sparkles size={16} />}
-            开始 AI 生成
+          <button className="generate-button" onClick={startGeneration}
+            disabled={uploadSourceTask.status === "loading"}>
+            {workflowLoading || uploadSourceTask.status === "loading"
+              ? <Loader2 className="spin" size={16} />
+              : <Sparkles size={16} />}
+            {uploadSourceTask.status === "loading" ? "正在优化源图" : "开始 AI 生成"}
           </button>
         </aside>
 
-        <section className="editor" aria-labelledby="editor-heading">
+        <section className="editor" aria-labelledby={`${domIdPrefix}editor-heading`}>
           <div className="editor-intro">
-            <div><span className="section-index">02</span><h2 id="editor-heading">Product record</h2></div>
+            <div><span className="section-index">02</span><h2 id={`${domIdPrefix}editor-heading`}>Product record</h2></div>
             <div className={`status status-${statusTone(copyTask.status, uploadStatus)}`}
               role="status" aria-label="Workflow status" aria-live="polite">{pageSummary}</div>
           </div>
@@ -927,9 +1100,9 @@ export default function App() {
             onRetryCopy={() => runCopyTask()} />
 
           {researchEvidence && (
-            <section className="research-evidence" aria-labelledby="research-evidence-heading">
+            <section className="research-evidence" aria-labelledby={`${domIdPrefix}research-evidence-heading`}>
               <div className="research-evidence-head">
-                <h3 id="research-evidence-heading">Research evidence</h3>
+                <h3 id={`${domIdPrefix}research-evidence-heading`}>Research evidence</h3>
                 <span>{researchEvidence.confidence} confidence</span>
               </div>
               <p>{researchEvidence.matchSummary}</p>
@@ -955,10 +1128,10 @@ export default function App() {
 
           <nav className="editor-tabs" role="tablist" aria-label="Product editor sections">
             {editorTabs.map((tab, index) => (
-              <button key={tab.id} id={`tab-${tab.id}`} role="tab"
+              <button key={tab.id} id={`${domIdPrefix}tab-${tab.id}`} role="tab"
                 ref={(node) => { tabRefs.current[index] = node; }}
                 aria-selected={activeTab === tab.id}
-                aria-controls={`panel-${tab.id}`}
+                aria-controls={`${domIdPrefix}panel-${tab.id}`}
                 tabIndex={activeTab === tab.id ? 0 : -1}
                 onKeyDown={(event) => {
                   let nextIndex: number | undefined;
@@ -976,24 +1149,25 @@ export default function App() {
           </nav>
 
           <div className="tab-stage">
-            <section id="panel-details" role="tabpanel" aria-labelledby="tab-details"
+            <section id={`${domIdPrefix}panel-details`} role="tabpanel" aria-labelledby={`${domIdPrefix}tab-details`}
               hidden={activeTab !== "details"} className="tab-panel">
               <DetailsPanel fields={fields} onUpdate={updateField} />
             </section>
 
-            <section id="panel-price" role="tabpanel" aria-labelledby="tab-price"
+            <section id={`${domIdPrefix}panel-price`} role="tabpanel" aria-labelledby={`${domIdPrefix}tab-price`}
               hidden={activeTab !== "price"} className="tab-panel">
               <PricePanel fields={fields} onUpdate={updateField} />
             </section>
 
-            <section id="panel-shipping" role="tabpanel" aria-labelledby="tab-shipping"
+            <section id={`${domIdPrefix}panel-shipping`} role="tabpanel" aria-labelledby={`${domIdPrefix}tab-shipping`}
               hidden={activeTab !== "shipping"} className="tab-panel shipping-panel">
               <ShippingPanel billableWeight={billableWeight} />
             </section>
 
-            <section id="panel-images" role="tabpanel" aria-labelledby="tab-images"
+            <section id={`${domIdPrefix}panel-images`} role="tabpanel" aria-labelledby={`${domIdPrefix}tab-images`}
               hidden={activeTab !== "images"} className="tab-panel">
-              <ImagesPanel imageRoles={imageRoles} onRetry={runImageRole} onReplace={replaceImageRole} />
+              <ImagesPanel imageRoles={imageRoles} idPrefix={domIdPrefix}
+                onRetry={runImageRole} onReplace={replaceImageRole} />
             </section>
           </div>
 
@@ -1012,20 +1186,73 @@ export default function App() {
         </div>
         <button className="primary-submit" onClick={uploadProduct}
           disabled={!isReadyToSubmit || uploadStatus === "loading"}
-          aria-describedby="submit-reason">
+          aria-describedby={`${domIdPrefix}submit-reason`}>
           {uploadStatus === "loading" ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
           验证并提交审核
         </button>
-        <span id="submit-reason" className="sr-only">{submitReason}</span>
+        <span id={`${domIdPrefix}submit-reason`} className="sr-only">{submitReason}</span>
       </footer>
-      </main>
     </>
   );
+}
+
+function createImageTaskScheduler(limit: number): ImageTaskScheduler {
+  let activeTasks = 0;
+  const waitingTasks: Array<() => void> = [];
+
+  function startNext() {
+    while (activeTasks < limit && waitingTasks.length > 0) {
+      waitingTasks.shift()?.();
+    }
+  }
+
+  return {
+    schedule<T>(task: () => Promise<T>): Promise<T> {
+      return new Promise<T>((resolve, reject) => {
+        waitingTasks.push(() => {
+          activeTasks += 1;
+          void Promise.resolve()
+            .then(task)
+            .then(resolve, reject)
+            .finally(() => {
+              activeTasks -= 1;
+              startNext();
+            });
+        });
+        startNext();
+      });
+    }
+  };
+}
+
+function sameJobSummary(left: ProductJobSummary, right: ProductJobSummary): boolean {
+  return left.phase === right.phase &&
+    left.completedImages === right.completedImages &&
+    left.failedImages === right.failedImages &&
+    left.ready === right.ready &&
+    left.submitted === right.submitted;
+}
+
+function productJobSummaryLabel(summary: ProductJobSummary): string {
+  if (summary.submitted) return "已提交";
+  if (summary.phase === "loading") return `生成中 ${summary.completedImages}/5`;
+  if (summary.phase === "error") return summary.failedImages > 0
+    ? `失败 ${summary.failedImages} · 图片 ${summary.completedImages}/5`
+    : "需要处理";
+  if (summary.phase === "stale") return "内容已过期";
+  if (summary.phase === "success") return summary.ready ? "待审核" : "待补资料";
+  return `等待中 · 图片 ${summary.completedImages}/5`;
 }
 
 function optionalNumber(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) && value.trim() ? parsed : undefined;
+}
+
+function formatBytes(bytes: number): string {
+  return bytes >= 1_000_000
+    ? `${(bytes / 1_000_000).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1000))} KB`;
 }
 
 function errorMessage(error: unknown, fallback: string): string {

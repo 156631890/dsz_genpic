@@ -450,30 +450,178 @@ describe("browser product workflow helpers", () => {
 });
 
 describe("App independent AI workflow", () => {
-  test("blocks all AI requests until manual package weight is positive", async () => {
+  test("runs isolated product jobs in the background with one global image limit", async () => {
     const user = userEvent.setup();
-    const fetchMock = appFetch(() => {
-      throw new Error("Generation must not start");
+    let imageRequestsInFlight = 0;
+    let maxImageRequestsInFlight = 0;
+    const imageRequests: Array<{
+      product: string;
+      role: ProductImageRole;
+      resolve: (status?: number) => void;
+    }> = [];
+    const uploadedProducts: DszProductFields[] = [];
+    const fetchMock = appFetch((url: RequestInfo | URL, init?: RequestInit) => {
+      if (url === "/api/generate-product-copy") {
+        const input = JSON.parse(String((init?.body as FormData).get("input"))) as ProductInput;
+        return Promise.resolve(response({
+          result: {
+            fields: {
+              ...completeFields,
+              product_name: `${input.sellingPoints} title`
+            },
+            source: "ai",
+            issues: []
+          }
+        }));
+      }
+      if (url === "/api/generate-product-image-role") {
+        const form = init?.body as FormData;
+        const role = roleFromRequest(init);
+        const product = String(form.get("sellingPoints"));
+        imageRequestsInFlight += 1;
+        maxImageRequestsInFlight = Math.max(
+          maxImageRequestsInFlight,
+          imageRequestsInFlight
+        );
+        return new Promise<Response>((resolve) => {
+          imageRequests.push({
+            product,
+            role,
+            resolve: (status = 200) => {
+              imageRequestsInFlight -= 1;
+              resolve(status === 200
+                ? response({
+                    role,
+                    imageUrl: `https://cdn.example.com/${encodeURIComponent(product)}-${role}.png`
+                  })
+                : response({ error: "Product A image failed" }, status));
+            }
+          });
+        });
+      }
+      if (url === "/api/upload-product") {
+        uploadedProducts.push(JSON.parse(String(init?.body)).fields);
+        return Promise.resolve(response({ mode: "mock" }));
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    const productA = screen.getByTestId("product-job-product-1");
+    await user.upload(
+      within(productA).getByLabelText("原始产品图片"),
+      new File(["a"], "product-a.png", { type: "image/png" })
+    );
+    await user.type(within(productA).getByLabelText("卖点"), "Product A");
+    await user.click(within(productA).getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(imageRequests).toHaveLength(3));
+
+    await user.click(screen.getByRole("button", { name: "新建商品" }));
+    const productB = screen.getByTestId("product-job-product-2");
+    expect(within(productB).getByLabelText("卖点")).toHaveValue("");
+    expect(screen.getByRole("tab", { name: /^商品 1/ })).toHaveTextContent("生成中");
+    await user.upload(
+      within(productB).getByLabelText("原始产品图片"),
+      new File(["b"], "product-b.png", { type: "image/png" })
+    );
+    await user.type(within(productB).getByLabelText("卖点"), "Product B");
+    for (const [label, value] of [
+      ["Package weight kg", "0.2"],
+      ["Package length cm", "12"],
+      ["Package width cm", "8"],
+      ["Package height cm", "3"]
+    ] as const) {
+      await user.clear(within(productB).getByLabelText(label));
+      await user.type(within(productB).getByLabelText(label), value);
+    }
+    await user.click(within(productB).getByRole("button", { name: "开始 AI 生成" }));
+
+    expect(imageRequests).toHaveLength(3);
+    for (let index = 0; index < PRODUCT_IMAGE_ROLES.length * 2; index += 1) {
+      await waitFor(() => expect(imageRequests.length).toBeGreaterThan(index));
+      imageRequests[index].resolve(index === 0 ? 500 : 200);
+    }
+
+    await waitFor(() => {
+      expect(within(productB).getAllByRole("img", { hidden: true })).toHaveLength(5);
+      expect(within(productA).getAllByRole("img", { hidden: true })).toHaveLength(4);
+    });
+    expect(maxImageRequestsInFlight).toBe(3);
+    expect(imageRequests.filter(({ product }) => product === "Product A")).toHaveLength(5);
+    expect(imageRequests.filter(({ product }) => product === "Product B")).toHaveLength(5);
+    expect(within(productA).getByTestId("image-task-status")).toHaveTextContent("1 个失败");
+    expect(within(productB).getByLabelText("Product Name")).toHaveValue("Product B title");
+    expect(within(productA).getByLabelText("Product Name")).toHaveValue("Product A title");
+
+    const productBSubmit = within(productB).getByRole("button", { name: "验证并提交审核" });
+    await waitFor(() => expect(productBSubmit).toBeEnabled());
+    await user.click(productBSubmit);
+    await waitFor(() => expect(uploadedProducts).toHaveLength(1));
+    expect(uploadedProducts[0].product_name).toBe("Product B title");
+
+    await user.click(screen.getByRole("tab", { name: /^商品 1/ }));
+    expect(within(productA).getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
+  });
+
+  test("keeps generation disabled while a large source image is being optimized", async () => {
+    const user = userEvent.setup();
+    const bitmap = deferred<ImageBitmap>();
+    vi.stubGlobal("createImageBitmap", vi.fn(() => bitmap.promise));
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
+    render(<App />);
+
+    await user.upload(
+      screen.getByLabelText("原始产品图片"),
+      new File([new Uint8Array(900_001)], "large.png", { type: "image/png" })
+    );
+    expect(screen.getByRole("button", { name: "正在优化源图" })).toBeDisabled();
+
+    await user.type(screen.getByLabelText("卖点"), "Soft cotton");
+    expect(screen.getByRole("button", { name: "正在优化源图" })).toBeDisabled();
+
+    bitmap.resolve({ width: 100, height: 100, close: vi.fn() } as unknown as ImageBitmap);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "开始 AI 生成" })).toBeEnabled();
+    });
+  });
+
+  test("starts AI generation without package measurements but keeps submission blocked", async () => {
+    const user = userEvent.setup();
+    const fetchMock = appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") {
+        return response({
+          result: {
+            fields: completeFields,
+            source: "ai",
+            issues: []
+          }
+        });
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
     render(<App />);
 
     await fillSourceBasics(user);
-    for (const [label, value] of [
-      ["Package length cm", "12"],
-      ["Package width cm", "8"],
-      ["Package height cm", "3"]
-    ] as const) {
-      await user.clear(screen.getByLabelText(label));
-      await user.type(screen.getByLabelText(label), value);
-    }
     await user.click(screen.getByRole("button", { name: /AI/ }));
 
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([url]) =>
+        url === "/api/generate-product-fields"
+      )).toHaveLength(1);
+      expect(fetchMock.mock.calls.filter(([url]) =>
+        url === "/api/generate-product-image-role"
+      )).toHaveLength(5);
+    });
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Enter package weight, length, width, and height before generation."
+      "Add package weight, length, width, and height before final submission."
     );
-    expect(fetchMock.mock.calls.filter(([url]) => url !== "/api/health"))
-      .toHaveLength(0);
+    expect(screen.getByRole("button", { name: /验证并提交审核/ })).toBeDisabled();
   });
 
   test("sends exact Source package measurements and preserves them over AI output", async () => {
@@ -680,7 +828,7 @@ describe("App independent AI workflow", () => {
     expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.2");
   });
 
-  test("one click runs one five-role image task with at most two requests in flight", async () => {
+  test("one click runs one five-role image task with at most three requests in flight", async () => {
     const user = userEvent.setup();
     let copyInput: ProductInput | undefined;
     const imageRequests: Array<{
@@ -722,8 +870,8 @@ describe("App independent AI workflow", () => {
     await fillRequiredInputs(user);
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
 
-    await waitFor(() => expect(imageRequests).toHaveLength(2));
-    expect(maxImageRequestsInFlight).toBe(2);
+    await waitFor(() => expect(imageRequests).toHaveLength(3));
+    expect(maxImageRequestsInFlight).toBe(3);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/upload-images")).toHaveLength(0);
     expect(fetchMock.mock.calls.filter(([url]) => url === "/api/generate-product-fields")).toHaveLength(1);
     expect(copyInput?.imageUrls).toEqual([]);
@@ -732,14 +880,14 @@ describe("App independent AI workflow", () => {
       imageRequests[index].resolve();
       if (index < PRODUCT_IMAGE_ROLES.length - 1) {
         await waitFor(() => expect(imageRequests).toHaveLength(
-          Math.min(PRODUCT_IMAGE_ROLES.length, index + 3)
+          Math.min(PRODUCT_IMAGE_ROLES.length, index + 4)
         ));
-        expect(imageRequestsInFlight).toBeLessThanOrEqual(2);
+        expect(imageRequestsInFlight).toBeLessThanOrEqual(3);
       }
     }
     await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
     expect(imageRequests.map(({ role }) => role)).toEqual(PRODUCT_IMAGE_ROLES);
-    expect(maxImageRequestsInFlight).toBe(2);
+    expect(maxImageRequestsInFlight).toBe(3);
 
   });
 
@@ -1050,21 +1198,20 @@ describe("App independent AI workflow", () => {
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
     const imageCallCount = () => fetchMock.mock.calls.filter(([url]) =>
       url === "/api/generate-product-image-role").length;
-    await waitFor(() => expect(imageCallCount()).toBe(2));
+    await waitFor(() => expect(imageCallCount()).toBe(3));
 
     pending.side.resolve(response({ role: "side", imageUrl: "https://cdn.example.com/side.png" }));
-    await waitFor(() => expect(imageCallCount()).toBe(3));
-    pending.main.resolve(response({ role: "main", imageUrl: "https://cdn.example.com/main.png" }));
     await waitFor(() => expect(imageCallCount()).toBe(4));
-    pending.lifestyle_1.resolve(response({
-      role: "lifestyle_1",
-      imageUrl: "https://cdn.example.com/lifestyle_1.png"
-    }));
-    await waitFor(() => expect(imageCallCount()).toBe(5));
     pending.detail.resolve(response({ role: "detail", imageUrl: "https://cdn.example.com/detail.png" }));
+    await waitFor(() => expect(imageCallCount()).toBe(5));
     pending.lifestyle_2.resolve(response({
       role: "lifestyle_2",
       imageUrl: "https://cdn.example.com/lifestyle_2.png"
+    }));
+    pending.main.resolve(response({ role: "main", imageUrl: "https://cdn.example.com/main.png" }));
+    pending.lifestyle_1.resolve(response({
+      role: "lifestyle_1",
+      imageUrl: "https://cdn.example.com/lifestyle_1.png"
     }));
     await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
     expect(screen.getAllByRole("img", { hidden: true }).map((image) => image.getAttribute("alt"))).toEqual([
