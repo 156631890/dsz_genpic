@@ -704,8 +704,8 @@ function completeGeneratedFields(
     category: categoryResolution.category.id,
     categories: String(categoryResolution.category.id),
     categoryName: categoryResolution.category.name,
-    sku: fields.sku || fallback.sku,
-    ean_code: fields.ean_code || fallback.ean_code,
+    sku: fallback.sku,
+    ean_code: fallback.ean_code,
     images: fields.images?.length ? fields.images : input.imageUrls,
     zone_rates: standardZoneRates({
       actualWeightKg: fallback.weight,

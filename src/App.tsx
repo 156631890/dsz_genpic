@@ -1,7 +1,12 @@
 import {
+  FolderOpen,
+  History,
   Loader2,
+  RotateCcw,
   Send,
+  Square,
   Sparkles,
+  Trash2,
   Upload
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -26,30 +31,33 @@ import {
   canOptimizeSourceImages,
   prepareSourceImages
 } from "./imageProcessing";
-
-type Status = "idle" | "loading" | "success" | "error" | "stale";
-
-interface TaskState {
-  status: Status;
-  error: string;
-}
-
-interface ImageRoleState extends TaskState {
-  imageUrl: string;
-}
+import {
+  groupProductFolderFiles,
+  MAX_SOURCE_IMAGE_BATCH_BYTES,
+  MAX_SOURCE_IMAGES
+} from "./batchImport";
+import {
+  deleteProductWorkspace,
+  findDuplicateUpload,
+  loadProductSourceFiles,
+  loadProductStudioState,
+  loadProductWorkspace,
+  loadUploadHistory,
+  saveProductSourceFiles,
+  saveProductStudioState,
+  saveProductWorkspace,
+  saveUploadHistory,
+  type EditorTab,
+  type ImageRoleState,
+  type OptionalInputs,
+  type ProductJobDefinition,
+  type ProductWorkspaceSnapshot,
+  type Status,
+  type TaskState,
+  type UploadHistoryEntry
+} from "./workspaceStorage";
 
 type GenerationScope = "copy" | "all";
-type EditorTab = "details" | "price" | "shipping" | "images";
-
-interface OptionalInputs {
-  categoryHint: string;
-  purchasePriceCny: string;
-}
-
-interface ProductJobDefinition {
-  id: string;
-  number: number;
-}
 
 interface ProductJobSummary {
   phase: Status;
@@ -57,6 +65,8 @@ interface ProductJobSummary {
   failedImages: number;
   ready: boolean;
   submitted: boolean;
+  sku: string;
+  eanCode: string;
 }
 
 interface ImageTaskScheduler {
@@ -65,21 +75,26 @@ interface ImageTaskScheduler {
 
 interface ProductWorkspaceProps {
   jobId: string;
+  jobName?: string;
   domIdPrefix: string;
   imageScheduler: ImageTaskScheduler;
+  initialSourceFiles?: File[];
   onSummaryChange: (jobId: string, summary: ProductJobSummary) => void;
+  onImportConsumed: (jobId: string) => void;
+  onUploadSuccess: (entry: UploadHistoryEntry) => void;
+  findDuplicate: (jobId: string, sku: string, eanCode: string) => string | null;
 }
 
 const idleTask: TaskState = { status: "idle", error: "" };
-const MAX_SOURCE_IMAGES = 4;
-const MAX_SOURCE_IMAGE_BATCH_BYTES = 4_000_000;
 const IMAGE_ROLE_CONCURRENCY = 3;
 const initialJobSummary: ProductJobSummary = {
   phase: "idle",
   completedImages: 0,
   failedImages: 0,
   ready: false,
-  submitted: false
+  submitted: false,
+  sku: "",
+  eanCode: ""
 };
 const OPERATOR_PACKAGE_FIELDS = new Set<keyof DszProductFields>([
   "weight",
@@ -382,19 +397,41 @@ function ShippingPanel({ billableWeight }: { billableWeight: number }) {
 }
 
 export default function App() {
-  const [jobs, setJobs] = useState<ProductJobDefinition[]>([
-    { id: "product-1", number: 1 }
-  ]);
-  const [activeJobId, setActiveJobId] = useState("product-1");
-  const [jobSummaries, setJobSummaries] = useState<Record<string, ProductJobSummary>>({
-    "product-1": initialJobSummary
-  });
+  const [initialStudio] = useState(loadProductStudioState);
+  const [jobs, setJobs] = useState<ProductJobDefinition[]>(
+    initialStudio?.jobs || [{ id: "product-1", number: 1 }]
+  );
+  const [activeJobId, setActiveJobId] = useState(
+    initialStudio?.activeJobId || "product-1"
+  );
+  const [jobSummaries, setJobSummaries] = useState<Record<string, ProductJobSummary>>(
+    () => Object.fromEntries(
+      (initialStudio?.jobs || [{ id: "product-1", number: 1 }])
+        .map((job) => [job.id, initialJobSummary])
+    )
+  );
+  const [pendingImports, setPendingImports] = useState<Record<string, File[]>>({});
+  const [batchMessage, setBatchMessage] = useState("");
+  const [uploadHistory, setUploadHistory] = useState(loadUploadHistory);
   const [serviceHealth, setServiceHealth] = useState<ServiceHealth | null>(null);
   const [healthStatus, setHealthStatus] = useState<"loading" | "success" | "error">("loading");
   const [imageScheduler] = useState(() =>
     createImageTaskScheduler(IMAGE_ROLE_CONCURRENCY)
   );
-  const nextJobNumberRef = useRef(2);
+  const nextJobNumberRef = useRef(initialStudio?.nextJobNumber || 2);
+
+  useEffect(() => {
+    saveProductStudioState({
+      version: 1,
+      jobs,
+      activeJobId,
+      nextJobNumber: nextJobNumberRef.current
+    });
+  }, [activeJobId, jobs]);
+
+  useEffect(() => {
+    saveUploadHistory(uploadHistory);
+  }, [uploadHistory]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -430,6 +467,84 @@ export default function App() {
     setActiveJobId(job.id);
   }
 
+  function deleteProductJob(jobId: string) {
+    let remaining = jobs.filter((job) => job.id !== jobId);
+    if (remaining.length === 0) {
+      const number = nextJobNumberRef.current;
+      nextJobNumberRef.current += 1;
+      remaining = [{ id: `product-${number}`, number }];
+    }
+    setJobs(remaining);
+    setActiveJobId((current) => current === jobId ? remaining[0].id : current);
+    setJobSummaries((current) => {
+      const next = { ...current };
+      delete next[jobId];
+      for (const job of remaining) next[job.id] ||= initialJobSummary;
+      return next;
+    });
+    setPendingImports((current) => {
+      const next = { ...current };
+      delete next[jobId];
+      return next;
+    });
+    void deleteProductWorkspace(jobId);
+  }
+
+  function importProductFolders(files: File[]) {
+    const result = groupProductFolderFiles(files);
+    if (result.products.length === 0) {
+      setBatchMessage(result.rejected[0]?.reason || "没有找到可导入的商品图片");
+      return;
+    }
+
+    const importedJobs: ProductJobDefinition[] = [];
+    const importedFiles: Record<string, File[]> = {};
+    for (const product of result.products) {
+      const number = nextJobNumberRef.current;
+      nextJobNumberRef.current += 1;
+      const job = { id: `product-${number}`, number, name: product.name };
+      importedJobs.push(job);
+      importedFiles[job.id] = product.files;
+    }
+    setJobs((current) => [...current, ...importedJobs]);
+    setJobSummaries((current) => ({
+      ...current,
+      ...Object.fromEntries(importedJobs.map((job) => [job.id, initialJobSummary]))
+    }));
+    setPendingImports((current) => ({ ...current, ...importedFiles }));
+    setActiveJobId(importedJobs[0].id);
+    setBatchMessage(
+      `已导入 ${importedJobs.length} 个商品` +
+      (result.rejected.length ? `，跳过 ${result.rejected.length} 个文件夹` : "")
+    );
+  }
+
+  const consumeImport = useCallback((jobId: string) => {
+    setPendingImports((current) => {
+      const next = { ...current };
+      delete next[jobId];
+      return next;
+    });
+  }, []);
+
+  const recordUpload = useCallback((entry: UploadHistoryEntry) => {
+    setUploadHistory((current) => [entry, ...current].slice(0, 100));
+  }, []);
+
+  const findDuplicate = useCallback((jobId: string, sku: string, eanCode: string) => {
+    const uploaded = findDuplicateUpload(uploadHistory, sku, eanCode);
+    if (uploaded) {
+      return `上传历史中已存在 ${uploaded.sku} / ${uploaded.eanCode}（${formatHistoryDate(uploaded.uploadedAt)}）`;
+    }
+    const otherJob = Object.entries(jobSummaries).find(([otherJobId, summary]) =>
+      otherJobId !== jobId && (
+        (sku.trim() && summary.sku.trim().toLowerCase() === sku.trim().toLowerCase()) ||
+        (eanCode.trim() && summary.eanCode.trim() === eanCode.trim())
+      )
+    );
+    return otherJob ? "另一个商品任务正在使用相同的 SKU 或 EAN" : null;
+  }, [jobSummaries, uploadHistory]);
+
   return (
     <>
       <a className="skip-link" href="#main-content">Skip to product editor</a>
@@ -462,36 +577,81 @@ export default function App() {
               <span>PRODUCT QUEUE</span>
               <strong id="product-queue-heading">{jobs.length} 个商品 · 全局图片并发 {IMAGE_ROLE_CONCURRENCY}</strong>
             </div>
-            <button type="button" className="new-product-button" onClick={addProductJob}>
-              新建商品
-            </button>
+            <div className="queue-actions">
+              <label className="folder-import-button">
+                <FolderOpen size={16} aria-hidden="true" /> 批量导入文件夹
+                <input type="file" accept="image/png,image/jpeg,image/webp" multiple
+                  aria-label="批量导入商品文件夹"
+                  ref={(node) => node?.setAttribute("webkitdirectory", "")}
+                  onChange={(event) => {
+                    importProductFolders(Array.from(event.target.files || []));
+                    event.currentTarget.value = "";
+                  }} />
+              </label>
+              <button type="button" className="new-product-button" onClick={addProductJob}>
+                新建商品
+              </button>
+            </div>
           </div>
+          {batchMessage && <p className="batch-import-message" role="status">{batchMessage}</p>}
           <nav className="product-job-tabs" role="tablist" aria-label="Product jobs">
             {jobs.map((job) => {
               const summary = jobSummaries[job.id] || initialJobSummary;
+              const jobLabel = job.name || `商品 ${job.number}`;
               return (
-                <button key={job.id} id={`job-tab-${job.id}`} role="tab"
-                  aria-selected={activeJobId === job.id}
-                  aria-controls={`job-panel-${job.id}`}
-                  tabIndex={activeJobId === job.id ? 0 : -1}
-                  onClick={() => setActiveJobId(job.id)}>
-                  <strong>商品 {job.number}</strong>
-                  <span>{productJobSummaryLabel(summary)}</span>
-                </button>
+                <div className="product-job-tab-item" key={job.id}>
+                  <button id={`job-tab-${job.id}`} role="tab"
+                    aria-selected={activeJobId === job.id}
+                    aria-controls={`job-panel-${job.id}`}
+                    tabIndex={activeJobId === job.id ? 0 : -1}
+                    onClick={() => setActiveJobId(job.id)}>
+                    <strong>{jobLabel}</strong>
+                    <span>{productJobSummaryLabel(summary)}</span>
+                  </button>
+                  <button type="button" className="delete-job-button"
+                    aria-label={`删除 ${jobLabel}`} title={`删除 ${jobLabel}`}
+                    onClick={() => deleteProductJob(job.id)}>
+                    <Trash2 size={14} aria-hidden="true" />
+                  </button>
+                </div>
               );
             })}
           </nav>
         </section>
+
+        <details className="upload-history">
+          <summary><History size={16} aria-hidden="true" /> 上传历史（{uploadHistory.length}）</summary>
+          {uploadHistory.length === 0
+            ? <p>还没有成功上传的商品</p>
+            : <div className="upload-history-list">
+                {uploadHistory.map((entry) => (
+                  <article key={entry.id}>
+                    <div>
+                      <strong>{entry.productName || entry.sku}</strong>
+                      <span>{entry.sku} · {entry.eanCode}</span>
+                      <small>{formatHistoryDate(entry.uploadedAt)}</small>
+                    </div>
+                    <button type="button" onClick={() =>
+                      setUploadHistory((current) => current.filter((item) => item.id !== entry.id))}
+                      aria-label={`移除上传记录 ${entry.sku}`}>移除记录</button>
+                  </article>
+                ))}
+              </div>}
+        </details>
 
         {jobs.map((job, index) => (
           <div key={job.id} id={`job-panel-${job.id}`} role="tabpanel"
             aria-labelledby={`job-tab-${job.id}`}
             data-testid={`product-job-${job.id}`}
             hidden={activeJobId !== job.id}>
-            <ProductWorkspace jobId={job.id}
+            <ProductWorkspace jobId={job.id} jobName={job.name}
               domIdPrefix={index === 0 ? "" : `${job.id}-`}
               imageScheduler={imageScheduler}
-              onSummaryChange={updateJobSummary} />
+              initialSourceFiles={pendingImports[job.id]}
+              onSummaryChange={updateJobSummary}
+              onImportConsumed={consumeImport}
+              onUploadSuccess={recordUpload}
+              findDuplicate={findDuplicate} />
           </div>
         ))}
       </main>
@@ -501,38 +661,69 @@ export default function App() {
 
 function ProductWorkspace({
   jobId,
+  jobName,
   domIdPrefix,
   imageScheduler,
-  onSummaryChange
+  initialSourceFiles,
+  onSummaryChange,
+  onImportConsumed,
+  onUploadSuccess,
+  findDuplicate
 }: ProductWorkspaceProps) {
+  const [restoredSnapshot] = useState(() => loadProductWorkspace(jobId));
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
-  const [sellingPoints, setSellingPoints] = useState("");
-  const [optionalInputs, setOptionalInputs] = useState(emptyOptionalInputs);
-  const [fields, setFields] = useState<DszProductFields>(initialFields);
-  const [copyTask, setCopyTask] = useState<TaskState>(idleTask);
-  const [uploadSourceTask, setUploadSourceTask] = useState<TaskState>(idleTask);
-  const [imageRoles, setImageRoles] = useState(initialRoleStates);
-  const [uploadStatus, setUploadStatus] = useState<Status>("idle");
-  const [message, setMessage] = useState("等待上传原始产品图片");
-  const [uploadResult, setUploadResult] = useState<unknown>(null);
-  const [activeTab, setActiveTab] = useState<EditorTab>("details");
-  const [researchEvidence, setResearchEvidence] = useState<ProductResearchEvidence | null>(null);
-  const [researchIssues, setResearchIssues] = useState<string[]>([]);
+  const [sourceFilesReady, setSourceFilesReady] = useState(
+    !restoredSnapshot?.sourceFileCount
+  );
+  const [sellingPoints, setSellingPoints] = useState(restoredSnapshot?.sellingPoints || "");
+  const [optionalInputs, setOptionalInputs] = useState<OptionalInputs>(
+    restoredSnapshot?.optionalInputs || {
+      ...emptyOptionalInputs,
+      categoryHint: jobName || ""
+    }
+  );
+  const [fields, setFields] = useState<DszProductFields>(
+    restoredSnapshot?.fields || { ...initialFields }
+  );
+  const [copyTask, setCopyTask] = useState<TaskState>(restoredSnapshot?.copyTask || idleTask);
+  const [uploadSourceTask, setUploadSourceTask] = useState<TaskState>(
+    restoredSnapshot?.uploadSourceTask || idleTask
+  );
+  const [imageRoles, setImageRoles] = useState(
+    restoredSnapshot?.imageRoles || initialRoleStates
+  );
+  const [uploadStatus, setUploadStatus] = useState<Status>(
+    restoredSnapshot?.uploadStatus || "idle"
+  );
+  const [message, setMessage] = useState(
+    restoredSnapshot?.message || "等待上传原始产品图片"
+  );
+  const [uploadResult, setUploadResult] = useState<unknown>(restoredSnapshot?.uploadResult || null);
+  const [activeTab, setActiveTab] = useState<EditorTab>(restoredSnapshot?.activeTab || "details");
+  const [researchEvidence, setResearchEvidence] = useState<ProductResearchEvidence | null>(
+    restoredSnapshot?.researchEvidence || null
+  );
+  const [researchIssues, setResearchIssues] = useState<string[]>(
+    restoredSnapshot?.researchIssues || []
+  );
   const [showMeasurementError, setShowMeasurementError] = useState(false);
   const copyOperationIdRef = useRef(0);
   const imageOperationIdRef = useRef(0);
   const copyControllersRef = useRef(new Set<AbortController>());
   const imageControllersRef = useRef(new Set<AbortController>());
   const fieldEditVersionsRef = useRef<Record<keyof DszProductFields, number>>(
-    Object.fromEntries(
+    restoredSnapshot?.fieldEditVersions || Object.fromEntries(
       Object.keys(initialFields).map((key) => [key, 0])
     ) as Record<keyof DszProductFields, number>
   );
-  const manualFieldsRef = useRef(new Set<keyof DszProductFields>());
+  const manualFieldsRef = useRef(new Set<keyof DszProductFields>(
+    restoredSnapshot?.manualFields || []
+  ));
   const uploadAttemptRef = useRef(0);
   const uploadControllerRef = useRef<AbortController | null>(null);
   const sourceSelectionIdRef = useRef(0);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const initialImportAppliedRef = useRef(false);
 
   const generatedImages = useMemo(
     () => PRODUCT_IMAGE_ROLES
@@ -559,6 +750,9 @@ function ProductWorkspace({
   const hasTaskError = copyTask.status === "error" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "error"
   );
+  const hasRetryableTasks = copyTask.status === "error" || PRODUCT_IMAGE_ROLES.some(
+    (role) => imageRoles[role].status === "error"
+  );
   const hasStaleOutput = copyTask.status === "stale" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "stale"
   );
@@ -578,7 +772,9 @@ function ProductWorkspace({
   );
   const pageSummary = uploadStatus !== "idle"
     ? message
-    : hasTaskActivity ? taskSummary : message;
+    : hasTaskError && message.startsWith("已取消")
+      ? message
+      : hasTaskActivity ? taskSummary : message;
   const billableWeight = calculateBillableWeightKg({
     actualWeightKg: fields.weight,
     lengthCm: fields.length,
@@ -601,12 +797,16 @@ function ProductWorkspace({
       completedImages: completedImageCount,
       failedImages: failedImageCount,
       ready: isReadyToSubmit,
-      submitted: uploadStatus === "success"
+      submitted: uploadStatus === "success",
+      sku: fields.sku,
+      eanCode: fields.ean_code
     });
   }, [
     completedImageCount,
     failedImageCount,
     isReadyToSubmit,
+    fields.ean_code,
+    fields.sku,
     jobId,
     jobPhase,
     onSummaryChange,
@@ -624,6 +824,68 @@ function ProductWorkspace({
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
   }, []);
+
+  useEffect(() => {
+    if (!restoredSnapshot?.sourceFileCount) return;
+    let active = true;
+    void loadProductSourceFiles(jobId).then((files) => {
+      if (!active) return;
+      setSourceFiles(files);
+      setSourceFilesReady(true);
+      if (files.length === 0) {
+        setUploadSourceTask({ status: "error", error: "未能恢复原始图片，请重新选择" });
+        setMessage("商品资料已恢复，但原始图片需要重新选择");
+      }
+    }).catch(() => {
+      if (!active) return;
+      setSourceFilesReady(true);
+      setUploadSourceTask({ status: "error", error: "未能恢复原始图片，请重新选择" });
+      setMessage("商品资料已恢复，但原始图片需要重新选择");
+    });
+    return () => { active = false; };
+  }, [jobId, restoredSnapshot]);
+
+  useEffect(() => {
+    if (!sourceFilesReady) return;
+    const snapshot: ProductWorkspaceSnapshot = {
+      version: 1,
+      jobId,
+      updatedAt: new Date().toISOString(),
+      sourceFileCount: sourceFiles.length,
+      sourceFileNames: sourceFiles.map((file) => file.name),
+      sellingPoints,
+      optionalInputs,
+      fields,
+      copyTask,
+      uploadSourceTask,
+      imageRoles,
+      uploadStatus,
+      message,
+      uploadResult,
+      activeTab,
+      researchEvidence,
+      researchIssues,
+      manualFields: Array.from(manualFieldsRef.current),
+      fieldEditVersions: fieldEditVersionsRef.current
+    };
+    saveProductWorkspace(snapshot);
+  }, [
+    activeTab,
+    copyTask,
+    fields,
+    imageRoles,
+    jobId,
+    message,
+    optionalInputs,
+    researchEvidence,
+    researchIssues,
+    sellingPoints,
+    sourceFiles,
+    sourceFilesReady,
+    uploadResult,
+    uploadSourceTask,
+    uploadStatus
+  ]);
 
   useEffect(() => {
     if (hasValidPackageMeasurements) setShowMeasurementError(false);
@@ -683,23 +945,70 @@ function ProductWorkspace({
     const selectionId = sourceSelectionIdRef.current;
     invalidateGeneration("all");
     setSourceFiles(files);
+    setSourceFilesReady(true);
     setUploadSourceTask(idleTask);
     clearUploadResult();
+
+    try {
+      await saveProductSourceFiles(jobId, files);
+    } catch {
+      setMessage("图片已选择，但浏览器未能保存，刷新后需要重新选择");
+    }
 
     if (files.length > MAX_SOURCE_IMAGES || !canOptimizeSourceImages(files)) return;
     setUploadSourceTask({ status: "loading", error: "" });
     setMessage("正在优化源图，完成后可直接生成");
-    const optimizedFiles = await prepareSourceImages(files);
-    if (selectionId !== sourceSelectionIdRef.current) return;
+    try {
+      const optimizedFiles = await prepareSourceImages(files);
+      if (selectionId !== sourceSelectionIdRef.current) return;
 
-    const bytesSaved = files.reduce((total, file) => total + file.size, 0) -
-      optimizedFiles.reduce((total, file) => total + file.size, 0);
-    setSourceFiles(optimizedFiles);
-    setUploadSourceTask({ status: "success", error: "" });
-    setMessage(bytesSaved > 0
-      ? `源图优化完成，减少 ${formatBytes(bytesSaved)} 上传量`
-      : "源图无需压缩，可以开始生成");
+      const bytesSaved = files.reduce((total, file) => total + file.size, 0) -
+        optimizedFiles.reduce((total, file) => total + file.size, 0);
+      setSourceFiles(optimizedFiles);
+      await saveProductSourceFiles(jobId, optimizedFiles);
+      if (selectionId !== sourceSelectionIdRef.current) return;
+      setUploadSourceTask({ status: "success", error: "" });
+      setMessage(bytesSaved > 0
+        ? `源图优化完成，减少 ${formatBytes(bytesSaved)} 上传量`
+        : "源图无需压缩，可以开始生成");
+    } catch {
+      if (selectionId !== sourceSelectionIdRef.current) return;
+      setUploadSourceTask({ status: "error", error: "源图优化或保存失败" });
+      setMessage("源图优化失败，可以重新选择图片");
+    }
   }
+
+  useEffect(() => {
+    if (initialImportAppliedRef.current || !initialSourceFiles?.length) return;
+    initialImportAppliedRef.current = true;
+    const files = initialSourceFiles;
+    const selectionId = sourceSelectionIdRef.current + 1;
+    sourceSelectionIdRef.current = selectionId;
+    setSourceFiles(files);
+    setSourceFilesReady(true);
+    setUploadSourceTask({ status: "loading", error: "" });
+    setMessage("正在导入并优化文件夹图片");
+    onImportConsumed(jobId);
+
+    void (async () => {
+      try {
+        await saveProductSourceFiles(jobId, files);
+        const optimizedFiles = canOptimizeSourceImages(files)
+          ? await prepareSourceImages(files)
+          : files;
+        if (selectionId !== sourceSelectionIdRef.current) return;
+        setSourceFiles(optimizedFiles);
+        await saveProductSourceFiles(jobId, optimizedFiles);
+        if (selectionId !== sourceSelectionIdRef.current) return;
+        setUploadSourceTask({ status: "success", error: "" });
+        setMessage(`已导入 ${files.length} 张文件夹图片`);
+      } catch {
+        if (selectionId !== sourceSelectionIdRef.current) return;
+        setUploadSourceTask({ status: "error", error: "文件夹图片导入失败" });
+        setMessage("文件夹图片导入失败，请手动重新选择");
+      }
+    })();
+  }, [initialSourceFiles, jobId, onImportConsumed]);
 
   function markManualField(
     field: keyof DszProductFields,
@@ -853,7 +1162,11 @@ function ProductWorkspace({
       }, controller.signal);
       if (operationId !== copyOperationIdRef.current) return;
 
-      applyGeneratedFields(result.fields, versionsAtStart);
+      applyGeneratedFields({
+        ...result.fields,
+        sku: identity.sku,
+        ean_code: identity.eanCode
+      }, versionsAtStart);
       setResearchEvidence(result.evidence || null);
       setResearchIssues(result.issues || []);
       clearUploadResult();
@@ -936,6 +1249,58 @@ function ProductWorkspace({
     clearUploadResult();
   }
 
+  function cancelAllTasks() {
+    const cancellingImageBatch = PRODUCT_IMAGE_ROLES.some(
+      (role) => imageRoles[role].status === "loading"
+    );
+    sourceSelectionIdRef.current += 1;
+    copyOperationIdRef.current += 1;
+    imageOperationIdRef.current += 1;
+    copyControllersRef.current.forEach((controller) => controller.abort());
+    imageControllersRef.current.forEach((controller) => controller.abort());
+    copyControllersRef.current.clear();
+    imageControllersRef.current.clear();
+    uploadAttemptRef.current += 1;
+    uploadControllerRef.current?.abort();
+    uploadControllerRef.current = null;
+    setUploadSourceTask((current) => current.status === "loading"
+      ? { status: "error", error: "任务已取消" }
+      : current);
+    setCopyTask((current) => current.status === "loading"
+      ? { status: "error", error: "任务已取消" }
+      : current);
+    setImageRoles((current) => Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [
+      role,
+      cancellingImageBatch && current[role].status !== "success"
+        ? { ...current[role], status: "error", error: "任务已取消" }
+        : current[role]
+    ])) as Record<ProductImageRole, ImageRoleState>);
+    setUploadStatus((current) => current === "loading" ? "error" : current);
+    setMessage("已取消正在运行和排队的任务");
+  }
+
+  async function retryAllFailedTasks() {
+    if (!sourceFilesReady || sourceFiles.length === 0) {
+      setMessage("请重新选择原始产品图片后再重试");
+      return;
+    }
+    if (!sellingPoints.trim()) {
+      setMessage("请填写卖点后再重试");
+      return;
+    }
+    const tasks: Array<Promise<unknown>> = [];
+    if (copyTask.status === "error") tasks.push(runCopyTask());
+    for (const role of PRODUCT_IMAGE_ROLES) {
+      if (imageRoles[role].status === "error") tasks.push(runImageRole(role));
+    }
+    if (tasks.length === 0) {
+      setMessage("没有需要重试的失败任务");
+      return;
+    }
+    clearUploadResult();
+    await Promise.allSettled(tasks);
+  }
+
   async function startGeneration() {
     if (sourceFiles.length === 0) {
       setMessage("请先上传至少一张原始产品图片");
@@ -972,6 +1337,12 @@ function ProductWorkspace({
 
   async function uploadProduct() {
     const fieldsForUpload = { ...fields, images: generatedImages };
+    const duplicate = findDuplicate(jobId, fieldsForUpload.sku, fieldsForUpload.ean_code);
+    if (duplicate) {
+      setUploadStatus("error");
+      setMessage(`已阻止重复上传：${duplicate}`);
+      return;
+    }
     const uploadAttempt = uploadAttemptRef.current + 1;
     uploadAttemptRef.current = uploadAttempt;
     uploadControllerRef.current?.abort();
@@ -985,6 +1356,15 @@ function ProductWorkspace({
       setUploadResult({ fields: fieldsForUpload, result: data });
       setUploadStatus("success");
       setMessage(isRecord(data) && data.mode === "mock" ? "已生成后台 payload" : "后台上传成功");
+      onUploadSuccess({
+        id: `${jobId}-${Date.now()}`,
+        jobId,
+        productName: fieldsForUpload.product_name || jobName || fieldsForUpload.sku,
+        sku: fieldsForUpload.sku,
+        eanCode: fieldsForUpload.ean_code,
+        uploadedAt: new Date().toISOString(),
+        result: data
+      });
     } catch (error) {
       if (uploadAttempt !== uploadAttemptRef.current || controller.signal.aborted) return;
       setUploadStatus("error");
@@ -1078,13 +1458,25 @@ function ProductWorkspace({
               )}
             </fieldset>
           </div>
-          <button className="generate-button" onClick={startGeneration}
-            disabled={uploadSourceTask.status === "loading"}>
-            {workflowLoading || uploadSourceTask.status === "loading"
-              ? <Loader2 className="spin" size={16} />
-              : <Sparkles size={16} />}
-            {uploadSourceTask.status === "loading" ? "正在优化源图" : "开始 AI 生成"}
-          </button>
+          <div className="generation-actions">
+            <button className="generate-button" onClick={startGeneration}
+              disabled={!sourceFilesReady || uploadSourceTask.status === "loading"}>
+              {workflowLoading || uploadSourceTask.status === "loading"
+                ? <Loader2 className="spin" size={16} />
+                : <Sparkles size={16} />}
+              {!sourceFilesReady
+                ? "正在恢复源图"
+                : uploadSourceTask.status === "loading" ? "正在优化源图" : "开始 AI 生成"}
+            </button>
+            <button type="button" className="secondary-action" onClick={cancelAllTasks}
+              disabled={!workflowLoading && uploadSourceTask.status !== "loading" && uploadStatus !== "loading"}>
+              <Square size={14} aria-hidden="true" /> 取消
+            </button>
+            <button type="button" className="secondary-action" onClick={() => void retryAllFailedTasks()}
+              disabled={!hasRetryableTasks || workflowLoading || !sourceFilesReady}>
+              <RotateCcw size={14} aria-hidden="true" /> 全部重试
+            </button>
+          </div>
         </aside>
 
         <section className="editor" aria-labelledby={`${domIdPrefix}editor-heading`}>
@@ -1230,7 +1622,9 @@ function sameJobSummary(left: ProductJobSummary, right: ProductJobSummary): bool
     left.completedImages === right.completedImages &&
     left.failedImages === right.failedImages &&
     left.ready === right.ready &&
-    left.submitted === right.submitted;
+    left.submitted === right.submitted &&
+    left.sku === right.sku &&
+    left.eanCode === right.eanCode;
 }
 
 function productJobSummaryLabel(summary: ProductJobSummary): string {
@@ -1253,6 +1647,11 @@ function formatBytes(bytes: number): string {
   return bytes >= 1_000_000
     ? `${(bytes / 1_000_000).toFixed(1)} MB`
     : `${Math.max(1, Math.round(bytes / 1000))} KB`;
+}
+
+function formatHistoryDate(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString("zh-CN");
 }
 
 function errorMessage(error: unknown, fallback: string): string {

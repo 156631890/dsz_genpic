@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { IDBFactory } from "fake-indexeddb";
 import App from "../src/App";
 import {
   requestProductCopy,
@@ -701,9 +702,7 @@ describe("App independent AI workflow", () => {
       completeFields.categories
     );
     expect(screen.getByLabelText("SKU")).toHaveValue(completeFields.sku);
-    expect(screen.getByLabelText("EAN Code")).toHaveValue(
-      completeFields.ean_code
-    );
+    expect((screen.getByLabelText("EAN Code") as HTMLInputElement).value).toMatch(/^\d{10}$/);
     expect(screen.getByLabelText("Package Weight kg")).toHaveValue("0.2");
     expect(screen.getByLabelText("Colour")).toHaveValue(completeFields.colour);
     await waitFor(() => {
@@ -1530,3 +1529,146 @@ describe("App independent AI workflow", () => {
     expect(payload).toHaveTextContent('"enabled": false');
   });
 });
+
+describe("persistent product operations", () => {
+  test("restores multiple product drafts and the active product after remount", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("indexedDB", new IDBFactory());
+    const firstRender = render(<App />);
+    await user.upload(
+      screen.getByLabelText("原始产品图片"),
+      new File(["saved-image"], "saved-source.png", { type: "image/png" })
+    );
+    await user.type(screen.getByLabelText("卖点"), "Product A saved selling points");
+    await user.type(screen.getByLabelText("Product Name"), "Saved product A");
+
+    await user.click(screen.getByRole("button", { name: "新建商品" }));
+    const productB = screen.getByTestId("product-job-product-2");
+    await user.type(within(productB).getByLabelText("卖点"), "Product B saved selling points");
+    firstRender.unmount();
+
+    render(<App />);
+    expect(screen.getByRole("tab", { name: /^商品 2/ })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("product-job-product-2")).toHaveTextContent("Product B saved selling points");
+    await user.click(screen.getByRole("tab", { name: /^商品 1/ }));
+    const restoredProductA = screen.getByTestId("product-job-product-1");
+    expect(within(restoredProductA).getByLabelText("卖点"))
+      .toHaveValue("Product A saved selling points");
+    expect(within(restoredProductA).getByLabelText("Product Name")).toHaveValue("Saved product A");
+    expect(await within(restoredProductA).findByText("saved-source.png")).toBeVisible();
+  });
+
+  test("deletes a product and keeps the remaining queue", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    await user.click(screen.getByRole("button", { name: "新建商品" }));
+    expect(screen.getByRole("tab", { name: /^商品 2/ })).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "删除 商品 2" }));
+
+    expect(screen.queryByRole("tab", { name: /^商品 2/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^商品 1/ })).toHaveAttribute("aria-selected", "true");
+  });
+
+  test("imports each first-level folder as an independent product", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const files = [
+      directoryFile("batch/Product A/front.png"),
+      directoryFile("batch/Product A/side.png"),
+      directoryFile("batch/Product B/front.png")
+    ];
+
+    await user.upload(screen.getByLabelText("批量导入商品文件夹"), files);
+
+    expect(await screen.findByRole("tab", { name: /^Product A/ })).toBeVisible();
+    expect(screen.getByRole("tab", { name: /^Product B/ })).toBeVisible();
+    expect(screen.getByRole("status", { name: "" })).toHaveTextContent("已导入 2 个商品");
+    const productA = screen.getByTestId("product-job-product-2");
+    expect(await within(productA).findByText("front.png")).toBeVisible();
+    expect(within(productA).getByText("side.png")).toBeVisible();
+  });
+
+  test("cancels active and queued work, then retries only unfinished tasks", async () => {
+    const user = userEvent.setup();
+    let retrying = false;
+    const fetchMock = appFetch((url: RequestInfo | URL, init?: RequestInit) => {
+      if (url === "/api/generate-product-copy") {
+        if (retrying) return generatedFieldResponse("Retried title", "Retried description", init);
+        return abortableResponse(init?.signal);
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        if (retrying) return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+        return abortableResponse(init?.signal);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
+      url === "/api/generate-product-image-role")).toHaveLength(3));
+
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.getByRole("status", { name: "Workflow status" }))
+      .toHaveTextContent("已取消"));
+    expect(screen.getByRole("button", { name: "全部重试" })).toBeEnabled();
+
+    retrying = true;
+    await user.click(screen.getByRole("button", { name: "全部重试" }));
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
+    expect(screen.getByLabelText("Product Name")).toHaveValue("Retried title");
+    expect(fetchMock.mock.calls.filter(([url]) =>
+      url === "/api/generate-product-image-role")).toHaveLength(8);
+  });
+
+  test("records successful uploads and blocks a duplicate submission", async () => {
+    const user = userEvent.setup();
+    let uploadCalls = 0;
+    vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (url === "/api/generate-product-copy") {
+        return generatedFieldResponse("History product", "History description", init);
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      if (url === "/api/upload-product") {
+        uploadCalls += 1;
+        return response({ productId: 42 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+    render(<App />);
+    await fillRequiredInputs(user);
+    await fillSubmissionFields(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
+
+    const submit = screen.getByRole("button", { name: "验证并提交审核" });
+    await user.click(submit);
+    await waitFor(() => expect(uploadCalls).toBe(1));
+    expect(screen.getByText("上传历史（1）")).toBeVisible();
+
+    await user.click(submit);
+    await waitFor(() => expect(screen.getByRole("status", { name: "Workflow status" }))
+      .toHaveTextContent("已阻止重复上传"));
+    expect(uploadCalls).toBe(1);
+  });
+});
+
+function directoryFile(path: string): File {
+  const file = new File(["image"], path.split("/").at(-1) || "image.png", { type: "image/png" });
+  Object.defineProperty(file, "webkitRelativePath", { value: path });
+  return file;
+}
+
+function abortableResponse(signal?: AbortSignal | null): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+      once: true
+    });
+  });
+}

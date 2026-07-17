@@ -717,6 +717,8 @@ ${JSON.stringify(fields)}
             message: {
               content: JSON.stringify({
                 ...fields,
+                sku: "Elosung19999",
+                ean_code: "9999999999",
                 weight: 99,
                 length: 99,
                 width: 98,
@@ -753,6 +755,8 @@ ${JSON.stringify(fields)}
       purchasePriceCny: manualInput.purchasePriceCny as number
     });
     expect(result.fields).toMatchObject({
+      sku: "Elosung10001",
+      ean_code: "4748549810",
       weight: 0.2,
       length: 21,
       width: 13,

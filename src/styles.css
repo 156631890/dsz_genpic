@@ -134,7 +134,13 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .product-queue-heading span { color: var(--faint); font-size: 9px; font-weight: 750; letter-spacing: .12em; }
 .product-queue-heading strong { color: #4f4c54; font-size: 12px; }
 
-.new-product-button {
+.queue-actions { display: flex !important; align-items: center; gap: 7px !important; }
+
+.new-product-button, .folder-import-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   min-height: 34px;
   border: 1px solid var(--violet);
   border-radius: 5px;
@@ -145,7 +151,11 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
   font-weight: 750;
 }
 
+.folder-import-button { background: #fff; color: var(--violet); cursor: pointer; }
+.folder-import-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .new-product-button:hover { background: #49304d; }
+.folder-import-button:hover { background: var(--violet-wash); }
+.batch-import-message { margin: -3px 0 10px; color: var(--muted); font-size: 11px; }
 
 .product-job-tabs {
   display: flex;
@@ -155,20 +165,21 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
   scrollbar-width: thin;
 }
 
-.product-job-tabs button {
+.product-job-tab-item { position: relative; flex: 0 0 auto; }
+
+.product-job-tabs .product-job-tab-item > [role="tab"] {
   display: grid;
-  flex: 0 0 auto;
   min-width: 142px;
   gap: 2px;
   border: 1px solid var(--line);
   border-radius: 6px 3px 6px 3px;
-  padding: 8px 11px;
+  padding: 8px 32px 8px 11px;
   background: #fff;
   color: var(--ink);
   text-align: left;
 }
 
-.product-job-tabs button[aria-selected="true"] {
+.product-job-tabs .product-job-tab-item > [role="tab"][aria-selected="true"] {
   border-color: var(--violet);
   background: var(--violet-wash);
   box-shadow: inset 3px 0 0 var(--violet);
@@ -176,6 +187,37 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 
 .product-job-tabs button strong { font-size: 11px; }
 .product-job-tabs button span { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.product-job-tabs .delete-job-button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: grid;
+  min-width: 24px;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: var(--faint);
+}
+.product-job-tabs .delete-job-button:hover { background: #fff; color: var(--error); }
+
+.upload-history {
+  max-width: 1460px;
+  margin: 10px auto 0;
+  border-bottom: 1px solid var(--line);
+  padding: 0 0 10px;
+}
+.upload-history summary { display: flex; align-items: center; gap: 7px; color: var(--muted); cursor: pointer; font-size: 11px; font-weight: 700; }
+.upload-history > p { margin: 10px 0 0; color: var(--faint); font-size: 11px; }
+.upload-history-list { display: grid; gap: 6px; margin-top: 10px; }
+.upload-history-list article { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid var(--line); padding: 9px 10px; background: #fff; }
+.upload-history-list article div { display: grid; gap: 2px; }
+.upload-history-list article strong { font-size: 11px; }
+.upload-history-list article span, .upload-history-list article small { color: var(--muted); font-size: 10px; }
+.upload-history-list article button { border: 0; background: transparent; color: var(--error); font-size: 10px; }
 
 .workspace {
   display: grid;
@@ -266,6 +308,10 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 }
 .generate-button { width: 100%; margin-top: 5px; }
 .generate-button:hover, .primary-submit:hover:not(:disabled) { background: var(--violet-dark); box-shadow: 0 7px 16px rgba(70, 48, 73, .16); transform: translateY(-1px); }
+.generation-actions { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; margin-top: 5px; }
+.generation-actions .generate-button { margin-top: 0; }
+.secondary-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 42px; border: 1px solid var(--line-strong); border-radius: 5px; padding: 0 10px; background: #fff; color: var(--muted); font-size: 11px; font-weight: 700; }
+.secondary-action:hover:not(:disabled) { border-color: var(--violet); color: var(--violet); }
 
 .editor { min-width: 0; }
 .editor-intro { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 19px; }
@@ -385,8 +431,8 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
   .workspace { grid-template-columns: 1fr; gap: 30px; }
   .source-rail { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 29px; }
   .source-rail { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; }
-  .source-rail .section-heading, .source-rail .generate-button { grid-column: 1 / -1; }
-  .source-rail .generate-button { max-width: 320px; }
+  .source-rail .section-heading, .source-rail .generation-actions { grid-column: 1 / -1; }
+  .source-rail .generation-actions { max-width: 520px; }
   .field-grid { grid-template-columns: 1fr 1fr; }
   .description-field { grid-column: 1 / -1; }
   .image-role-grid { grid-template-columns: repeat(3, minmax(140px, 1fr)); }
@@ -400,10 +446,13 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
   .service-context { text-align: left; }
   .product-queue { padding-top: 14px; }
   .product-queue-heading { align-items: flex-start; }
+  .product-queue-heading, .queue-actions { flex-wrap: wrap; }
   .product-queue-heading strong { font-size: 11px; }
   .new-product-button { flex: 0 0 auto; }
   .product-job-tabs { margin-right: -14px; padding-right: 14px; }
-  .product-job-tabs button { min-width: 132px; }
+  .product-job-tabs .product-job-tab-item > [role="tab"] { min-width: 132px; }
+  .generation-actions { grid-template-columns: 1fr 1fr; }
+  .generation-actions .generate-button { grid-column: 1 / -1; }
   .workspace { padding-top: 25px; }
   .source-rail { display: block; }
   .editor-intro { align-items: flex-start; flex-direction: column; }
