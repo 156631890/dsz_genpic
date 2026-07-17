@@ -21,7 +21,13 @@ import {
 import { generateProductCopyWithPacky } from "./services/productCopy.js";
 import type { ProductResearchImage } from "./services/productResearch.js";
 import {
+  analyzeAmazonAuMarket,
+  ProboostMarketError
+} from "./services/proboostMarket.js";
+import {
   PRODUCT_IMAGE_ROLES,
+  type AmazonMarketAnalysis,
+  type AmazonMarketAnalysisInput,
   type DszProductFields,
   type GeneratedProductCopy,
   type GeneratedProductImage,
@@ -79,6 +85,9 @@ export interface AppDependencies {
   generateProductCopy?: (
     input: ProductInput
   ) => Promise<GeneratedProductCopy>;
+  analyzeAmazonMarket?: (
+    input: AmazonMarketAnalysisInput
+  ) => Promise<AmazonMarketAnalysis>;
   generateProductImageRole?: (input: {
     role: ProductImageRole;
     images: Express.Multer.File[];
@@ -180,6 +189,28 @@ export function createApp(dependencies: AppDependencies = {}) {
       res.json({ title, description });
     } catch (error) {
       sendGenerationError(res, error, "copy");
+    }
+  });
+
+  app.post("/api/analyze-amazon-market", async (req, res) => {
+    try {
+      const input = parseAmazonMarketInput(
+        isRecord(req.body) ? req.body.input : undefined
+      );
+      if (!input) {
+        res.status(400).json({ error: "Invalid Amazon market analysis input" });
+        return;
+      }
+      const analysis = dependencies.analyzeAmazonMarket
+        ? await dependencies.analyzeAmazonMarket(input)
+        : await analyzeAmazonAuMarket({ product: input, env });
+      res.json({ analysis });
+    } catch (error) {
+      if (error instanceof ProboostMarketError) {
+        res.status(error.status).json({ error: error.message });
+        return;
+      }
+      res.status(500).json({ error: "Amazon market analysis failed" });
     }
   });
 
@@ -664,6 +695,40 @@ function parseProductInput(value: unknown): ProductInputValidation {
   }
 
   return { valid: true, input };
+}
+
+function parseAmazonMarketInput(value: unknown): AmazonMarketAnalysisInput | null {
+  if (!isRecord(value)) return null;
+  const productName = typeof value.productName === "string"
+    ? value.productName.trim()
+    : "";
+  const currentRrpAud = Number(value.currentRrpAud);
+  if (!productName || productName.length > 300 ||
+    !Number.isFinite(currentRrpAud) || currentRrpAud <= 0) {
+    return null;
+  }
+
+  const optionalStrings = ["categoryName", "categoryHint", "sellingPoints"] as const;
+  if (optionalStrings.some((key) =>
+    value[key] !== undefined &&
+    (typeof value[key] !== "string" || String(value[key]).length > 5_000)
+  )) {
+    return null;
+  }
+
+  return {
+    productName,
+    currentRrpAud,
+    ...(typeof value.categoryName === "string"
+      ? { categoryName: value.categoryName.trim() }
+      : {}),
+    ...(typeof value.categoryHint === "string"
+      ? { categoryHint: value.categoryHint.trim() }
+      : {}),
+    ...(typeof value.sellingPoints === "string"
+      ? { sellingPoints: value.sellingPoints.trim() }
+      : {})
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

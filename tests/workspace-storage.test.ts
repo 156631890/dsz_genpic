@@ -1,6 +1,10 @@
 import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, test, vi } from "vitest";
-import { PRODUCT_IMAGE_ROLES, type DszProductFields } from "../shared/product";
+import {
+  PRODUCT_IMAGE_ROLES,
+  type AmazonMarketAnalysis,
+  type DszProductFields
+} from "../shared/product";
 import {
   deleteProductWorkspace,
   findDuplicateUpload,
@@ -42,6 +46,7 @@ describe("workspace persistence", () => {
   test("turns interrupted requests into retryable errors while preserving completed images", () => {
     const snapshot = workspaceSnapshot();
     snapshot.copyTask = { status: "loading", error: "" };
+    snapshot.marketTask = { status: "loading", error: "" };
     snapshot.imageRoles.main = { status: "success", error: "", imageUrl: "https://cdn.example.com/main.png" };
     snapshot.imageRoles.side = { status: "loading", error: "", imageUrl: "" };
     snapshot.uploadStatus = "loading";
@@ -50,6 +55,7 @@ describe("workspace persistence", () => {
     const restored = loadProductWorkspace("product-1");
 
     expect(restored?.copyTask).toEqual({ status: "error", error: REFRESH_INTERRUPTED_ERROR });
+    expect(restored?.marketTask).toEqual({ status: "error", error: REFRESH_INTERRUPTED_ERROR });
     expect(restored?.imageRoles.main).toEqual(snapshot.imageRoles.main);
     expect(restored?.imageRoles.side).toEqual({
       status: "error",
@@ -71,6 +77,38 @@ describe("workspace persistence", () => {
     await deleteProductWorkspace("product-1");
     expect(loadProductWorkspace("product-1")).toBeNull();
     expect(await loadProductSourceFiles("product-1")).toEqual([]);
+  });
+
+  test("persists a completed Amazon Australia market analysis", () => {
+    const snapshot = workspaceSnapshot();
+    const analysis: AmazonMarketAnalysis = {
+      source: "proboost-amazon-au",
+      marketplace: "Amazon Australia",
+      query: "wireless earbuds",
+      analyzedAt: "2026-07-17T08:00:00.000Z",
+      snapshotDate: "2026-07-16",
+      confidence: "high",
+      categoryName: "Electronics->Headphones",
+      categoryPath: "1->2",
+      currentRrpAud: 29.95,
+      competitorCount: 0,
+      priceMinimumAud: null,
+      priceMedianAud: null,
+      priceMaximumAud: null,
+      priceAdvantagePercent: null,
+      pricePosition: "unavailable",
+      suggestedRrpMinimumAud: null,
+      suggestedRrpMaximumAud: null,
+      sampledMonthlySales: 0,
+      competitors: [],
+      priceBands: [],
+      notes: []
+    };
+    snapshot.marketTask = { status: "success", error: "" };
+    snapshot.marketAnalysis = analysis;
+    saveProductWorkspace(snapshot);
+
+    expect(loadProductWorkspace("product-1")?.marketAnalysis).toEqual(analysis);
   });
 });
 

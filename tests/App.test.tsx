@@ -11,6 +11,7 @@ import {
 } from "../src/productWorkflow";
 import {
   PRODUCT_IMAGE_ROLES,
+  type AmazonMarketAnalysis,
   type DszProductFields,
   type ProductImageRole,
   type ProductInput,
@@ -261,6 +262,47 @@ const productEvidence: ProductResearchEvidence = {
   }]
 };
 
+const marketAnalysis: AmazonMarketAnalysis = {
+  source: "proboost-amazon-au",
+  marketplace: "Amazon Australia",
+  query: "multicolour stone pearl necklace",
+  analyzedAt: "2026-07-17T08:00:00.000Z",
+  snapshotDate: "2026-07-16",
+  confidence: "high",
+  categoryName: "Clothing->Women->Jewellery",
+  categoryPath: "1->2->3",
+  currentRrpAud: 45.78,
+  competitorCount: 2,
+  priceMinimumAud: 49.99,
+  priceMedianAud: 52,
+  priceMaximumAud: 54.01,
+  priceAdvantagePercent: 12,
+  pricePosition: "moderate_advantage",
+  suggestedRrpMinimumAud: 44.2,
+  suggestedRrpMaximumAud: 49.4,
+  sampledMonthlySales: 310,
+  competitors: [{
+    asin: "B000000001",
+    title: "Multicolour Stone Pearl Necklace",
+    url: "https://www.amazon.com.au/dp/B000000001",
+    imageUrl: "https://images.example.com/necklace.jpg",
+    brand: "Example",
+    priceAud: 49.99,
+    rating: 4.3,
+    reviews: 120,
+    monthlySales: 150,
+    categoryName: "Jewellery"
+  }],
+  priceBands: [{
+    label: "45-60",
+    productCount: 20,
+    monthlySales: 900,
+    revenueAud: 45000,
+    salesShare: 42
+  }],
+  notes: ["Comparison uses matched Amazon Australia listings."]
+};
+
 function generatedFieldResponse(
   title: string,
   description: string,
@@ -298,6 +340,9 @@ function appFetch(handler: FetchHandler) {
       textModel: "gpt-5.6-sol",
       imageModel: "gpt-image-2"
     }));
+    if (url === "/api/analyze-amazon-market") {
+      return Promise.resolve(response({ analysis: marketAnalysis }));
+    }
     const legacyUrl = url === "/api/generate-product-fields"
       ? "/api/generate-product-copy"
       : url;
@@ -1556,6 +1601,40 @@ describe("persistent product operations", () => {
       .toHaveValue("Product A saved selling points");
     expect(within(restoredProductA).getByLabelText("Product Name")).toHaveValue("Saved product A");
     expect(await within(restoredProductA).findByText("saved-source.png")).toBeVisible();
+  });
+
+  test("automatically analyzes Amazon Australia pricing and marks it stale after an RRP edit", async () => {
+    const user = userEvent.setup();
+    const fetchMock = appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") {
+        return response({ result: { fields: completeFields, source: "ai", issues: [] } });
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: /AI/ }));
+
+    const marketPanel = await screen.findByTestId("amazon-market-analysis");
+    await waitFor(() => expect(within(marketPanel).getByText("轻度价格优势")).toBeVisible());
+    expect(within(marketPanel).getByText("A$52.00")).toBeVisible();
+    expect(fetchMock.mock.calls.filter(([url]) =>
+      url === "/api/analyze-amazon-market"
+    )).toHaveLength(1);
+
+    await user.click(screen.getByRole("tab", { name: "Price" }));
+    const rrp = screen.getByLabelText("Vendor RRP");
+    await user.clear(rrp);
+    await user.type(rrp, "40");
+    await user.tab();
+    expect(within(marketPanel).getByText("商品名称、类目或价格已修改，请重新分析。"))
+      .toBeVisible();
   });
 
   test("deletes a product and keeps the remaining queue", async () => {

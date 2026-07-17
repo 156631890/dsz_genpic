@@ -1,4 +1,6 @@
 import type {
+  AmazonMarketAnalysis,
+  AmazonMarketAnalysisInput,
   GeneratedProductCopy,
   GeneratedProductImage,
   ProductImageRole,
@@ -64,6 +66,22 @@ export async function requestProductCopy(
     throw new Error("商品文案生成失败");
   }
   return { title: data.title, description: data.description };
+}
+
+export async function requestAmazonMarketAnalysis(
+  input: AmazonMarketAnalysisInput,
+  signal?: AbortSignal
+): Promise<AmazonMarketAnalysis> {
+  const data = await requestJson("/api/analyze-amazon-market", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input }),
+    signal
+  }, "Amazon Australia market analysis failed");
+  if (!isRecord(data) || !isAmazonMarketAnalysis(data.analysis)) {
+    throw new Error("Amazon Australia market analysis failed");
+  }
+  return data.analysis;
 }
 
 export async function requestProductFields(input: {
@@ -249,6 +267,56 @@ function isResearchEvidence(value: unknown): value is ProductResearchEvidence {
         )
     )
   );
+}
+
+function isAmazonMarketAnalysis(value: unknown): value is AmazonMarketAnalysis {
+  if (!isRecord(value) || value.source !== "proboost-amazon-au" ||
+    value.marketplace !== "Amazon Australia" ||
+    !["high", "medium", "low"].includes(String(value.confidence)) ||
+    ![
+      "strong_advantage",
+      "moderate_advantage",
+      "market_aligned",
+      "above_market",
+      "unavailable"
+    ].includes(String(value.pricePosition))) {
+    return false;
+  }
+  const strings = ["query", "analyzedAt", "categoryName", "categoryPath"];
+  const numbers = ["currentRrpAud", "competitorCount", "sampledMonthlySales"];
+  const nullableNumbers = [
+    "priceMinimumAud",
+    "priceMedianAud",
+    "priceMaximumAud",
+    "priceAdvantagePercent",
+    "suggestedRrpMinimumAud",
+    "suggestedRrpMaximumAud"
+  ];
+  return strings.every((key) => typeof value[key] === "string") &&
+    numbers.every((key) => typeof value[key] === "number" && Number.isFinite(value[key])) &&
+    nullableNumbers.every((key) => value[key] === null ||
+      (typeof value[key] === "number" && Number.isFinite(value[key]))) &&
+    (value.snapshotDate === null || typeof value.snapshotDate === "string") &&
+    Array.isArray(value.notes) && value.notes.every((note) => typeof note === "string") &&
+    Array.isArray(value.competitors) && value.competitors.every((competitor) =>
+      isRecord(competitor) &&
+      ["asin", "title", "url", "imageUrl", "brand", "categoryName"].every(
+        (key) => typeof competitor[key] === "string"
+      ) &&
+      isHttpsUrl(String(competitor.url)) &&
+      (competitor.imageUrl === "" || isHttpsUrl(String(competitor.imageUrl))) &&
+      typeof competitor.priceAud === "number" && Number.isFinite(competitor.priceAud) &&
+      ["rating", "reviews", "monthlySales"].every((key) =>
+        competitor[key] === null ||
+        (typeof competitor[key] === "number" && Number.isFinite(competitor[key]))
+      )
+    ) &&
+    Array.isArray(value.priceBands) && value.priceBands.every((band) =>
+      isRecord(band) && typeof band.label === "string" &&
+      ["productCount", "monthlySales", "revenueAud", "salesShare"].every(
+        (key) => typeof band[key] === "number" && Number.isFinite(band[key])
+      )
+    );
 }
 
 function toPublicGenerationResult(

@@ -1,4 +1,5 @@
 import type {
+  AmazonMarketAnalysis,
   DszProductFields,
   ProductImageRole,
   ProductResearchEvidence
@@ -52,6 +53,8 @@ export interface ProductWorkspaceSnapshot {
   activeTab: EditorTab;
   researchEvidence: ProductResearchEvidence | null;
   researchIssues: string[];
+  marketTask?: TaskState;
+  marketAnalysis?: AmazonMarketAnalysis | null;
   manualFields: Array<keyof DszProductFields>;
   fieldEditVersions: Record<keyof DszProductFields, number>;
 }
@@ -178,6 +181,7 @@ function recoverInterruptedTasks(snapshot: ProductWorkspaceSnapshot): ProductWor
   return {
     ...snapshot,
     copyTask: recoverTask(snapshot.copyTask),
+    marketTask: recoverTask(snapshot.marketTask || { status: "idle", error: "" }),
     uploadSourceTask: recoverTask(snapshot.uploadSourceTask),
     imageRoles: Object.fromEntries(Object.entries(snapshot.imageRoles).map(([role, state]) => [
       role,
@@ -202,6 +206,9 @@ function isWorkspaceSnapshot(value: unknown, jobId: string): value is ProductWor
     isRecord(value.optionalInputs) &&
     isRecord(value.fields) &&
     isTaskState(value.copyTask) &&
+    (value.marketTask === undefined || isTaskState(value.marketTask)) &&
+    (value.marketAnalysis === undefined || value.marketAnalysis === null ||
+      isRecord(value.marketAnalysis)) &&
     isTaskState(value.uploadSourceTask) &&
     isRecord(value.imageRoles) &&
     typeof value.message === "string" &&

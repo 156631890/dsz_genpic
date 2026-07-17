@@ -1,4 +1,6 @@
 import {
+  BarChart3,
+  ExternalLink,
   FolderOpen,
   History,
   Loader2,
@@ -12,6 +14,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   PRODUCT_IMAGE_ROLES,
+  type AmazonMarketAnalysis,
+  type AmazonMarketAnalysisInput,
   type DszProductFields,
   type ProductImageRole,
   type ProductIdentity,
@@ -20,6 +24,7 @@ import {
 } from "../shared/product";
 import { buildShippingZoneRates, calculateBillableWeightKg, calculatePackageCbm } from "../shared/shipping";
 import {
+  requestAmazonMarketAnalysis,
   requestProductFields,
   requestProductImageRole,
   requestServiceHealth,
@@ -321,6 +326,116 @@ function TaskStatusCards({
         {failedImageCount > 0 && <span className="failed-count">{failedImageCount} 个失败</span>}
         <small>{hasTaskError ? "失败角色可单独重试" : "各角色独立生成，可单独重试"}</small>
       </article>
+    </section>
+  );
+}
+
+function MarketAnalysisPanel({
+  analysis,
+  task,
+  canAnalyze,
+  idPrefix,
+  onRetry
+}: {
+  analysis: AmazonMarketAnalysis | null;
+  task: TaskState;
+  canAnalyze: boolean;
+  idPrefix: string;
+  onRetry: () => void;
+}) {
+  const verdict = analysis ? marketVerdictLabel(analysis.pricePosition) : "等待商品资料";
+  return (
+    <section className={`market-analysis market-${task.status}`}
+      aria-labelledby={`${idPrefix}amazon-market-heading`} data-testid="amazon-market-analysis">
+      <div className="market-analysis-head">
+        <div>
+          <span className="market-source"><BarChart3 size={14} aria-hidden="true" /> ProBoost · Amazon.com.au</span>
+          <h3 id={`${idPrefix}amazon-market-heading`}>澳洲市场与价格分析</h3>
+        </div>
+        <div className="market-actions">
+          <span className={`market-verdict verdict-${analysis?.pricePosition || "unavailable"}`}>{verdict}</span>
+          <button type="button" className="secondary-action" onClick={onRetry}
+            disabled={!canAnalyze || task.status === "loading"}>
+            {task.status === "loading" ? <Loader2 className="spin" size={13} /> : <RotateCcw size={13} />}
+            {analysis ? "重新分析" : "开始分析"}
+          </button>
+        </div>
+      </div>
+
+      {task.status === "idle" && !analysis && (
+        <p className="market-empty">商品资料生成完成后会自动查询 Amazon Australia 竞品。</p>
+      )}
+      {task.status === "loading" && (
+        <p className="market-empty" role="status">正在匹配澳洲竞品并计算价格优势…</p>
+      )}
+      {task.error && <p className="inline-error" role="alert">{task.error}</p>}
+      {task.status === "stale" && analysis && (
+        <p className="market-stale">商品名称、类目或价格已修改，请重新分析。</p>
+      )}
+
+      {analysis && (
+        <>
+          <div className="market-context">
+            <span>搜索词：<strong>{analysis.query}</strong></span>
+            <span>匹配置信度：<strong>{marketConfidenceLabel(analysis.confidence)}</strong></span>
+            {analysis.snapshotDate && <span>数据日期：<strong>{analysis.snapshotDate}</strong></span>}
+          </div>
+          {analysis.competitorCount > 0 ? (
+            <>
+              <div className="market-metrics">
+                <article><span>当前 RRP</span><strong>{formatAud(analysis.currentRrpAud)}</strong></article>
+                <article><span>竞品中位价</span><strong>{formatNullableAud(analysis.priceMedianAud)}</strong></article>
+                <article><span>价格优势</span><strong>{formatAdvantage(analysis.priceAdvantagePercent)}</strong></article>
+                <article><span>建议 RRP</span><strong>{formatAudRange(
+                  analysis.suggestedRrpMinimumAud,
+                  analysis.suggestedRrpMaximumAud
+                )}</strong></article>
+                <article><span>竞品价格范围</span><strong>{formatAudRange(
+                  analysis.priceMinimumAud,
+                  analysis.priceMaximumAud
+                )}</strong></article>
+                <article><span>样本近 30 天销量</span><strong>{analysis.sampledMonthlySales.toLocaleString("en-AU")}</strong></article>
+              </div>
+
+              {analysis.priceBands.length > 0 && (
+                <div className="market-price-bands">
+                  <h4>类目价格带（按销量占比）</h4>
+                  {analysis.priceBands.map((band) => (
+                    <div className="price-band-row" key={band.label}>
+                      <span>A${band.label}</span>
+                      <div><i style={{ width: `${Math.min(100, band.salesShare)}%` }} /></div>
+                      <strong>{band.salesShare.toFixed(1)}%</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="market-competitors">
+                <h4>相似竞品 ({analysis.competitorCount})</h4>
+                <div className="competitor-table" role="table" aria-label="Amazon Australia competitors">
+                  {analysis.competitors.map((competitor) => (
+                    <a key={competitor.asin} href={competitor.url} target="_blank" rel="noreferrer"
+                      className="competitor-row" role="row">
+                      {competitor.imageUrl
+                        ? <img src={competitor.imageUrl} alt="" loading="lazy" />
+                        : <span className="competitor-image-placeholder" />}
+                      <span className="competitor-title">{competitor.title}<small>{competitor.asin}</small></span>
+                      <strong>{formatAud(competitor.priceAud)}</strong>
+                      <span>{competitor.monthlySales === null ? "—" : `${competitor.monthlySales}/月`}</span>
+                      <ExternalLink size={13} aria-hidden="true" />
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="market-empty">没有找到足够相似的 Amazon Australia 商品，当前不判断价格优势。</p>
+          )}
+          <ul className="market-notes">
+            {analysis.notes.map((note) => <li key={note}>{note}</li>)}
+          </ul>
+        </>
+      )}
     </section>
   );
 }
@@ -706,11 +821,21 @@ function ProductWorkspace({
   const [researchIssues, setResearchIssues] = useState<string[]>(
     restoredSnapshot?.researchIssues || []
   );
+  const [marketTask, setMarketTask] = useState<TaskState>(
+    restoredSnapshot?.marketTask || idleTask
+  );
+  const [marketAnalysis, setMarketAnalysis] = useState<AmazonMarketAnalysis | null>(
+    restoredSnapshot?.marketAnalysis || null
+  );
+  const fieldsRef = useRef(fields);
+  fieldsRef.current = fields;
   const [showMeasurementError, setShowMeasurementError] = useState(false);
   const copyOperationIdRef = useRef(0);
   const imageOperationIdRef = useRef(0);
   const copyControllersRef = useRef(new Set<AbortController>());
   const imageControllersRef = useRef(new Set<AbortController>());
+  const marketOperationIdRef = useRef(0);
+  const marketControllerRef = useRef<AbortController | null>(null);
   const fieldEditVersionsRef = useRef<Record<keyof DszProductFields, number>>(
     restoredSnapshot?.fieldEditVersions || Object.fromEntries(
       Object.keys(initialFields).map((key) => [key, 0])
@@ -750,9 +875,8 @@ function ProductWorkspace({
   const hasTaskError = copyTask.status === "error" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "error"
   );
-  const hasRetryableTasks = copyTask.status === "error" || PRODUCT_IMAGE_ROLES.some(
-    (role) => imageRoles[role].status === "error"
-  );
+  const hasRetryableTasks = copyTask.status === "error" || marketTask.status === "error" ||
+    PRODUCT_IMAGE_ROLES.some((role) => imageRoles[role].status === "error");
   const hasStaleOutput = copyTask.status === "stale" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status === "stale"
   );
@@ -821,6 +945,9 @@ function ProductWorkspace({
     imageControllersRef.current.forEach((controller) => controller.abort());
     copyControllersRef.current.clear();
     imageControllersRef.current.clear();
+    marketOperationIdRef.current += 1;
+    marketControllerRef.current?.abort();
+    marketControllerRef.current = null;
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
   }, []);
@@ -865,6 +992,8 @@ function ProductWorkspace({
       activeTab,
       researchEvidence,
       researchIssues,
+      marketTask,
+      marketAnalysis,
       manualFields: Array.from(manualFieldsRef.current),
       fieldEditVersions: fieldEditVersionsRef.current
     };
@@ -875,6 +1004,8 @@ function ProductWorkspace({
     fields,
     imageRoles,
     jobId,
+    marketAnalysis,
+    marketTask,
     message,
     optionalInputs,
     researchEvidence,
@@ -899,6 +1030,15 @@ function ProductWorkspace({
     setUploadStatus("idle");
   }
 
+  function invalidateMarketAnalysis() {
+    marketOperationIdRef.current += 1;
+    marketControllerRef.current?.abort();
+    marketControllerRef.current = null;
+    setMarketTask((current) => marketAnalysis || current.status === "success" || current.status === "stale"
+      ? { status: "stale", error: "" }
+      : idleTask);
+  }
+
   function invalidateGeneration(scope: GenerationScope) {
     copyOperationIdRef.current += 1;
     copyControllersRef.current.forEach((controller) => controller.abort());
@@ -908,6 +1048,7 @@ function ProductWorkspace({
       : idleTask);
     setResearchEvidence(null);
     setResearchIssues([]);
+    invalidateMarketAnalysis();
     if (scope === "all") {
       imageOperationIdRef.current += 1;
       imageControllersRef.current.forEach((controller) => controller.abort());
@@ -1040,6 +1181,9 @@ function ProductWorkspace({
   function updateField(field: keyof DszProductFields, value: string | number | boolean) {
     markManualField(field, value);
     fieldEditVersionsRef.current[field] += 1;
+    if (["categories", "categoryName", "product_name", "rrp"].includes(String(field))) {
+      invalidateMarketAnalysis();
+    }
     if (["weight", "length", "width", "height"].includes(String(field))) {
       invalidateGeneration("copy");
     }
@@ -1138,6 +1282,45 @@ function ProductWorkspace({
     });
   }
 
+  function marketInputFromFields(fieldSnapshot: DszProductFields): AmazonMarketAnalysisInput | null {
+    const productName = fieldSnapshot.product_name.trim();
+    if (!productName || !(fieldSnapshot.rrp > 0)) return null;
+    return {
+      productName,
+      categoryName: fieldSnapshot.categoryName,
+      categoryHint: optionalInputs.categoryHint.trim(),
+      sellingPoints: sellingPoints.trim(),
+      currentRrpAud: fieldSnapshot.rrp
+    };
+  }
+
+  async function runMarketAnalysis(input = marketInputFromFields(fieldsRef.current)) {
+    if (!input) {
+      setMarketTask({ status: "error", error: "请先生成商品名称和 RRP 后再分析。" });
+      return;
+    }
+    const operationId = marketOperationIdRef.current + 1;
+    marketOperationIdRef.current = operationId;
+    marketControllerRef.current?.abort();
+    const controller = new AbortController();
+    marketControllerRef.current = controller;
+    setMarketTask({ status: "loading", error: "" });
+    try {
+      const result = await requestAmazonMarketAnalysis(input, controller.signal);
+      if (operationId !== marketOperationIdRef.current || controller.signal.aborted) return;
+      setMarketAnalysis(result);
+      setMarketTask({ status: "success", error: "" });
+    } catch (error) {
+      if (operationId !== marketOperationIdRef.current || controller.signal.aborted) return;
+      setMarketTask({
+        status: "error",
+        error: errorMessage(error, "Amazon Australia 市场分析失败")
+      });
+    } finally {
+      if (marketControllerRef.current === controller) marketControllerRef.current = null;
+    }
+  }
+
   async function runCopyTask(operationId = copyOperationIdRef.current) {
     const controller = beginCopyTask(operationId);
     if (!controller) return;
@@ -1147,6 +1330,7 @@ function ProductWorkspace({
     setCopyTask({ status: "loading", error: "" });
     setResearchEvidence(null);
     setResearchIssues([]);
+    invalidateMarketAnalysis();
 
     try {
       const identity = reserveIdentity(fieldSnapshot);
@@ -1176,6 +1360,24 @@ function ProductWorkspace({
             error: `${result.issues.length} unresolved issue${result.issues.length === 1 ? "" : "s"}. Review the evidence below.`
           }
         : { status: "success", error: "" });
+      const current = fieldsRef.current;
+      const marketFields = {
+        ...result.fields,
+        product_name: manualFieldsRef.current.has("product_name") ||
+          fieldEditVersionsRef.current.product_name !== versionsAtStart.product_name
+          ? current.product_name
+          : result.fields.product_name,
+        categoryName: manualFieldsRef.current.has("categories") ||
+          fieldEditVersionsRef.current.categoryName !== versionsAtStart.categoryName
+          ? current.categoryName
+          : result.fields.categoryName,
+        rrp: manualFieldsRef.current.has("rrp") ||
+          fieldEditVersionsRef.current.rrp !== versionsAtStart.rrp
+          ? current.rrp
+          : result.fields.rrp
+      };
+      const marketInput = marketInputFromFields(marketFields);
+      if (marketInput) void runMarketAnalysis(marketInput);
     } catch (error) {
       if (operationId !== copyOperationIdRef.current || controller.signal.aborted) return;
       const text = errorMessage(error, "完整商品资料生成失败");
@@ -1260,6 +1462,9 @@ function ProductWorkspace({
     imageControllersRef.current.forEach((controller) => controller.abort());
     copyControllersRef.current.clear();
     imageControllersRef.current.clear();
+    marketOperationIdRef.current += 1;
+    marketControllerRef.current?.abort();
+    marketControllerRef.current = null;
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
     uploadControllerRef.current = null;
@@ -1268,6 +1473,9 @@ function ProductWorkspace({
       : current);
     setCopyTask((current) => current.status === "loading"
       ? { status: "error", error: "任务已取消" }
+      : current);
+    setMarketTask((current) => current.status === "loading"
+      ? { status: "error", error: "市场分析已取消" }
       : current);
     setImageRoles((current) => Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [
       role,
@@ -1280,16 +1488,22 @@ function ProductWorkspace({
   }
 
   async function retryAllFailedTasks() {
-    if (!sourceFilesReady || sourceFiles.length === 0) {
+    const hasGenerationFailure = copyTask.status === "error" || PRODUCT_IMAGE_ROLES.some(
+      (role) => imageRoles[role].status === "error"
+    );
+    if (hasGenerationFailure && (!sourceFilesReady || sourceFiles.length === 0)) {
       setMessage("请重新选择原始产品图片后再重试");
       return;
     }
-    if (!sellingPoints.trim()) {
+    if (hasGenerationFailure && !sellingPoints.trim()) {
       setMessage("请填写卖点后再重试");
       return;
     }
     const tasks: Array<Promise<unknown>> = [];
     if (copyTask.status === "error") tasks.push(runCopyTask());
+    if (copyTask.status !== "error" && marketTask.status === "error") {
+      tasks.push(runMarketAnalysis());
+    }
     for (const role of PRODUCT_IMAGE_ROLES) {
       if (imageRoles[role].status === "error") tasks.push(runImageRole(role));
     }
@@ -1469,7 +1683,8 @@ function ProductWorkspace({
                 : uploadSourceTask.status === "loading" ? "正在优化源图" : "开始 AI 生成"}
             </button>
             <button type="button" className="secondary-action" onClick={cancelAllTasks}
-              disabled={!workflowLoading && uploadSourceTask.status !== "loading" && uploadStatus !== "loading"}>
+              disabled={!workflowLoading && marketTask.status !== "loading" &&
+                uploadSourceTask.status !== "loading" && uploadStatus !== "loading"}>
               <Square size={14} aria-hidden="true" /> 取消
             </button>
             <button type="button" className="secondary-action" onClick={() => void retryAllFailedTasks()}
@@ -1517,6 +1732,10 @@ function ProductWorkspace({
               )}
             </section>
           )}
+
+          <MarketAnalysisPanel analysis={marketAnalysis} task={marketTask}
+            canAnalyze={Boolean(fields.product_name.trim()) && fields.rrp > 0}
+            idPrefix={domIdPrefix} onRetry={() => void runMarketAnalysis()} />
 
           <nav className="editor-tabs" role="tablist" aria-label="Product editor sections">
             {editorTabs.map((tab, index) => (
@@ -1641,6 +1860,39 @@ function productJobSummaryLabel(summary: ProductJobSummary): string {
 function optionalNumber(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) && value.trim() ? parsed : undefined;
+}
+
+function marketVerdictLabel(position: AmazonMarketAnalysis["pricePosition"]): string {
+  return {
+    strong_advantage: "明显价格优势",
+    moderate_advantage: "轻度价格优势",
+    market_aligned: "接近市场价格",
+    above_market: "高于市场价格",
+    unavailable: "数据不足"
+  }[position];
+}
+
+function marketConfidenceLabel(confidence: AmazonMarketAnalysis["confidence"]): string {
+  return { high: "高", medium: "中", low: "低" }[confidence];
+}
+
+function formatAud(value: number): string {
+  return `A$${value.toFixed(2)}`;
+}
+
+function formatNullableAud(value: number | null): string {
+  return value === null ? "—" : formatAud(value);
+}
+
+function formatAudRange(minimum: number | null, maximum: number | null): string {
+  return minimum === null || maximum === null
+    ? "—"
+    : `${formatAud(minimum)}–${formatAud(maximum)}`;
+}
+
+function formatAdvantage(value: number | null): string {
+  if (value === null) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)}%`;
 }
 
 function formatBytes(bytes: number): string {

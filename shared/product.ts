@@ -130,6 +130,68 @@ export interface ProductResearchEvidence {
   sources: ProductResearchSource[];
 }
 
+export type MarketAnalysisConfidence = "high" | "medium" | "low";
+
+export type MarketPricePosition =
+  | "strong_advantage"
+  | "moderate_advantage"
+  | "market_aligned"
+  | "above_market"
+  | "unavailable";
+
+export interface AmazonMarketCompetitor {
+  asin: string;
+  title: string;
+  url: string;
+  imageUrl: string;
+  brand: string;
+  priceAud: number;
+  rating: number | null;
+  reviews: number | null;
+  monthlySales: number | null;
+  categoryName: string;
+}
+
+export interface AmazonMarketPriceBand {
+  label: string;
+  productCount: number;
+  monthlySales: number;
+  revenueAud: number;
+  salesShare: number;
+}
+
+export interface AmazonMarketAnalysis {
+  source: "proboost-amazon-au";
+  marketplace: "Amazon Australia";
+  query: string;
+  analyzedAt: string;
+  snapshotDate: string | null;
+  confidence: MarketAnalysisConfidence;
+  categoryName: string;
+  categoryPath: string;
+  currentRrpAud: number;
+  competitorCount: number;
+  priceMinimumAud: number | null;
+  priceMedianAud: number | null;
+  priceMaximumAud: number | null;
+  priceAdvantagePercent: number | null;
+  pricePosition: MarketPricePosition;
+  suggestedRrpMinimumAud: number | null;
+  suggestedRrpMaximumAud: number | null;
+  sampledMonthlySales: number;
+  competitors: AmazonMarketCompetitor[];
+  priceBands: AmazonMarketPriceBand[];
+  notes: string[];
+}
+
+export interface AmazonMarketAnalysisInput {
+  productName: string;
+  categoryName?: string;
+  categoryHint?: string;
+  sellingPoints?: string;
+  currentRrpAud: number;
+}
+
 export interface ValidationResult {
   valid: boolean;
   errors: string[];

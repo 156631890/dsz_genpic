@@ -10,6 +10,7 @@ import {
 } from "../../server/services/productCopy";
 import {
   PRODUCT_IMAGE_ROLES,
+  type AmazonMarketAnalysis,
   type DszProductFields,
   type GeneratedProductCopy,
   type GeneratedProductImage,
@@ -47,6 +48,30 @@ const canonicalProductFooter = extractCanonicalProductFooter(
 const validGeneratedTitle = "Compact Storage Organiser - Practical Space Saving Design, Easy Everyday Access, Versatile Home and Travel Use";
 const validGeneratedDescription =
   `<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p>${canonicalProductFooter}`;
+
+const amazonMarketAnalysis: AmazonMarketAnalysis = {
+  source: "proboost-amazon-au",
+  marketplace: "Amazon Australia",
+  query: "cotton thong underwear",
+  analyzedAt: "2026-07-17T08:00:00.000Z",
+  snapshotDate: "2026-07-16",
+  confidence: "high",
+  categoryName: "Clothing->Women->Underwear",
+  categoryPath: "1->2->3",
+  currentRrpAud: 39.48,
+  competitorCount: 1,
+  priceMinimumAud: 44.99,
+  priceMedianAud: 44.99,
+  priceMaximumAud: 44.99,
+  priceAdvantagePercent: 12.2,
+  pricePosition: "moderate_advantage",
+  suggestedRrpMinimumAud: 38.24,
+  suggestedRrpMaximumAud: 42.74,
+  sampledMonthlySales: 120,
+  competitors: [],
+  priceBands: [],
+  notes: []
+};
 
 const fields: DszProductFields = {
   category: 947,
@@ -192,6 +217,40 @@ describe("API app", () => {
       imageSize: "1024x1024",
       imageQuality: "high"
     });
+  });
+
+  test("returns independent Amazon Australia market analysis", async () => {
+    const analyzeAmazonMarket = vi.fn(async () => amazonMarketAnalysis);
+    const response = await request(createApp({ analyzeAmazonMarket }))
+      .post("/api/analyze-amazon-market")
+      .send({
+        input: {
+          productName: `  ${fields.product_name}  `,
+          categoryName: fields.categoryName,
+          categoryHint: "Women's Intimates",
+          sellingPoints: productInput.sellingPoints,
+          currentRrpAud: fields.rrp
+        }
+      })
+      .expect(200);
+
+    expect(analyzeAmazonMarket).toHaveBeenCalledWith(expect.objectContaining({
+      productName: fields.product_name,
+      currentRrpAud: fields.rrp
+    }));
+    expect(response.body).toEqual({ analysis: amazonMarketAnalysis });
+  });
+
+  test("validates market inputs and reports missing ProBoost configuration safely", async () => {
+    await request(createApp({ env: {} }))
+      .post("/api/analyze-amazon-market")
+      .send({ input: { productName: "", currentRrpAud: 0 } })
+      .expect(400, { error: "Invalid Amazon market analysis input" });
+
+    await request(createApp({ env: {} }))
+      .post("/api/analyze-amazon-market")
+      .send({ input: { productName: "Wireless earbuds", currentRrpAud: 29.95 } })
+      .expect(503, { error: "ProBoost Amazon market analysis is not configured" });
   });
 
   test.each([
