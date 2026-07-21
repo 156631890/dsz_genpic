@@ -12,6 +12,10 @@ export function reserveProductIdentity(
   const sku = `Elosung${counter}`;
   localStorage.setItem(SKU_KEY, String(counter + 1));
 
+  return { sku, eanCode: reserveEanCode(random) };
+}
+
+export function reserveEanCode(random = Math.random): string {
   const used = new Set<string>(readUsedEans(localStorage.getItem(EAN_KEY)));
   let eanCode = "";
   for (let attempt = 0; attempt < 100 && !eanCode; attempt += 1) {
@@ -28,7 +32,7 @@ export function reserveProductIdentity(
   used.add(eanCode);
   localStorage.setItem(EAN_KEY, JSON.stringify(Array.from(used)));
 
-  return { sku, eanCode };
+  return eanCode;
 }
 
 function readCounter(value: string | null): number {

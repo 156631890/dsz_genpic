@@ -23,6 +23,7 @@ import {
   type ProductResearchEvidence
 } from "../shared/product";
 import { buildShippingZoneRates, calculateBillableWeightKg, calculatePackageCbm } from "../shared/shipping";
+import { calculateVendorPrice, calculateVendorRrp } from "../shared/pricing";
 import {
   requestAmazonMarketAnalysis,
   requestProductFields,
@@ -31,7 +32,7 @@ import {
   type ServiceHealth,
   uploadProductFields
 } from "./productWorkflow";
-import { reserveProductIdentity } from "./productIdentity";
+import { reserveEanCode, reserveProductIdentity } from "./productIdentity";
 import {
   canOptimizeSourceImages,
   prepareSourceImages
@@ -504,8 +505,9 @@ function ShippingPanel({ billableWeight }: { billableWeight: number }) {
       <strong>{billableWeight.toFixed(2)} kg</strong></div>
     <div className="shipping-summary">
       <article><span>Australian zones</span><strong>Free</strong><small>All metro and regional zones</small></article>
-      <article><span>New Zealand · Below 3 kg</span><strong>AUD 20</strong><small>Incl. GST</small></article>
-      <article><span>New Zealand · 3 kg and above</span><strong>AUD 40</strong><small>Incl. GST</small></article>
+      <article><span>New Zealand · 0-1 kg</span><strong>AUD 20</strong><small>Incl. GST</small></article>
+      <article><span>New Zealand · Over 1-2 kg</span><strong>AUD 40</strong><small>Incl. GST</small></article>
+      <article><span>New Zealand · Over 2 kg</span><strong>AUD 999</strong><small>Incl. GST</small></article>
     </div>
     <p className="formula-note">Billable weight = max(actual, L × W × H / 5000)</p>
   </>;
@@ -1076,7 +1078,14 @@ function ProductWorkspace({
 
   function updateOptionalInput(field: keyof OptionalInputs, value: string) {
     if (field === "categoryHint") invalidateGeneration("all");
-    if (field === "purchasePriceCny") invalidateGeneration("copy");
+    if (field === "purchasePriceCny") {
+      invalidateGeneration("copy");
+      setFields((current) => recalculatePrices(
+        current,
+        optionalNumber(value),
+        manualFieldsRef.current
+      ));
+    }
     setOptionalInputs((current) => ({ ...current, [field]: value }));
     clearUploadResult();
   }
@@ -1203,6 +1212,14 @@ function ProductWorkspace({
           widthCm: next.width,
           heightCm: next.height
         });
+        return recalculatePrices(
+          next,
+          optionalNumber(optionalInputs.purchasePriceCny),
+          manualFieldsRef.current
+        );
+      }
+      if (field === "vendor_price" && !manualFieldsRef.current.has("rrp")) {
+        next.rrp = Number(value) > 0 ? calculateVendorRrp(Number(value)) : 0;
       }
       return next;
     });
@@ -1215,9 +1232,15 @@ function ProductWorkspace({
       images: sourceFiles.map((file) => file.name),
       imageUrls,
       purchasePriceCny: optionalNumber(optionalInputs.purchasePriceCny),
-      categoryId: fieldSnapshot.category || undefined,
-      categoryName: fieldSnapshot.categoryName || undefined,
-      colour: fieldSnapshot.colour || undefined,
+      categoryId: manualFieldsRef.current.has("categories")
+        ? fieldSnapshot.category || undefined
+        : undefined,
+      categoryName: manualFieldsRef.current.has("categories")
+        ? fieldSnapshot.categoryName || undefined
+        : undefined,
+      colour: manualFieldsRef.current.has("colour")
+        ? fieldSnapshot.colour || undefined
+        : undefined,
       packageWeightKg: fieldSnapshot.weight || undefined,
       lengthCm: fieldSnapshot.length || undefined,
       widthCm: fieldSnapshot.width || undefined,
@@ -1225,27 +1248,30 @@ function ProductWorkspace({
     };
   }
 
-  function reserveIdentity(fieldSnapshot: DszProductFields): ProductIdentity {
+  function reserveIdentity(
+    fieldSnapshot: DszProductFields,
+    refreshGeneratedEan = false
+  ): ProductIdentity {
     const currentSku = /^Elosung1\d{4}$/.test(fieldSnapshot.sku)
       ? fieldSnapshot.sku
       : "";
     const currentEan = /^\d{10}$/.test(fieldSnapshot.ean_code)
       ? fieldSnapshot.ean_code
       : "";
-    const reserved = currentSku && currentEan
-      ? null
-      : reserveProductIdentity();
+    const reserved = currentSku ? null : reserveProductIdentity();
+    const keepManualEan =
+      currentEan && manualFieldsRef.current.has("ean_code");
     const identity = {
       sku: currentSku || (reserved as ProductIdentity).sku,
-      eanCode: currentEan || (reserved as ProductIdentity).eanCode
+      eanCode: keepManualEan || (!refreshGeneratedEan && currentEan)
+        ? currentEan
+        : reserved?.eanCode || reserveEanCode()
     };
 
     setFields((current) => ({
       ...current,
       sku: /^Elosung1\d{4}$/.test(current.sku) ? current.sku : identity.sku,
-      ean_code: /^\d{10}$/.test(current.ean_code)
-        ? current.ean_code
-        : identity.eanCode
+      ean_code: keepManualEan ? current.ean_code : identity.eanCode
     }));
     return identity;
   }
@@ -1321,7 +1347,10 @@ function ProductWorkspace({
     }
   }
 
-  async function runCopyTask(operationId = copyOperationIdRef.current) {
+  async function runCopyTask(
+    operationId = copyOperationIdRef.current,
+    refreshGeneratedEan = false
+  ) {
     const controller = beginCopyTask(operationId);
     if (!controller) return;
     const fieldSnapshot = { ...fields };
@@ -1333,7 +1362,7 @@ function ProductWorkspace({
     invalidateMarketAnalysis();
 
     try {
-      const identity = reserveIdentity(fieldSnapshot);
+      const identity = reserveIdentity(fieldSnapshot, refreshGeneratedEan);
       const requestFields = {
         ...fieldSnapshot,
         sku: identity.sku,
@@ -1544,7 +1573,7 @@ function ProductWorkspace({
     const imageOperationId = imageOperationIdRef.current;
     clearUploadResult();
     await Promise.allSettled([
-      runCopyTask(copyOperationId),
+      runCopyTask(copyOperationId, true),
       runAllImageRoles(imageOperationId)
     ]);
   }
@@ -1860,6 +1889,40 @@ function productJobSummaryLabel(summary: ProductJobSummary): string {
 function optionalNumber(value: string): number | undefined {
   const parsed = Number(value);
   return Number.isFinite(parsed) && value.trim() ? parsed : undefined;
+}
+
+function recalculatePrices(
+  fields: DszProductFields,
+  purchasePriceCny: number | undefined,
+  manualFields: Set<keyof DszProductFields>
+): DszProductFields {
+  const next = { ...fields };
+  const canCalculate =
+    purchasePriceCny !== undefined &&
+    purchasePriceCny > 0 &&
+    next.weight > 0 &&
+    next.length > 0 &&
+    next.width > 0 &&
+    next.height > 0;
+
+  if (!manualFields.has("vendor_price")) {
+    next.vendor_price = canCalculate
+      ? calculateVendorPrice({
+          weightKg: next.weight,
+          lengthCm: next.length,
+          widthCm: next.width,
+          heightCm: next.height,
+          purchasePriceCny
+        })
+      : 0;
+  }
+  if (!manualFields.has("rrp")) {
+    next.rrp = next.vendor_price > 0
+      ? calculateVendorRrp(next.vendor_price)
+      : 0;
+  }
+
+  return next;
 }
 
 function marketVerdictLabel(position: AmazonMarketAnalysis["pricePosition"]): string {

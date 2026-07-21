@@ -3,6 +3,7 @@ import type {
   DszProductFields,
   ValidationResult
 } from "../../shared/product.js";
+import { hasInvalidDescriptionLineBreak } from "../../shared/description.js";
 import {
   AU_ZONE_KEYS,
   buildShippingZoneRates
@@ -153,8 +154,8 @@ export function validateDszProductFields(
   if (fields.brand_name !== "Elosung") errors.push("Brand name must be Elosung");
   if (!fields.colour.trim()) errors.push("Colour is required");
   if (!fields.description.trim()) errors.push("Description is required");
-  if (/\r|\n/.test(fields.description)) {
-    errors.push("Description must be a single line");
+  if (hasInvalidDescriptionLineBreak(fields.description)) {
+    errors.push("Description line breaks must separate top-level HTML blocks");
   }
   if (/https?:\/\//i.test(fields.description)) {
     errors.push("Description must not contain URLs");

@@ -34,8 +34,11 @@ export function buildProductImageRolePrompt(
     "Use a square 1:1 composition.",
     "Do not create a collage, grid, split screen, contact sheet, or multi-panel image.",
     "No watermark, no logo, no badge, and no unsupported text.",
-    "Keep the actual product accurate, recognizable, sharp, and free of unsupported claims.",
-    `Selling points for visual emphasis only: ${sellingPoints}`,
+    "Keep the referenced product accurate, recognizable, sharp, and free of unsupported claims.",
+    "The supplied source images are the authoritative reference for the exact product and variant. Do not redesign, substitute, reinterpret, or combine it with another product.",
+    "Preserve the source product's shape, proportions, construction, colour, pattern, material appearance, components, closures, included parts, and accessory count. Do not add or remove product features.",
+    "Keep the same product identity across all gallery roles while making this role's camera angle, crop, background, and usage composition visibly distinct.",
+    `Selling points are context only and may be shown only when visibly supported by the source product: ${sellingPoints}`,
     PRODUCT_IMAGE_ROLE_RULES[role]
   ].join("\n");
 }
@@ -88,9 +91,9 @@ export class PackyImageTransportError extends Error {
 export function buildPackyEditRequest(input: PackyEditInput): PackyEditRequest {
   const baseUrl = trimTrailingSlash(input.baseUrl || "https://www.packyapi.com");
   const prompt = [
-    `Product type: ${input.productType}`,
+    `Product context only; source images remain authoritative: ${input.productType}`,
     input.prompt,
-    "Generate ecommerce product images for an independent store product page. Keep the product clear, accurate, and free of watermarks.",
+    "Generate ecommerce product images for an independent store product page. Keep the exact referenced product clear, accurate, and free of watermarks.",
     ...ENGLISH_ONLY_IMAGE_TEXT_RULES
   ].join("\n");
 
@@ -397,8 +400,11 @@ function buildShopifyProductImagePrompts(sellingPoints: string): string[] {
     "Do not create a collage, grid, contact sheet, split screen or multi-panel image.",
     "Do not combine multiple product roles into one image.",
     "Follow Shopify product image conventions: square 1:1 composition, high clarity, no watermarks, no logos, no badges, no unsupported text overlays.",
-    "Keep the actual product accurate, recognizable, sharp, and free of unsupported claims.",
-    `Selling points for visual emphasis only: ${sellingPoints}`
+    "Keep the referenced product accurate, recognizable, sharp, and free of unsupported claims.",
+    "The supplied source images are the authoritative reference for the exact product and variant. Do not redesign, substitute, reinterpret, or combine it with another product.",
+    "Preserve the source product's shape, proportions, construction, colour, pattern, material appearance, components, closures, included parts, and accessory count. Do not add or remove product features.",
+    "Keep the same product identity across all five roles while making each role's camera angle, crop, background, and usage composition visibly distinct.",
+    `Selling points are context only and may be shown only when visibly supported by the source product: ${sellingPoints}`
   ];
   const roles = [
     "Image 1 URL role: feature main image. Product-focused hero image on a clean premium neutral, softly lit studio, or subtle real-world background. Do not use a pure white or plain white background. Keep the full product visible, centered, sharp, and not covered by text.",

@@ -235,7 +235,7 @@ Vendor RRP = Vendor Price × 2
 - Shipping rates are calculated by the server, not AI output.
 - All Australian zones: AUD 0.
 - Billable weight (kg): `MAX(actual weight, length × width × height / 5000)`.
-- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg.
+- New Zealand: AUD 20 for 0-1 kg; AUD 40 for over 1-2 kg; AUD 999 for over 2 kg.
 
 ---
 
@@ -324,10 +324,10 @@ Step 7: 粘贴至 Dropshipzone 后台
 
 | 1688采购价 | 假设尺寸(cm) | 假设重量 | Vendor Price | Vendor RRP |
 |-----------|------------|---------|-------------|-----------|
-| ¥15 | 20×15×10 / 0.3kg | 体积重0.38 > 0.3 | (0.38×40+45+15)/3.05 = ¥8.6 | ¥17.2 |
-| ¥25 | 30×20×15 / 0.5kg | 体积重1.13 > 0.5 | (1.13×40+45+25)/3.05 = ¥14.1 | ¥28.2 |
-| ¥50 | 40×30×20 / 1.0kg | 体积重3.0 > 1.0 | (3.0×40+45+50)/3.05 = ¥29.5 | ¥59.0 |
-| ¥100 | 50×40×30 / 2.0kg | 体积重7.5 > 2.0 | (7.5×40+45+100)/3.05 = ¥69.3 | ¥138.6 |
+| ¥15 | 20×15×10 / 0.3kg | 体积重0.375 > 0.3 | (0.375×40+45+15)/3.05 = AUD 24.59 | AUD 49.18 |
+| ¥25 | 30×20×15 / 0.5kg | 体积重1.125 > 0.5 | (1.125×40+45+25)/3.05 = AUD 37.70 | AUD 75.40 |
+| ¥50 | 40×30×20 / 1.0kg | 体积重3.0 > 1.0 | (3.0×40+45+50)/3.05 = AUD 70.49 | AUD 140.98 |
+| ¥100 | 50×40×30 / 2.0kg | 体积重7.5 > 2.0 | (7.5×40+45+100)/3.05 = AUD 145.90 | AUD 291.80 |
 
 ---
 
@@ -363,7 +363,7 @@ Step 7: 粘贴至 Dropshipzone 后台
 - Shipping rates are calculated by the server, not AI output.
 - All Australian zones: AUD 0.
 - Billable weight (kg): `MAX(actual weight, length × width × height / 5000)`.
-- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg.
+- New Zealand: AUD 20 for 0-1 kg; AUD 40 for over 1-2 kg; AUD 999 for over 2 kg.
 
 ### 类目 ID 重要说明
 - 上传产品应优先使用 `GET /new_categories` 返回的 ID

@@ -17,6 +17,7 @@ import {
   type ProductInput,
   type ProductResearchEvidence
 } from "../../shared/product";
+import { formatSegmentedDescriptionHtml } from "../../shared/description";
 
 const productInput: ProductInput = {
   sellingPoints: "Soft cotton thong underwear, breathable stretch, everyday fit.",
@@ -46,8 +47,9 @@ const canonicalProductFooter = extractCanonicalProductFooter(
   await loadProductSystemPrompt()
 );
 const validGeneratedTitle = "Compact Storage Organiser - Practical Space Saving Design, Easy Everyday Access, Versatile Home and Travel Use";
-const validGeneratedDescription =
-  `<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p>${canonicalProductFooter}`;
+const validGeneratedDescription = formatSegmentedDescriptionHtml(
+  `<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p>${canonicalProductFooter}`
+);
 
 const amazonMarketAnalysis: AmazonMarketAnalysis = {
   source: "proboost-amazon-au",

@@ -119,10 +119,12 @@ describe("DSZ product workbench layout", () => {
     const panel = screen.getByRole("tabpanel", { name: "Shipping (Incl. GST)" });
     expect(panel).toHaveTextContent("Australian zones");
     expect(panel).toHaveTextContent("Free");
-    expect(panel).toHaveTextContent("Below 3 kg");
+    expect(panel).toHaveTextContent("0-1 kg");
     expect(panel).toHaveTextContent("AUD 20");
-    expect(panel).toHaveTextContent("3 kg and above");
+    expect(panel).toHaveTextContent("Over 1-2 kg");
     expect(panel).toHaveTextContent("AUD 40");
+    expect(panel).toHaveTextContent("Over 2 kg");
+    expect(panel).toHaveTextContent("AUD 999");
     expect(panel).toHaveTextContent("max(actual, L × W × H / 5000)");
     expect(panel).not.toHaveTextContent("166");
   });
@@ -1128,6 +1130,43 @@ describe("App independent AI workflow", () => {
     expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
   });
 
+  test("regeneration refreshes EAN without locking prior AI category or colour", async () => {
+    const user = userEvent.setup();
+    const inputs: Array<Record<string, unknown>> = [];
+    const identities: Array<{ sku: string; eanCode: string }> = [];
+    vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
+      if (url === "/api/upload-images") {
+        return response({ imageUrls: ["https://cdn.example.com/source.png"] });
+      }
+      if (url === "/api/generate-product-copy") {
+        const form = init?.body as FormData;
+        inputs.push(JSON.parse(String(form.get("input"))));
+        identities.push(JSON.parse(String(form.get("identity"))));
+        return generatedFieldResponse("Generated title", "Generated description", init);
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(screen.getByTestId("copy-task-status"))
+      .toHaveAttribute("data-status", "success"));
+
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+    await waitFor(() => expect(inputs).toHaveLength(2));
+
+    expect(inputs[1]).not.toHaveProperty("categoryId");
+    expect(inputs[1]).not.toHaveProperty("categoryName");
+    expect(inputs[1]).not.toHaveProperty("colour");
+    expect(identities[1].sku).toBe(identities[0].sku);
+    expect(identities[1].eanCode).not.toBe(identities[0].eanCode);
+  });
+
   test("copy success and one image failure retain four images; role retry is isolated", async () => {
     const user = userEvent.setup();
     const roleCounts = new Map<ProductImageRole, number>();
@@ -1557,6 +1596,7 @@ describe("App independent AI workflow", () => {
     const user = userEvent.setup();
     render(<App />);
 
+    await user.type(screen.getByLabelText("采购价 CNY"), "15");
     await user.clear(screen.getByLabelText("Package Weight kg"));
     await user.type(screen.getByLabelText("Package Weight kg"), "1");
     await user.clear(screen.getByLabelText("Length cm"));
@@ -1570,8 +1610,12 @@ describe("App independent AI workflow", () => {
     const payload = screen.getByText((_, element) =>
       element?.tagName === "PRE" && element.textContent?.includes('"cbm": 0.06') === true
     );
-    expect(payload).toHaveTextContent('"nz": 40');
+    expect(payload).toHaveTextContent('"nz": 999');
     expect(payload).toHaveTextContent('"enabled": false');
+
+    await user.click(screen.getByRole("tab", { name: "Price" }));
+    expect(screen.getByLabelText("Vendor Price")).toHaveValue("118.03");
+    expect(screen.getByLabelText("Vendor RRP")).toHaveValue("236.06");
   });
 });
 

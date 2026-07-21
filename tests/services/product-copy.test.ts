@@ -13,6 +13,10 @@ import {
   validateProductCopy
 } from "../../server/services/productCopy";
 import { PRODUCT_IMAGE_ROLES, type ProductInput } from "../../shared/product";
+import {
+  formatSegmentedDescriptionHtml,
+  SEGMENTED_DESCRIPTION_INSTRUCTION
+} from "../../shared/description";
 
 const validTitle = "Compact Storage Organiser - Practical Space Saving Design, Easy Everyday Access, Versatile Home and Travel Use";
 const suppliedFooterSource = [
@@ -27,7 +31,9 @@ const suppliedFooterSingleLine = suppliedFooterSource.replace(/\n/g, " ");
 const exactSystemPrompt = await readFile(resolve("rules/DSZ系统prompt 4月20版本.txt"), "utf8");
 const canonicalFooter = extractCanonicalProductFooter(exactSystemPrompt);
 const descriptionPrefix = "<p><strong>Product Overview</strong></p><p>A practical organiser for everyday use.</p>";
-const validDescription = `${descriptionPrefix}${canonicalFooter}`;
+const validDescription = formatSegmentedDescriptionHtml(
+  `${descriptionPrefix}${canonicalFooter}`
+);
 
 function productInput(overrides: Partial<ProductInput> = {}): ProductInput {
   return {
@@ -126,23 +132,25 @@ describe("product copy messages", () => {
 });
 
 describe("product copy parsing", () => {
-  test("accepts exactly two non-empty lines", () => {
+  test("accepts a title followed by segmented HTML lines", () => {
     expect(parseProductCopy(`  ${validTitle}  \n\n  ${validDescription}  `)).toEqual({
       title: validTitle,
       description: validDescription
     });
   });
 
-  test("rejects an extra non-empty line", () => {
-    expect(() => parseProductCopy(`${validTitle}\n${validDescription}\nExtra`)).toThrow(
-      /exactly two non-empty lines/i
+  test("keeps every segmented HTML block after the title", () => {
+    const extraBlock = "<p>Extra verified product detail.</p>";
+    const parsed = parseProductCopy(
+      `${validTitle}\n${extraBlock}\n${validDescription}`
     );
+
+    expect(parsed.description).toBe(`${extraBlock}\n${validDescription}`);
   });
 
-  test("does not hide a tab-only extra line as blank", () => {
-    expect(() => parseProductCopy(`${validTitle}\n\t\n${validDescription}`)).toThrow(
-      /exactly two non-empty lines/i
-    );
+  test("does not hide a tab-only description line", () => {
+    const parsed = parseProductCopy(`${validTitle}\n\t\n${validDescription}`);
+    expect(validateCopy(parsed)).toContain("Description must not contain tabs.");
   });
 
   test.each([
@@ -159,12 +167,12 @@ describe("product copy parsing", () => {
     [
       "leading description tab",
       `${validTitle}\n\t${validDescription}`,
-      "Description must be one line without tabs."
+      "Description must not contain tabs."
     ],
     [
       "trailing description tab",
       `${validTitle}\n${validDescription}\t`,
-      "Description must be one line without tabs."
+      "Description must not contain tabs."
     ]
   ])("preserves and rejects a %s", (_label, raw, expectedError) => {
     expect(validateCopy(parseProductCopy(raw))).toContain(expectedError);
@@ -178,7 +186,8 @@ describe("product copy validation", () => {
   const markdownError = "Description must not contain Markdown.";
   const urlError = "Description must not contain a URL.";
   const unsupportedTagError = "Description contains an unsupported HTML tag.";
-  const descriptionLineError = "Description must be one line without tabs.";
+  const descriptionLineError =
+    "Description line breaks must separate top-level HTML blocks.";
   const titleLengthError = "Title must be between 110 and 200 characters.";
   const titleCharacterError =
     "Title contains a character outside the approved ecommerce punctuation set.";
@@ -279,7 +288,7 @@ describe("product copy validation", () => {
     );
   });
 
-  test("accepts a valid title and allowed single-line HTML description", () => {
+  test("accepts a valid title and segmented HTML description", () => {
     expect(validateCopy({ title: validTitle, description: validDescription })).toEqual([]);
   });
 
@@ -322,7 +331,7 @@ describe("product copy validation", () => {
 
   test.each([
     ["multiline description", `${descriptionPrefix}<p>Line one\nLine two</p>${canonicalFooter}`, descriptionLineError],
-    ["tabbed description", `${descriptionPrefix}<p>Tabbed\ttext</p>${canonicalFooter}`, descriptionLineError],
+    ["tabbed description", `${descriptionPrefix}<p>Tabbed\ttext</p>${canonicalFooter}`, "Description must not contain tabs."],
     ["URL", `${descriptionPrefix}<p>https://example.test</p>${canonicalFooter}`, urlError],
     ["Markdown", `${descriptionPrefix}<p>**bold**</p>${canonicalFooter}`, markdownError],
     ["single-marker Markdown", `${descriptionPrefix}<p>*bold*</p>${canonicalFooter}`, markdownError],
@@ -678,7 +687,9 @@ describe("Packy product copy generation", () => {
     });
 
     const body = JSON.parse(String(fetchImpl.mock.calls[0][1]?.body));
-    expect(body.instructions).toBe(exactSystemPrompt);
+    expect(body.instructions).toBe(
+      `${exactSystemPrompt}\n\n${SEGMENTED_DESCRIPTION_INSTRUCTION}`
+    );
     expect(body.tools).toEqual([{ type: "web_search" }]);
     expect(body.input[0].content).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: "input_image" }),
@@ -723,7 +734,7 @@ describe("Packy product copy generation", () => {
     }
     expect(body).toEqual({
       model: "gpt-5.6-sol",
-      instructions: exactSystemPrompt,
+      instructions: `${exactSystemPrompt}\n\n${SEGMENTED_DESCRIPTION_INSTRUCTION}`,
       input: [{
         role: "user",
         content: [{ type: "input_text", text: expectedUserMessage.content[0].text }]

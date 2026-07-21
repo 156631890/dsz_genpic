@@ -110,6 +110,19 @@ describe("category matcher", () => {
     );
   });
 
+  test("keeps the complete mapping available when no category hint is explicit", () => {
+    const candidates = formatCategoryCandidates(
+      mapping,
+      undefined,
+      "soft comfortable everyday fit"
+    );
+
+    expect(candidates).toContain("| General Goods | 1 |");
+    expect(candidates).toContain(
+      "| Appliances / Kitchen Appliances / Kitchen Appliance Accessories | 1022 |"
+    );
+  });
+
   test("rejects an unusable mapping", () => {
     expect(() => resolveMappedCategory({
       categoryMapping: "# no category rows",

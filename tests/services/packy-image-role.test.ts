@@ -58,8 +58,12 @@ describe("Packy fixed-role product images", () => {
       expect(prompt).toMatch(/accurate/i);
       expect(prompt).toMatch(/recognizable/i);
       expect(prompt).toContain(
-        "Selling points for visual emphasis only: soft cotton and breathable stretch"
+        "Selling points are context only and may be shown only when visibly supported by the source product: soft cotton and breathable stretch"
       );
+      expect(prompt).toMatch(/source images are the authoritative reference/i);
+      expect(prompt).toMatch(/do not redesign, substitute, reinterpret, or combine/i);
+      expect(prompt).toMatch(/shape, proportions, construction, colour, pattern/i);
+      expect(prompt).toMatch(/visibly distinct/i);
     }
 
     expect(prompts[0]).toMatch(/feature main image/i);

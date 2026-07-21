@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   buildProductResearchRequest,
   generateProductResearchWithPacky,
+  normalizeDszColour,
   validateProductResearch,
   type ProductResearchImage
 } from "../../server/services/productResearch";
@@ -26,6 +27,16 @@ const categoryMapping = [
   "| Fashion / Women's Fashion / Women's Jewellery | 950 |",
   "| Fashion / Women's Fashion / Women's Swimwear | 956 |"
 ].join("\n");
+
+test.each([
+  ["gray", "Grey"],
+  ["black and white", "Black / White"],
+  ["Navy Blue / golden", "Navy / Gold"],
+  ["red, blue, green, yellow", "Multicolor"],
+  ["transparent", "N/A"]
+])("normalizes DSZ colour value %s", (input, expected) => {
+  expect(normalizeDszColour(input)).toBe(expected);
+});
 
 function researchFixture(options: {
   sourceUrl?: string;

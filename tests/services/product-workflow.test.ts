@@ -27,6 +27,7 @@ import {
   loadProductSystemPrompt
 } from "../../server/services/productCopy";
 import { generateCopyWithPacky } from "../../server/services/copyGenerator";
+import { formatSegmentedDescriptionHtml } from "../../shared/description";
 import {
   buildPackyEditRequest,
   generateShopifyProductImagesWithPacky,
@@ -266,7 +267,7 @@ describe("complete DSZ field generation", () => {
       brand_name: "Elosung",
       colour: "Multicolor",
       enabled: true,
-      description: workflowDescription
+      description: formatSegmentedDescriptionHtml(workflowDescription)
     });
     expect(result.fields.cbm).toBe(calculateCbm(15, 10, 4));
     expect(result.fields.vendor_price).toBe(calculateVendorPrice({
@@ -396,7 +397,9 @@ describe("DSZ field rules", () => {
     expect(prompt).not.toContain("zone_rates");
     expect(prompt).toContain("Shipping rates are calculated by the server");
     expect(prompt).toContain("length * width * height / 5000");
-    expect(prompt).toContain("AUD 20 below 3 kg and AUD 40 at or above 3 kg");
+    expect(prompt).toContain(
+      "AUD 20 from 0 to 1 kg, AUD 40 over 1 kg up to 2 kg, and AUD 999 over 2 kg"
+    );
   });
 
   test("preserves legitimate NZ product content in generation prompts", () => {
@@ -488,7 +491,7 @@ describe("DSZ field rules", () => {
         widthCm: 40,
         heightCm: 30
       }).nz
-    ).toBe(40);
+    ).toBe(999);
   });
 
   test("parses generated DSZ field JSON from fenced content", () => {
@@ -632,7 +635,7 @@ ${JSON.stringify(fields)}
     expect(result.fields.description).toContain("Uses the uploaded product images");
     expect(result.fields.description).toContain("Highlights practical everyday value");
     expect(result.fields.description).toContain("Keeps the product page readable");
-    expect(result.fields.description).toContain("Prepared as single-line HTML");
+    expect(result.fields.description).toContain("Uses segmented HTML blocks");
     expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
     expect(result.fields.description).not.toContain("<p><strong>Ideal For</strong></p>");
@@ -642,7 +645,7 @@ ${JSON.stringify(fields)}
     expect(result.fields.description).toContain("</p >");
     expect(result.fields.description).not.toContain("Australian Consumer Law (ACL)");
     expect(result.fields.description).not.toContain("Victoria");
-    expect(result.fields.description).not.toMatch(/\r|\n/);
+    expect(result.fields.description).toMatch(/\n/);
   });
 
   test("uses the supplied mapping for local fallback categories", async () => {
@@ -835,14 +838,16 @@ ${JSON.stringify(fields)}
     expect(result.fields.product_name).toBe(
       "Women Cotton Thong Underwear - Soft Stretch Blend, Breathable Everyday Fit, Low Profile Comfort"
     );
-    expect(result.fields.description).toBe(repairedDescription);
+    expect(result.fields.description).toBe(
+      formatSegmentedDescriptionHtml(repairedDescription)
+    );
     expect(result.fields.description).toContain("<p><strong>Product Overview</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Key Features</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Why It Stands Out</strong></p>");
     expect(result.fields.description).toContain("<p><strong>Notes</strong></p>");
     expect(result.fields.description).not.toContain("<p><strong>Ideal For</strong></p>");
     expect(result.fields.description).toContain("Returns, Refunds and Replacements");
-    expect(result.fields.description).not.toMatch(/\r|\n/);
+    expect(result.fields.description).toMatch(/\n/);
   });
 
   test("uses explicit category hint to correct stale AI category IDs", async () => {
@@ -1549,7 +1554,7 @@ describe("admin upload helpers", () => {
     expect(body).toEqual({ products: [payload] });
   });
 
-  test("builds free AU rates and the lower NZ rate below 3 kg", () => {
+  test("builds free AU rates and the middle NZ rate through 2 kg", () => {
     const payload = buildAdminProductPayload({
       ...fields,
       weight: 2,
@@ -1559,10 +1564,10 @@ describe("admin upload helpers", () => {
     });
 
     expect(payload.zone_rates.act).toBe(0);
-    expect(payload.zone_rates.nz).toBe(20);
+    expect(payload.zone_rates.nz).toBe(40);
   });
 
-  test("uses volumetric weight to select the higher NZ rate", () => {
+  test("uses volumetric weight to select the over-2-kg NZ rate", () => {
     const payload = buildAdminProductPayload({
       ...fields,
       weight: 1,
@@ -1571,7 +1576,7 @@ describe("admin upload helpers", () => {
       height: 30
     });
 
-    expect(payload.zone_rates.nz).toBe(40);
+    expect(payload.zone_rates.nz).toBe(999);
   });
 
   test("maps legacy local category IDs to real Dropshipzone new category IDs", () => {
@@ -1643,6 +1648,16 @@ describe("admin upload helpers", () => {
     expect(validateDszProductFields(payload).valid).toBe(true);
   });
 
+  test("accepts description HTML split between complete top-level blocks", () => {
+    const payload = buildAdminProductPayload({
+      ...fields,
+      description: formatSegmentedDescriptionHtml(fields.description)
+    });
+
+    expect(payload.description).toMatch(/\n/);
+    expect(validateDszProductFields(payload).valid).toBe(true);
+  });
+
   test.each([2, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     "rejects invalid admin status %s",
     (status) => {
@@ -1705,7 +1720,6 @@ describe("admin upload helpers", () => {
         "Weight must be greater than 0",
         "Length, width and height must be greater than 0",
         "CBM must be greater than 0",
-        "Description must be a single line",
         "Description must not contain URLs",
         "Description must include the required ACL and delivery footer",
         "zone_rates must include all required shipping zones"

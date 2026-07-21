@@ -86,6 +86,12 @@ const ALLOWED_COLOUR_WORDS = new Set([
   "Silver",
   "Gold"
 ]);
+const COLOUR_ALIASES = new Map<string, string>([
+  ...Array.from(ALLOWED_COLOUR_WORDS, (colour) => [colour.toLowerCase(), colour] as const),
+  ["gray", "Grey"],
+  ["navy blue", "Navy"],
+  ["golden", "Gold"]
+]);
 
 function parseResearchDocument(value: unknown): ResearchDocument {
   if (
@@ -206,10 +212,11 @@ export function buildProductResearchRequest(
           type: "input_text" as const,
           text: [
             "Identify the most likely product and variant from the input and source images.",
-            "When categoryHint is non-empty, treat it as authoritative. Use images and selling points only to break ties. When categoryHint is empty, infer from the product.",
+            "When categoryHint is non-empty, treat it as authoritative. Use images and selling points only to break ties. When categoryHint is empty, infer the category from the visible product and choose from the complete mapping.",
             "Choose exactly one category ID from CATEGORY CANDIDATES.",
             "Copy PRODUCT INPUT packageWeightKg to package.weightKg exactly, and use lengthCm, widthCm, and heightCm exactly; do not estimate, change, or replace them.",
-            "Use the DSZ colour Multicolor for a multicolour product; otherwise use N/A or one to three allowed colour names separated by ' / '.",
+            "Identify colour from the product itself in the source images, not from the background, packaging, props, text, lighting cast, or accessories that are not part of the product.",
+            "Use the DSZ colour Multicolor for a product with more than three material colours; otherwise use N/A only when colour genuinely does not apply, or one to three allowed colour names separated by ' / '.",
             "Return keys identity, category, colour, package, sources, riskFlags and reviewNotes.",
             "identity requires productType, variant and matchSummary strings.",
             "category requires an integer id from CATEGORY CANDIDATES and a non-empty name.",
@@ -293,15 +300,7 @@ export function validateProductResearch(options: {
     (/\bmulticolou?r(?:ed)?\b/i.test(options.input.sellingPoints)
       ? "Multicolor"
       : document.colour);
-  const colourParts = requestedColour.split(" / ");
-  const colourValid =
-    requestedColour === "N/A" ||
-    requestedColour === "Multicolor" ||
-    (colourParts.length >= 1 &&
-      colourParts.length <= 3 &&
-      new Set(colourParts).size === colourParts.length &&
-      colourParts.every((part) => ALLOWED_COLOUR_WORDS.has(part)));
-  const colour = colourValid ? requestedColour : "N/A";
+  const colour = normalizeDszColour(requestedColour);
   if (colour === "N/A" && requestedColour !== "N/A") {
     issues.push("Colour needs review.");
   }
@@ -341,6 +340,24 @@ export function validateProductResearch(options: {
     reviewNotes: document.reviewNotes,
     issues
   };
+}
+
+export function normalizeDszColour(value: string): string {
+  const trimmed = value.trim();
+  if (/^(?:n\/?a|not applicable)$/i.test(trimmed)) return "N/A";
+  if (/^multi[ -]?colou?red?$/i.test(trimmed) || /^multi[ -]?colou?r$/i.test(trimmed)) {
+    return "Multicolor";
+  }
+
+  const rawParts = trimmed
+    .split(/\s*(?:\/|,|&|\+|\band\b)\s*/i)
+    .filter(Boolean);
+  const parts = rawParts.map((part) => COLOUR_ALIASES.get(part.toLowerCase()));
+
+  if (parts.some((part) => !part)) return "N/A";
+  const unique = Array.from(new Set(parts as string[]));
+  if (unique.length > 3) return "Multicolor";
+  return unique.length > 0 ? unique.join(" / ") : "N/A";
 }
 
 export async function generateProductResearchWithPacky(options: {

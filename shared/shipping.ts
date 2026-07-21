@@ -47,7 +47,8 @@ export function buildShippingZoneRates(
     rates[key] = 0;
   }
 
-  rates.nz = calculateBillableWeightKg(measurements) >= 3 ? 40 : 20;
+  const billableWeightKg = calculateBillableWeightKg(measurements);
+  rates.nz = billableWeightKg > 2 ? 999 : billableWeightKg > 1 ? 40 : 20;
   return rates;
 }
 

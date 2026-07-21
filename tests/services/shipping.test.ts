@@ -45,9 +45,9 @@ describe("shipping rules", () => {
     ).toBe(2);
   });
 
-  test("makes every Australian zone free and charges NZ AUD20 below 3 kg", () => {
+  test("makes every Australian zone free and charges NZ AUD20 through 1 kg", () => {
     const rates = buildShippingZoneRates({
-      actualWeightKg: 2,
+      actualWeightKg: 1,
       lengthCm: 10,
       widthCm: 10,
       heightCm: 10
@@ -57,15 +57,26 @@ describe("shipping rules", () => {
     expect(rates.nz).toBe(20);
   });
 
-  test("charges NZ AUD40 at the 3 kg boundary", () => {
+  test("charges NZ AUD40 above 1 kg through 2 kg", () => {
     const rates = buildShippingZoneRates({
-      actualWeightKg: 3,
+      actualWeightKg: 2,
       lengthCm: 10,
       widthCm: 10,
       heightCm: 10
     });
 
     expect(rates.nz).toBe(40);
+  });
+
+  test("charges NZ AUD999 above 2 kg", () => {
+    const rates = buildShippingZoneRates({
+      actualWeightKg: 2.01,
+      lengthCm: 10,
+      widthCm: 10,
+      heightCm: 10
+    });
+
+    expect(rates.nz).toBe(999);
   });
 
   test("calculates package CBM rounded to six decimals", () => {

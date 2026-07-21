@@ -201,16 +201,16 @@ Vendor RRP = Vendor Price × 2
 - Shipping rates are calculated by the server, not AI output.
 - All Australian zones: AUD 0.
 - Billable weight (kg): `MAX(actual weight, length × width × height / 5000)`.
-- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg.
+- New Zealand: AUD 20 for 0-1 kg; AUD 40 for over 1-2 kg; AUD 999 for over 2 kg.
 
 **定价示例（汇率 3.05）：**
 
 | 1688采购价 | 尺寸(cm) | 实际重量 | 计费重 | Vendor Price | Vendor RRP |
 |-----------|---------|---------|-------|------------|-----------|
-| ¥15 | 20×15×10 | 0.3kg | 0.375 | AUD 8.6 | AUD 17.2 |
-| ¥25 | 30×20×15 | 0.5kg | 1.125 | AUD 14.1 | AUD 28.2 |
-| ¥50 | 40×30×20 | 1.0kg | 2.0 | AUD 29.5 | AUD 59.0 |
-| ¥100 | 50×40×30 | 2.0kg | 3.75 | AUD 69.3 | AUD 138.6 |
+| ¥15 | 20×15×10 | 0.3kg | 0.375 | AUD 24.59 | AUD 49.18 |
+| ¥25 | 30×20×15 | 0.5kg | 1.125 | AUD 37.70 | AUD 75.40 |
+| ¥50 | 40×30×20 | 1.0kg | 3.0 | AUD 70.49 | AUD 140.98 |
+| ¥100 | 50×40×30 | 2.0kg | 7.5 | AUD 145.90 | AUD 291.80 |
 
 > ⚠️ 如果计算结果与目标值不符，请确认实际输入的计费重和汇率是否为最新。
 

@@ -127,16 +127,19 @@ export function rankCategoryEntries(
 export function formatCategoryCandidates(
   categoryMapping: string,
   categoryHint?: string,
-  fallbackText?: string
+  _fallbackText?: string
 ): string {
+  void _fallbackText;
   const entries = parseCategoryEntries(categoryMapping);
   if (entries.length === 0) {
     throw new Error("Category mapping is unavailable.");
   }
 
-  const query = categoryHint?.trim() || fallbackText?.trim() || "";
-  const ranked = rankCategoryEntries(entries, query);
-  const candidates = ranked.length > 0
+  const explicitHint = categoryHint?.trim() || "";
+  const ranked = explicitHint
+    ? rankCategoryEntries(entries, explicitHint)
+    : [];
+  const candidates = explicitHint && ranked.length > 0
     ? ranked.slice(0, 50)
     : entries;
 

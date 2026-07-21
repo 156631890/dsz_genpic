@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "vitest";
-import { reserveProductIdentity } from "../src/productIdentity";
+import { reserveEanCode, reserveProductIdentity } from "../src/productIdentity";
 
 describe("product identity reservation", () => {
   beforeEach(() => localStorage.clear());
@@ -21,6 +21,15 @@ describe("product identity reservation", () => {
 
     expect(identity.eanCode).toMatch(/^\d{10}$/);
     expect(identity.eanCode).not.toBe("1234567890");
+  });
+
+  test("can reserve a fresh EAN without consuming another SKU", () => {
+    const first = reserveProductIdentity(() => 0.123456789);
+    const secondEan = reserveEanCode(() => 0.234567891);
+    const second = reserveProductIdentity(() => 0.345678912);
+
+    expect(secondEan).not.toBe(first.eanCode);
+    expect(second.sku).toBe("Elosung10001");
   });
 
   test("fails instead of reusing an exhausted SKU range", () => {

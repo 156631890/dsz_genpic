@@ -8,9 +8,16 @@ import type {
   ProductInput
 } from "../../shared/product.js";
 import {
+  formatSegmentedDescriptionHtml,
+  SEGMENTED_DESCRIPTION_INSTRUCTION
+} from "../../shared/description.js";
+import {
   buildShippingZoneRates,
   type ShippingMeasurements
 } from "../../shared/shipping.js";
+import {
+  calculateVendorPrice as calculateSharedVendorPrice
+} from "../../shared/pricing.js";
 import { resolveMappedCategory } from "./categoryMatcher.js";
 import { generateProductCopyWithPacky } from "./productCopy.js";
 import {
@@ -106,13 +113,13 @@ const BUILT_IN_RULE_DOCUMENTS: RuleDocuments = {
     "images must be HTTPS URL strings and should include at least 5 Shopify product gallery image URLs in this order: main image, side angle, size packaging or detail, lifestyle scene 1, lifestyle scene 2.",
     "weight is in kg. length, width and height are in cm. cbm is length * width * height / 1000000.",
     "vendor_price formula: (MAX(weight, length * width * height / 8000) * 40 + 45 + purchasePriceCny) / 3.05. rrp is vendor_price * 2.",
-    "Shipping rates are calculated by the server, not the model: all Australian zones are 0; New Zealand uses max(actual weight, length * width * height / 5000), with AUD 20 below 3 kg and AUD 40 at or above 3 kg."
+    "Shipping rates are calculated by the server, not the model: all Australian zones are 0; New Zealand uses max(actual weight, length * width * height / 5000), with AUD 20 from 0 to 1 kg, AUD 40 over 1 kg up to 2 kg, and AUD 999 over 2 kg."
   ].join("\n"),
   productPrompt: [
     "Generate a pure English ecommerce title and product description for an Australian independent store.",
     "Do not invent unsupported specifications, certifications, links, logos, brand claims, materials or measurements.",
     "The title should be concise, searchable and based on visible product features plus seller selling points.",
-    "The description must be single-line HTML.",
+    "The description must use segmented HTML with every top-level <h2>, <p>, or <ul> block on its own line.",
     "Allowed HTML tags only: <h2>, <p>, <strong>, <ul>, <li>, <br />.",
     "Include Product Overview, Key Features and Notes sections when useful.",
     "Always include this fixed Returns, Refunds and Replacements and Delivery Timeframe footer:",
@@ -155,7 +162,7 @@ export function buildDszGenerationMessages(input: {
         "FIELD RULES:",
         truncate(migrateLegacyShippingSections(ruleDocuments.fieldRules), 12000),
         "PRODUCT PROMPT:",
-        truncate(ruleDocuments.productPrompt, 30000),
+        truncate(`${ruleDocuments.productPrompt}\n\n${SEGMENTED_DESCRIPTION_INSTRUCTION}`, 30000),
         "CATEGORY MAPPING:",
         truncate(ruleDocuments.categoryMapping, 20000),
         "FULL PRODUCT UPLOAD SOP:",
@@ -170,8 +177,8 @@ export function buildDszGenerationMessages(input: {
         "For product_name and description, PRODUCT PROMPT is the only writing rule source. Do not add, override, shorten or reinterpret title and HTML description rules outside PRODUCT PROMPT.",
         "When categoryHint is non-empty it is authoritative. Choose a category ID from CATEGORY MAPPING; the server canonicalises its path.",
         "Use internal JSON key product_name for the title and vendor_price for Vendor Price. The uploader maps product_name to DSZ API name and vendor_price to DSZ API price.",
-        "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must be a single line and include the fixed footer.",
-        "Shipping rates are calculated by the server, not the model: all Australian zones are 0; New Zealand uses max(actual weight, length * width * height / 5000), with AUD 20 below 3 kg and AUD 40 at or above 3 kg. Do not return shipping rates."
+        "Use categories as a string. Use status 1. Use brand_name Elosung. Use stock 1000. Use ean_code as a 10 digit string for the Supplier API. Use images from the input imageUrls. HTML description must put each top-level block on its own line and include the fixed footer.",
+        "Shipping rates are calculated by the server, not the model: all Australian zones are 0; New Zealand uses max(actual weight, length * width * height / 5000), with AUD 20 from 0 to 1 kg, AUD 40 over 1 kg up to 2 kg, and AUD 999 over 2 kg. Do not return shipping rates."
       ].join("\n")
     }
   ];
@@ -251,7 +258,7 @@ const SERVER_CALCULATED_SHIPPING_RULES = [
   "**Shipping rates are server-calculated, not AI output:**",
   "- All Australian zones: AUD 0.",
   "- Billable weight (kg): max(actual weight, length * width * height / 5000).",
-  "- New Zealand: AUD 20 below 3 kg; AUD 40 at or above 3 kg."
+  "- New Zealand: AUD 20 from 0 to 1 kg; AUD 40 over 1 kg up to 2 kg; AUD 999 over 2 kg."
 ].join("\n");
 
 function buildDszTitleDescriptionRepairMessages(input: {
@@ -270,7 +277,7 @@ function buildDszTitleDescriptionRepairMessages(input: {
       content: [
         "Regenerate only product_name and description for this product.",
         "PRODUCT PROMPT:",
-        truncate(input.ruleDocuments.productPrompt, 30000),
+        truncate(`${input.ruleDocuments.productPrompt}\n\n${SEGMENTED_DESCRIPTION_INSTRUCTION}`, 30000),
         "INPUT:",
         JSON.stringify(input.input, null, 2),
         "CURRENT PRODUCT JSON:",
@@ -583,9 +590,7 @@ export function calculateVendorPrice(input: {
   heightCm: number;
   purchasePriceCny: number;
 }): number {
-  const volumetricWeight = (input.lengthCm * input.widthCm * input.heightCm) / 8000;
-  const chargeableWeight = Math.max(input.weightKg, volumetricWeight);
-  return round((chargeableWeight * 40 + 45 + input.purchasePriceCny) / 3.05, 2);
+  return calculateSharedVendorPrice(input);
 }
 
 export function formatSku(value: number): string {
@@ -811,7 +816,7 @@ function buildFallbackDescription(input: ProductInput): string {
   return normalizeDescriptionHtml(
     [
       `<p><strong>Product Overview</strong></p><p>${escapeHtml(safeSellingPoints)}</p>`,
-      "<p><strong>Key Features</strong></p><ul><li>Uses the uploaded product images and seller provided selling points for a conservative product listing.</li><li>Highlights practical everyday value without unsupported claims or invented specifications.</li><li>Keeps the product page readable with clear feature and benefit wording.</li><li>Prepared as single-line HTML for Dropshipzone product upload review.</li></ul>",
+      "<p><strong>Key Features</strong></p><ul><li>Uses the uploaded product images and seller provided selling points for a conservative product listing.</li><li>Highlights practical everyday value without unsupported claims or invented specifications.</li><li>Keeps the product page readable with clear feature and benefit wording.</li><li>Uses segmented HTML blocks for easier review and reuse.</li></ul>",
       "<p><strong>Why It Stands Out</strong></p><p>The listing focuses on clear product identification, visible features and verified seller information so customers can quickly understand the product and its use case.</p>",
       "<p><strong>Notes</strong></p><p>Please review all generated specifications, pricing, category and images before publishing.</p>",
       FOOTER
@@ -828,10 +833,7 @@ function followsDszDescriptionPrompt(description: string): boolean {
 }
 
 function normalizeDescriptionHtml(description: string): string {
-  return String(description || "")
-    .replace(/\s*\r?\n\s*/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim();
+  return formatSegmentedDescriptionHtml(description);
 }
 
 function titleCase(value: string): string {

@@ -1,5 +1,10 @@
 import { readFile } from "node:fs/promises";
 import type { GeneratedProductCopy, ProductInput } from "../../shared/product.js";
+import {
+  formatSegmentedDescriptionHtml,
+  hasInvalidDescriptionLineBreak,
+  SEGMENTED_DESCRIPTION_INSTRUCTION
+} from "../../shared/description.js";
 import { readPackyResponses } from "./packyResponses.js";
 
 export type ProductCopyMessage =
@@ -103,11 +108,14 @@ export function parseProductCopy(raw: string): GeneratedProductCopy {
     .map((line) => line.replace(/^ +| +$/g, ""))
     .filter((line) => line.length > 0);
 
-  if (lines.length !== 2) {
-    throw new Error("Product copy response must contain exactly two non-empty lines.");
+  if (lines.length < 2) {
+    throw new Error("Product copy response must contain a title and description HTML.");
   }
 
-  return { title: lines[0], description: lines[1] };
+  return {
+    title: lines[0],
+    description: formatSegmentedDescriptionHtml(lines.slice(1).join("\n"))
+  };
 }
 
 export function validateProductCopy(
@@ -128,14 +136,18 @@ export function validateProductCopy(
     errors.push("Title must not contain Markdown.");
   }
 
-  if (/[\r\n\t]/.test(copy.description)) {
-    errors.push("Description must be one line without tabs.");
+  if (/\t/.test(copy.description)) {
+    errors.push("Description must not contain tabs.");
+  }
+  if (hasInvalidDescriptionLineBreak(copy.description)) {
+    errors.push("Description line breaks must separate top-level HTML blocks.");
   }
 
   const tags = copy.description.match(/<[^>]*>/g) || [];
   const textNodes = copy.description.replace(/<[^>]*>/g, " ");
   const decodedDescription = decodeHtmlCharacterReferences(copy.description);
   const decodedTextNodes = decodeHtmlCharacterReferences(textNodes);
+  const textWithoutSegmentBreaks = decodedTextNodes.value.replace(/\n/g, "");
 
   if (containsUrlOrUri(decodedTextNodes.value)) {
     errors.push("Description must not contain a URL.");
@@ -163,7 +175,7 @@ export function validateProductCopy(
   if (
     !decodedDescription.valid ||
     !decodedTextNodes.valid ||
-    !/^[\x20-\x7E\u2013]*$/.test(decodedTextNodes.value) ||
+    !/^[\x20-\x7E\u2013]*$/.test(textWithoutSegmentBreaks) ||
     /[?*<>]/.test(decodedTextNodes.value)
   ) {
     errors.push("Description text contains a forbidden character.");
@@ -224,7 +236,7 @@ export async function generateProductCopyWithPacky(
   ];
   const requestBody = JSON.stringify({
     model: env.PACKY_TEXT_MODEL || "gpt-5.6-sol",
-    instructions: systemPrompt,
+    instructions: `${systemPrompt}\n\n${SEGMENTED_DESCRIPTION_INSTRUCTION}`,
     input: [{
       role: "user",
       content
