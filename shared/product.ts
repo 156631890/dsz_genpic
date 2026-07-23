@@ -33,6 +33,26 @@ export interface ProductInput {
   heightCm?: number;
 }
 
+export interface NewtonImportedProduct {
+  offerId: string;
+  sourceUrl: string;
+  title: string;
+  categoryHint: string;
+  sellingPoints: string;
+  purchasePriceCny?: number;
+  colour?: string;
+  packageWeightKg?: number;
+  lengthCm?: number;
+  widthCm?: number;
+  heightCm?: number;
+  imageUrls: string[];
+}
+
+export type NewtonImportTaskStatus =
+  | { status: "pending" }
+  | { status: "complete"; product: NewtonImportedProduct }
+  | { status: "failed"; error: string };
+
 export interface GeneratedProductCopy {
   title: string;
   description: string;

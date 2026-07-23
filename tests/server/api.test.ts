@@ -1274,6 +1274,99 @@ describe("API app", () => {
     ]);
   });
 
+  test("creates a Newton import task from a canonicalized 1688 product URL", async () => {
+    const createNewtonImportTask = vi.fn(async () => ({ taskId: "task_123" }));
+    const response = await request(createApp({ createNewtonImportTask }))
+      .post("/api/newton/import-tasks")
+      .send({
+        sourceUrl:
+          "https://m.1688.com/offer/972942337202.html?spm=private-tracking"
+      })
+      .expect(202);
+
+    expect(response.body).toEqual({ taskId: "task_123" });
+    expect(createNewtonImportTask).toHaveBeenCalledWith(
+      "https://detail.1688.com/offer/972942337202.html"
+    );
+  });
+
+  test.each([
+    [undefined, "请输入有效的 1688 商品链接"],
+    ["https://example.com/offer/972942337202.html", "请输入有效的 1688 商品链接"],
+    ["https://detail.1688.com/", "链接中未找到 1688 商品 ID"]
+  ])("rejects invalid Newton product URL %j", async (sourceUrl, error) => {
+    const createNewtonImportTask = vi.fn();
+    const response = await request(createApp({ createNewtonImportTask }))
+      .post("/api/newton/import-tasks")
+      .send({ sourceUrl })
+      .expect(400);
+
+    expect(response.body).toEqual({ error });
+    expect(createNewtonImportTask).not.toHaveBeenCalled();
+  });
+
+  test("returns public Newton task status without provider internals", async () => {
+    const product = {
+      offerId: "972942337202",
+      sourceUrl: "https://detail.1688.com/offer/972942337202.html",
+      title: "秋冬防风眼镜针织毛线帽",
+      categoryHint: "Goggle beanie",
+      sellingPoints: "罗纹针织，带圆形护目镜",
+      purchasePriceCny: 9,
+      imageUrls: ["https://cbu01.alicdn.com/img/ibank/example.jpg"]
+    };
+    const getNewtonImportTask = vi.fn(async () => ({
+      status: "complete" as const,
+      product
+    }));
+    const response = await request(createApp({ getNewtonImportTask }))
+      .get("/api/newton/import-tasks/task_123")
+      .expect(200);
+
+    expect(response.body).toEqual({ status: "complete", product });
+    expect(getNewtonImportTask).toHaveBeenCalledWith("task_123");
+  });
+
+  test("proxies only allowlisted Newton product images", async () => {
+    const downloadNewtonImage = vi.fn(async () => ({
+      buffer: pngImage,
+      contentType: "image/png" as const
+    }));
+    const app = createApp({ downloadNewtonImage });
+
+    const response = await request(app)
+      .post("/api/newton/import-image")
+      .send({
+        imageUrl: "https://cbu01.alicdn.com/img/ibank/example.png"
+      })
+      .expect(200);
+    expect(response.headers["content-type"]).toMatch(/^image\/png/);
+    expect(response.body).toEqual(pngImage);
+
+    await request(app)
+      .post("/api/newton/import-image")
+      .send({ imageUrl: "https://127.0.0.1/private.png" })
+      .expect(400, { error: "牛顿商品图片链接无效" });
+    expect(downloadNewtonImage).toHaveBeenCalledTimes(1);
+  });
+
+  test("does not expose injected Newton provider errors", async () => {
+    const privateMessage = "access-token=C:\\private\\newton-secret";
+    const response = await request(createApp({
+      createNewtonImportTask: async () => {
+        throw new Error(privateMessage);
+      }
+    }))
+      .post("/api/newton/import-tasks")
+      .send({
+        sourceUrl: "https://detail.1688.com/offer/972942337202.html"
+      })
+      .expect(502);
+
+    expect(response.body).toEqual({ error: "牛顿云端请求失败" });
+    expect(response.text).not.toContain(privateMessage);
+  });
+
   test("returns mock DSZ upload request when token is not configured", async () => {
     const app = createApp({
       env: {

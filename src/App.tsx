@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  CloudDownload,
   ExternalLink,
   FolderOpen,
   History,
@@ -17,6 +18,7 @@ import {
   type AmazonMarketAnalysis,
   type AmazonMarketAnalysisInput,
   type DszProductFields,
+  type NewtonImportedProduct,
   type ProductImageRole,
   type ProductIdentity,
   type ProductInput,
@@ -25,7 +27,9 @@ import {
 import { buildShippingZoneRates, calculateBillableWeightKg, calculatePackageCbm } from "../shared/shipping";
 import { calculateVendorPrice, calculateVendorRrp } from "../shared/pricing";
 import {
+  downloadNewtonProductImages,
   requestAmazonMarketAnalysis,
+  requestNewtonProductImport,
   requestProductFields,
   requestProductImageRole,
   requestServiceHealth,
@@ -788,6 +792,11 @@ function ProductWorkspace({
   findDuplicate
 }: ProductWorkspaceProps) {
   const [restoredSnapshot] = useState(() => loadProductWorkspace(jobId));
+  const [newtonSourceUrl, setNewtonSourceUrl] = useState("");
+  const [newtonTask, setNewtonTask] = useState<TaskState>(idleTask);
+  const [newtonMessage, setNewtonMessage] = useState(
+    "粘贴 1688 商品链接，自动读取商品资料"
+  );
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sourceFilesReady, setSourceFilesReady] = useState(
     !restoredSnapshot?.sourceFileCount
@@ -849,6 +858,7 @@ function ProductWorkspace({
   const uploadAttemptRef = useRef(0);
   const uploadControllerRef = useRef<AbortController | null>(null);
   const sourceSelectionIdRef = useRef(0);
+  const newtonControllerRef = useRef<AbortController | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const initialImportAppliedRef = useRef(false);
 
@@ -952,6 +962,7 @@ function ProductWorkspace({
     marketControllerRef.current = null;
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
+    newtonControllerRef.current?.abort();
   }, []);
 
   useEffect(() => {
@@ -1225,6 +1236,119 @@ function ProductWorkspace({
     });
   }
 
+  async function importFromNewton() {
+    const sourceUrl = newtonSourceUrl.trim();
+    if (!sourceUrl) {
+      setNewtonTask({ status: "error", error: "请输入 1688 商品链接" });
+      setNewtonMessage("请输入 1688 商品链接");
+      return;
+    }
+
+    newtonControllerRef.current?.abort();
+    const controller = new AbortController();
+    newtonControllerRef.current = controller;
+    setNewtonTask({ status: "loading", error: "" });
+    setNewtonMessage("牛顿正在读取 1688 商品详情");
+
+    try {
+      const product = await requestNewtonProductImport(sourceUrl, controller.signal);
+      setNewtonMessage("商品资料已读取，正在载入原始图片");
+      const importedFiles = await downloadNewtonProductImages(
+        product,
+        controller.signal
+      );
+      if (controller.signal.aborted) return;
+
+      await applyNewtonProduct(product, importedFiles);
+      setNewtonTask({ status: "success", error: "" });
+      setNewtonMessage(importedFiles.length > 0
+        ? `已导入商品资料和 ${importedFiles.length} 张原图`
+        : "商品资料已导入；未取得有效原图，请手动上传");
+      setMessage("牛顿商品资料已导入，请复核后开始 AI 生成");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      const safeMessage = errorMessage(error, "牛顿商品导入失败");
+      setNewtonTask({ status: "error", error: safeMessage });
+      setNewtonMessage(safeMessage);
+    } finally {
+      if (newtonControllerRef.current === controller) {
+        newtonControllerRef.current = null;
+      }
+    }
+  }
+
+  async function applyNewtonProduct(
+    product: NewtonImportedProduct,
+    importedFiles: File[]
+  ) {
+    await selectSourceFiles(importedFiles);
+    setCopyTask(idleTask);
+    setImageRoles(initialRoleStates());
+    setResearchEvidence(null);
+    setResearchIssues([]);
+    setMarketTask(idleTask);
+    setMarketAnalysis(null);
+    setSellingPoints(
+      `1688 商品标题：${product.title}\n${product.sellingPoints}`.trim()
+    );
+    setOptionalInputs({
+      categoryHint: product.categoryHint,
+      purchasePriceCny: product.purchasePriceCny === undefined
+        ? ""
+        : String(product.purchasePriceCny)
+    });
+
+    manualFieldsRef.current.clear();
+    const importedFieldValues: Partial<Pick<
+      DszProductFields,
+      "colour" | "weight" | "length" | "width" | "height"
+    >> = {
+      ...(product.colour ? { colour: product.colour } : {}),
+      ...(product.packageWeightKg ? { weight: product.packageWeightKg } : {}),
+      ...(product.lengthCm ? { length: product.lengthCm } : {}),
+      ...(product.widthCm ? { width: product.widthCm } : {}),
+      ...(product.heightCm ? { height: product.heightCm } : {})
+    };
+    for (const key of Object.keys(importedFieldValues) as Array<
+      keyof typeof importedFieldValues
+    >) {
+      manualFieldsRef.current.add(key);
+      fieldEditVersionsRef.current[key] += 1;
+    }
+
+    const weight = product.packageWeightKg || 0;
+    const length = product.lengthCm || 0;
+    const width = product.widthCm || 0;
+    const height = product.heightCm || 0;
+    setFields((current) => recalculatePrices({
+      ...current,
+      category: 0,
+      categories: "",
+      categoryName: "",
+      product_name: "",
+      sku: "",
+      ean_code: "",
+      weight,
+      length,
+      width,
+      height,
+      cbm: calculatePackageCbm(length, width, height),
+      colour: product.colour || "",
+      description: "",
+      vendor_price: 0,
+      rrp: 0,
+      zone_rates: buildShippingZoneRates({
+        actualWeightKg: weight,
+        lengthCm: length,
+        widthCm: width,
+        heightCm: height
+      }),
+      images: [],
+      risk_flags: [],
+      review_notes: []
+    }, product.purchasePriceCny, manualFieldsRef.current));
+  }
+
   function productInput(imageUrls: string[], fieldSnapshot: DszProductFields): ProductInput {
     return {
       sellingPoints: sellingPoints.trim(),
@@ -1494,6 +1618,8 @@ function ProductWorkspace({
     marketOperationIdRef.current += 1;
     marketControllerRef.current?.abort();
     marketControllerRef.current = null;
+    newtonControllerRef.current?.abort();
+    newtonControllerRef.current = null;
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
     uploadControllerRef.current = null;
@@ -1505,6 +1631,9 @@ function ProductWorkspace({
       : current);
     setMarketTask((current) => current.status === "loading"
       ? { status: "error", error: "市场分析已取消" }
+      : current);
+    setNewtonTask((current) => current.status === "loading"
+      ? { status: "error", error: "任务已取消" }
       : current);
     setImageRoles((current) => Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [
       role,
@@ -1625,6 +1754,57 @@ function ProductWorkspace({
             <span className="section-index">01</span>
             <div><h2 id={`${domIdPrefix}source-heading`}>Source</h2><p>生成依据</p></div>
           </div>
+          <section
+            className="newton-import"
+            aria-labelledby={`${domIdPrefix}newton-import-heading`}
+          >
+            <div className="newton-import-heading">
+              <CloudDownload size={16} aria-hidden="true" />
+              <h3 id={`${domIdPrefix}newton-import-heading`}>牛顿云端导入</h3>
+            </div>
+            <label>
+              1688 商品链接
+              <input
+                aria-label="1688 商品链接"
+                type="url"
+                value={newtonSourceUrl}
+                placeholder="https://detail.1688.com/offer/..."
+                onChange={(event) => {
+                  setNewtonSourceUrl(event.target.value);
+                  if (newtonTask.status === "error") {
+                    setNewtonTask(idleTask);
+                    setNewtonMessage("粘贴 1688 商品链接，自动读取商品资料");
+                  }
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    void importFromNewton();
+                  }
+                }}
+              />
+            </label>
+            <button
+              className="newton-import-button"
+              type="button"
+              onClick={() => void importFromNewton()}
+              disabled={newtonTask.status === "loading"}
+            >
+              {newtonTask.status === "loading"
+                ? <Loader2 className="spin" size={15} />
+                : <CloudDownload size={15} />}
+              {newtonTask.status === "loading" ? "正在导入" : "牛顿导入"}
+            </button>
+            <p
+              className={`newton-import-status status-${newtonTask.status}`}
+              role={newtonTask.status === "error"
+                ? "alert"
+                : newtonTask.status === "idle" ? undefined : "status"}
+              aria-live="polite"
+            >
+              {newtonMessage}
+            </p>
+          </section>
           <label className="file-picker">
             <span><Upload size={17} aria-hidden="true" /> 原始产品图片</span>
             <input

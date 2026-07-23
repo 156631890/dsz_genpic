@@ -19,6 +19,14 @@ import {
   resolvePackyImageConfig
 } from "./services/packyImages.js";
 import { generateProductCopyWithPacky } from "./services/productCopy.js";
+import {
+  NewtonCloudError,
+  createNewtonImportTask,
+  downloadNewtonImage,
+  getNewtonImportTask,
+  normalize1688ProductUrl,
+  validateNewtonImageUrl
+} from "./services/newtonCloud.js";
 import type { ProductResearchImage } from "./services/productResearch.js";
 import {
   analyzeAmazonAuMarket,
@@ -34,7 +42,8 @@ import {
   type ProductImageRole,
   type ProductGenerationResult,
   type ProductIdentity,
-  type ProductInput
+  type ProductInput,
+  type NewtonImportTaskStatus
 } from "../shared/product.js";
 
 export const MAX_SOURCE_IMAGES = 4;
@@ -76,6 +85,14 @@ interface SafeGenerationError {
 
 export interface AppDependencies {
   env?: Record<string, string | undefined>;
+  createNewtonImportTask?: (sourceUrl: string) => Promise<{ taskId: string }>;
+  getNewtonImportTask?: (taskId: string) => Promise<NewtonImportTaskStatus>;
+  downloadNewtonImage?: (
+    imageUrl: string
+  ) => Promise<{
+    buffer: Buffer;
+    contentType: "image/jpeg" | "image/png" | "image/webp";
+  }>;
   uploadImages?: (files: Express.Multer.File[]) => Promise<{ imageUrls: string[] }>;
   generateProductFields?: (input: {
     productInput: ProductInput;
@@ -166,6 +183,62 @@ export function createApp(dependencies: AppDependencies = {}) {
       adminBaseUrl: adminConfig.baseUrl,
       adminMockMode: adminConfig.mockMode
     });
+  });
+
+  app.post("/api/newton/import-tasks", async (req, res) => {
+    try {
+      const requestBody: unknown = req.body;
+      const normalized = normalize1688ProductUrl(
+        isRecord(requestBody) ? requestBody.sourceUrl : undefined
+      );
+      const result = dependencies.createNewtonImportTask
+        ? await dependencies.createNewtonImportTask(normalized.sourceUrl)
+        : await createNewtonImportTask({
+            sourceUrl: normalized.sourceUrl,
+            env
+          });
+
+      res.status(202).json(result);
+    } catch (error) {
+      sendNewtonError(res, error);
+    }
+  });
+
+  app.get("/api/newton/import-tasks/:taskId", async (req, res) => {
+    try {
+      const taskId = req.params.taskId;
+      const result = dependencies.getNewtonImportTask
+        ? await dependencies.getNewtonImportTask(taskId)
+        : await getNewtonImportTask({ taskId, env });
+
+      res.json(result);
+    } catch (error) {
+      sendNewtonError(res, error);
+    }
+  });
+
+  app.post("/api/newton/import-image", async (req, res) => {
+    try {
+      const requestBody: unknown = req.body;
+      const imageUrl = validateNewtonImageUrl(
+        isRecord(requestBody) ? requestBody.imageUrl : undefined
+      );
+      const result = dependencies.downloadNewtonImage
+        ? await dependencies.downloadNewtonImage(imageUrl)
+        : await downloadNewtonImage({ imageUrl });
+
+      res
+        .status(200)
+        .set({
+          "Content-Type": result.contentType,
+          "Content-Length": String(result.buffer.length),
+          "Cache-Control": "private, max-age=300",
+          "X-Content-Type-Options": "nosniff"
+        })
+        .send(result.buffer);
+    } catch (error) {
+      sendNewtonError(res, error);
+    }
   });
 
   app.post("/api/generate-product-copy", async (req, res) => {
@@ -521,6 +594,14 @@ export function createApp(dependencies: AppDependencies = {}) {
 
 function sendSafeError(res: express.Response) {
   res.status(500).json({ error: "Internal server error" });
+}
+
+function sendNewtonError(res: express.Response, error: unknown) {
+  if (error instanceof NewtonCloudError) {
+    res.status(error.status).json({ error: error.safeMessage });
+    return;
+  }
+  res.status(502).json({ error: "牛顿云端请求失败" });
 }
 
 class ProductFieldRequestError extends Error {}

@@ -6,6 +6,8 @@ import type {
   ProductImageRole,
   ProductInput,
   DszProductFields,
+  NewtonImportedProduct,
+  NewtonImportTaskStatus,
   ProductGenerationResult,
   ProductIdentity,
   ProductResearchEvidence
@@ -13,6 +15,9 @@ import type {
 import { AU_ZONE_KEYS } from "../shared/shipping";
 
 const DSZ_ZONE_KEYS = [...AU_ZONE_KEYS, "nz"] as const;
+const NEWTON_IMPORT_POLL_INTERVAL_MS = 3_000;
+const NEWTON_IMPORT_MAX_POLLS = 120;
+const MAX_IMPORTED_SOURCE_BYTES = 4_000_000;
 
 export interface ServiceHealth {
   textConfigured: boolean;
@@ -142,6 +147,97 @@ export async function uploadProductFields(
   }, "上传失败");
 }
 
+export async function requestNewtonProductImport(
+  sourceUrl: string,
+  signal?: AbortSignal
+): Promise<NewtonImportedProduct> {
+  const created = await requestJson("/api/newton/import-tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sourceUrl }),
+    signal
+  }, "牛顿商品导入失败");
+
+  if (!isRecord(created) || !isSafeTaskId(created.taskId)) {
+    throw new Error("牛顿商品导入失败");
+  }
+
+  for (let poll = 0; poll < NEWTON_IMPORT_MAX_POLLS; poll += 1) {
+    const data = await requestJson(
+      `/api/newton/import-tasks/${encodeURIComponent(created.taskId)}`,
+      { method: "GET", signal },
+      "牛顿商品导入失败"
+    );
+    const status = parseNewtonImportTaskStatus(data);
+
+    if (status.status === "complete") return status.product;
+    if (status.status === "failed") throw new Error(status.error);
+    await abortableDelay(NEWTON_IMPORT_POLL_INTERVAL_MS, signal);
+  }
+
+  throw new Error("牛顿商品导入超时，请稍后重试");
+}
+
+export async function downloadNewtonProductImages(
+  product: Pick<NewtonImportedProduct, "offerId" | "imageUrls">,
+  signal?: AbortSignal
+): Promise<File[]> {
+  const downloads = await Promise.allSettled(
+    product.imageUrls.slice(0, 4).map(async (imageUrl, index) => {
+      const response = await fetch("/api/newton/import-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageUrl }),
+        signal
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        let data: unknown;
+        try {
+          data = text ? JSON.parse(text) : undefined;
+        } catch {
+          data = undefined;
+        }
+        throw new Error(responseError(data, "牛顿商品图片下载失败"));
+      }
+
+      const contentType = response.headers.get("content-type")
+        ?.split(";")[0]
+        .trim()
+        .toLowerCase();
+      if (!contentType || !["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
+        throw new Error("牛顿商品图片下载失败");
+      }
+
+      const blob = await response.blob();
+      if (blob.size === 0 || blob.size > MAX_IMPORTED_SOURCE_BYTES) {
+        throw new Error("牛顿商品图片下载失败");
+      }
+      const extension = contentType === "image/jpeg"
+        ? "jpg"
+        : contentType === "image/png" ? "png" : "webp";
+      return new File(
+        [blob],
+        `1688-${product.offerId}-${index + 1}.${extension}`,
+        { type: contentType }
+      );
+    })
+  );
+
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+
+  const files: File[] = [];
+  let totalBytes = 0;
+  for (const download of downloads) {
+    if (download.status !== "fulfilled") continue;
+    if (totalBytes + download.value.size > MAX_IMPORTED_SOURCE_BYTES) continue;
+    files.push(download.value);
+    totalBytes += download.value.size;
+  }
+  return files;
+}
+
 async function requestJson(
   url: string,
   init: RequestInit,
@@ -169,6 +265,54 @@ async function requestJson(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parseNewtonImportTaskStatus(value: unknown): NewtonImportTaskStatus {
+  if (!isRecord(value)) throw new Error("牛顿商品导入失败");
+  if (value.status === "pending") return { status: "pending" };
+  if (
+    value.status === "failed" &&
+    isNonemptyString(value.error) &&
+    value.error.length <= 500
+  ) {
+    return { status: "failed", error: value.error };
+  }
+  if (value.status === "complete" && isNewtonImportedProduct(value.product)) {
+    return { status: "complete", product: value.product };
+  }
+  throw new Error("牛顿商品导入失败");
+}
+
+function isNewtonImportedProduct(value: unknown): value is NewtonImportedProduct {
+  if (!isRecord(value)) return false;
+  const optionalNumbers = [
+    "purchasePriceCny",
+    "packageWeightKg",
+    "lengthCm",
+    "widthCm",
+    "heightCm"
+  ];
+  return (
+    isSafeTaskId(value.offerId) &&
+    [value.sourceUrl, value.title, value.categoryHint, value.sellingPoints]
+      .every(isNonemptyString) &&
+    (value.colour === undefined || isNonemptyString(value.colour)) &&
+    optionalNumbers.every((key) =>
+      value[key] === undefined ||
+      (
+        typeof value[key] === "number" &&
+        Number.isFinite(value[key]) &&
+        Number(value[key]) > 0
+      )
+    ) &&
+    Array.isArray(value.imageUrls) &&
+    value.imageUrls.length <= 4 &&
+    value.imageUrls.every((url) => typeof url === "string" && isHttpsUrl(url))
+  );
+}
+
+function isSafeTaskId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9_-]{1,200}$/.test(value);
 }
 
 function isProductGenerationResult(
@@ -392,4 +536,23 @@ function isHttpsUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException("Aborted", "AbortError"));
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

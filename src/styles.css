@@ -258,6 +258,36 @@ input:hover, textarea:hover, select:hover { border-color: #aaa5ad; }
 input:focus, textarea:focus, select:focus { border-color: var(--violet); box-shadow: 0 0 0 3px rgba(93, 63, 98, .1); outline: 0; }
 input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 
+.newton-import {
+  margin-bottom: 18px;
+  border: 1px solid #d7cbd9;
+  border-radius: 8px 3px 8px 3px;
+  padding: 14px;
+  background: var(--violet-wash);
+}
+.newton-import-heading { display: flex; align-items: center; gap: 7px; margin-bottom: 12px; color: var(--violet); }
+.newton-import-heading h3 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 700; }
+.newton-import label { margin-bottom: 9px; }
+.newton-import input { background: rgba(255, 255, 255, .92); font-size: 12px; }
+.newton-import-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--violet);
+  border-radius: 5px;
+  background: #fff;
+  color: var(--violet);
+  font-size: 12px;
+  font-weight: 750;
+}
+.newton-import-button:hover:not(:disabled) { background: var(--violet); color: #fff; }
+.newton-import-status { min-height: 16px; margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.newton-import-status.status-error { color: var(--error); }
+.newton-import-status.status-success { color: var(--success); }
+
 .file-picker {
   border: 1px dashed #aaa4ab;
   border-radius: 9px 3px 9px 3px;

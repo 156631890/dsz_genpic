@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import App from "../src/App";
 import {
+  downloadNewtonProductImages,
+  requestNewtonProductImport,
   requestProductCopy,
   requestProductImageRole,
   uploadProductFields,
@@ -435,6 +437,59 @@ function roleFromRequest(init?: RequestInit): ProductImageRole {
 }
 
 describe("browser product workflow helpers", () => {
+  test("polls a Newton import task and validates the completed product", async () => {
+    const product = {
+      offerId: "972942337202",
+      sourceUrl: "https://detail.1688.com/offer/972942337202.html",
+      title: "秋冬防风眼镜针织毛线帽",
+      categoryHint: "Goggle beanie",
+      sellingPoints: "罗纹针织\n带圆形护目镜",
+      purchasePriceCny: 9,
+      imageUrls: ["https://cbu01.alicdn.com/img/ibank/example.png"]
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ taskId: "task_123" }))
+      .mockResolvedValueOnce(response({ status: "complete", product }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(requestNewtonProductImport(product.sourceUrl))
+      .resolves.toEqual(product);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/newton/import-tasks",
+      expect.objectContaining({ method: "POST" })
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/newton/import-tasks/task_123",
+      expect.objectContaining({ method: "GET" })
+    );
+  });
+
+  test("downloads valid Newton images and ignores individual failures", async () => {
+    const png = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+    ]);
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(new Response(png, {
+        status: 200,
+        headers: { "Content-Type": "image/png" }
+      }))
+      .mockResolvedValueOnce(response({ error: "missing" }, 502)));
+
+    const files = await downloadNewtonProductImages({
+      offerId: "972942337202",
+      imageUrls: [
+        "https://cbu01.alicdn.com/one.png",
+        "https://cbu01.alicdn.com/two.png"
+      ]
+    });
+    expect(files).toHaveLength(1);
+    expect(files[0].name).toBe("1688-972942337202-1.png");
+    expect(files[0].type).toBe("image/png");
+    expect(files[0].size).toBeGreaterThan(0);
+  });
+
   test("uses stable errors when failed responses are non-JSON or empty", async () => {
     vi.stubGlobal("fetch", vi.fn()
       .mockResolvedValueOnce(new Response("not json", { status: 502 }))
@@ -494,6 +549,85 @@ describe("browser product workflow helpers", () => {
 
     await expect(uploadProductFields({} as never))
       .rejects.toThrow("SKU is invalid；Five images are required");
+  });
+});
+
+describe("Newton product import workflow", () => {
+  test("imports verified facts and source images into a clean product draft", async () => {
+    const user = userEvent.setup();
+    const product = {
+      offerId: "972942337202",
+      sourceUrl: "https://detail.1688.com/offer/972942337202.html",
+      title: "秋冬防风眼镜针织毛线帽",
+      categoryHint: "Goggle beanie",
+      sellingPoints: "罗纹针织\n带圆形护目镜\n多色可选",
+      purchasePriceCny: 9,
+      colour: "Black / Red",
+      packageWeightKg: 0.2,
+      lengthCm: 24,
+      widthCm: 20,
+      heightCm: 5,
+      imageUrls: ["https://cbu01.alicdn.com/img/ibank/example.png"]
+    };
+    const png = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+    ]);
+    vi.stubGlobal("fetch", appFetch(async (url) => {
+      if (url === "/api/newton/import-tasks") {
+        return response({ taskId: "task_123" }, 202);
+      }
+      if (url === "/api/newton/import-tasks/task_123") {
+        return response({ status: "complete", product });
+      }
+      if (url === "/api/newton/import-image") {
+        return new Response(png, {
+          status: 200,
+          headers: { "Content-Type": "image/png" }
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await user.type(screen.getByLabelText("1688 商品链接"), product.sourceUrl);
+    await user.click(screen.getByRole("button", { name: "牛顿导入" }));
+
+    expect(await screen.findByText("已导入商品资料和 1 张原图")).toBeVisible();
+    expect(screen.getByLabelText("卖点")).toHaveValue(
+      `1688 商品标题：${product.title}\n${product.sellingPoints}`
+    );
+    expect(screen.getByLabelText("类目提示")).toHaveValue(product.categoryHint);
+    expect(screen.getByLabelText("采购价 CNY")).toHaveValue("9");
+    expect(screen.getByLabelText("Colour")).toHaveValue(product.colour);
+    expect(screen.getByLabelText("Package weight kg")).toHaveValue("0.2");
+    expect(screen.getByLabelText("Package length cm")).toHaveValue("24");
+    expect(screen.getByLabelText("Package width cm")).toHaveValue("20");
+    expect(screen.getByLabelText("Package height cm")).toHaveValue("5");
+    expect(screen.getByLabelText("已选图片"))
+      .toHaveTextContent("1688-972942337202-1.png");
+    expect(screen.getByLabelText("Product Name")).toHaveValue("");
+    expect(screen.getByLabelText("SKU")).toHaveValue("");
+  });
+
+  test("shows a safe inline error when Newton import fails", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", appFetch(async (url) => {
+      if (url === "/api/newton/import-tasks") {
+        return response({ error: "牛顿云端尚未配置" }, 503);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await user.type(
+      screen.getByLabelText("1688 商品链接"),
+      "https://detail.1688.com/offer/972942337202.html"
+    );
+    await user.click(screen.getByRole("button", { name: "牛顿导入" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "牛顿云端尚未配置"
+    );
   });
 });
 
