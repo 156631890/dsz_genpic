@@ -899,10 +899,10 @@ function ProductWorkspace({
     if (copyTask.status === "success" && completedImageCount === 5) return "AI 生成任务成功";
     return `等待生成：图片 ${completedImageCount}/5`;
   }, [completedImageCount, copyTask.status, failedImageCount, hasStaleOutput, hasTaskError, workflowLoading]);
-  const isReadyToSubmit = copyTask.status === "success" && !workflowLoading && !hasTaskError &&
-    PRODUCT_IMAGE_ROLES.every((role) => imageRoles[role].status === "success" &&
-      isHttpsUrl(imageRoles[role].imageUrl)) &&
-    generatedImages.length === 5 && hasRequiredDszFields(fields);
+  const isReadyToSubmit = !workflowLoading &&
+    generatedImages.length > 0 &&
+    generatedImages.every(isHttpsUrl) &&
+    hasRequiredDszFields(fields);
   const hasTaskActivity = copyTask.status !== "idle" || PRODUCT_IMAGE_ROLES.some(
     (role) => imageRoles[role].status !== "idle"
   );
@@ -917,15 +917,14 @@ function ProductWorkspace({
     widthCm: fields.width,
     heightCm: fields.height
   });
-  const submitReason = submissionReason(fields, imageRoles, copyTask, workflowLoading, hasTaskError);
+  const submitReason = submissionReason(fields, imageRoles, workflowLoading);
   const jobPhase: Status = uploadSourceTask.status === "loading" || workflowLoading || uploadStatus === "loading"
     ? "loading"
-    : hasTaskError || uploadStatus === "error"
+    : uploadStatus === "error"
       ? "error"
-      : isReadyToSubmit || uploadStatus === "success" ||
-          (copyTask.status === "success" && completedImageCount === PRODUCT_IMAGE_ROLES.length)
+      : isReadyToSubmit || uploadStatus === "success"
         ? "success"
-        : hasStaleOutput ? "stale" : "idle";
+        : hasTaskError ? "error" : hasStaleOutput ? "stale" : "idle";
 
   useEffect(() => {
     onSummaryChange(jobId, {
@@ -2002,7 +2001,7 @@ function ProductWorkspace({
         <div>
           <span className={isReadyToSubmit ? "readiness-dot ready" : "readiness-dot"} aria-hidden="true" />
           <p><strong>{isReadyToSubmit ? "Ready for review" : "Not ready for review"}</strong>
-            <span>{isReadyToSubmit ? "All required fields and five roles are complete" : submitReason}</span></p>
+            <span>{isReadyToSubmit ? "Required fields and an uploadable image are ready" : submitReason}</span></p>
         </div>
         <button className="primary-submit" onClick={uploadProduct}
           disabled={!isReadyToSubmit || uploadStatus === "loading"}
@@ -2174,20 +2173,13 @@ function statusLabel(status: Status): string {
 function submissionReason(
   fields: DszProductFields,
   imageRoles: Record<ProductImageRole, ImageRoleState>,
-  copyTask: TaskState,
-  workflowLoading: boolean,
-  hasTaskError: boolean
+  workflowLoading: boolean
 ): string {
   if (workflowLoading) return "AI generation is still in progress";
-  if (hasTaskError) return "Resolve the failed generation task before submitting";
-  if (copyTask.status === "stale" || PRODUCT_IMAGE_ROLES.some((role) => imageRoles[role].status === "stale")) {
-    return "Regenerate stale AI content before submitting";
-  }
-  if (copyTask.status !== "success") return "Generate and review the title and description";
-  const completeImages = PRODUCT_IMAGE_ROLES.filter((role) =>
-    imageRoles[role].status === "success" && isHttpsUrl(imageRoles[role].imageUrl)
+  const uploadableImages = PRODUCT_IMAGE_ROLES.filter((role) =>
+    isHttpsUrl(imageRoles[role].imageUrl)
   ).length;
-  if (completeImages !== 5) return `Complete all five image roles (${completeImages}/5 ready)`;
+  if (uploadableImages === 0) return "Add at least one HTTPS product image";
   if (!hasRequiredDszFields(fields)) return "Complete the required product, package, and price fields";
   return "Ready to validate and submit";
 }
@@ -2211,6 +2203,7 @@ function hasRequiredDszFields(fields: DszProductFields): boolean {
     fields.categories.trim() &&
     fields.ean_code.trim() &&
     fields.brand_name.trim() &&
+    fields.colour.trim() &&
     fields.description.trim() &&
     [0, 1].includes(fields.status) &&
     fields.stock >= 0 &&

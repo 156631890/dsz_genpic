@@ -926,6 +926,46 @@ describe("App independent AI workflow", () => {
       .toHaveTextContent("Needs attention");
   });
 
+  test("allows upload with unresolved AI review issues once the payload is complete", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal("fetch", appFetch(async (url, init) => {
+      if (url === "/api/generate-product-copy") {
+        return response({
+          result: {
+            fields: { ...completeFields, colour: "N/A" },
+            source: "ai",
+            evidence: productEvidence,
+            issues: ["Colour needs review."]
+          }
+        });
+      }
+      if (url === "/api/generate-product-image-role") {
+        const role = roleFromRequest(init);
+        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    }));
+
+    render(<App />);
+    await fillRequiredInputs(user);
+    await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
+
+    expect(await screen.findByText("Colour needs review.")).toBeVisible();
+    await waitFor(() => {
+      expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
+    });
+    const submit = screen.getByRole("button", { name: "验证并提交审核" });
+    expect(screen.getByTestId("copy-task-status")).toHaveTextContent("Needs attention");
+    expect(submit).toBeEnabled();
+
+    const productName = screen.getByLabelText("Product Name");
+    await user.clear(productName);
+    await user.type(productName, "Operator corrected basket");
+
+    expect(screen.getByText("Colour needs review.")).toBeVisible();
+    expect(submit).toBeEnabled();
+  });
+
   test("preserves manual complete-field edits made before generation", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", appFetch(async (url, init) => {
@@ -1141,7 +1181,7 @@ describe("App independent AI workflow", () => {
     ["Length cm", "20", "copy"],
     ["Width cm", "15", "copy"],
     ["Height cm", "10", "copy"]
-  ] as const)("completed outputs become stale after changing %s", async (label, value, scope) => {
+  ] as const)("completed outputs become stale without blocking upload after changing %s", async (label, value, scope) => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
@@ -1164,7 +1204,7 @@ describe("App independent AI workflow", () => {
     await user.type(input, value);
     await user.tab();
 
-    expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeEnabled();
     expect(screen.getByTestId("copy-task-status")).toHaveTextContent("stale");
     expect(screen.getByTestId("copy-task-status")).toHaveTextContent("已过期");
     expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5);
@@ -1177,7 +1217,7 @@ describe("App independent AI workflow", () => {
   });
 
   test.each(["selling points", "source files"] as const)(
-    "completed copy and images become stale after changing %s",
+    "completed copy and images become stale without blocking upload after changing %s",
     async (dependency) => {
       const user = userEvent.setup();
     vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -1211,11 +1251,11 @@ describe("App independent AI workflow", () => {
       for (const role of PRODUCT_IMAGE_ROLES) {
         expect(screen.getByTestId(`image-role-${role}`)).toHaveAttribute("data-status", "stale");
       }
-      expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
+      expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeEnabled();
     }
   );
 
-  test("a second run keeps prior role images and replaces only validated successes", async () => {
+  test("a second run keeps prior role images and upload access while replacing validated successes", async () => {
     const user = userEvent.setup();
     let generation = 1;
     const secondRun = Object.fromEntries(PRODUCT_IMAGE_ROLES.map((role) => [role, deferred<Response>()])) as
@@ -1261,7 +1301,7 @@ describe("App independent AI workflow", () => {
         `https://cdn.example.com/v2-${role}.png`
       );
     }
-    expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "验证并提交审核" })).toBeEnabled();
   });
 
   test("regeneration refreshes EAN without locking prior AI category or colour", async () => {
@@ -1552,14 +1592,16 @@ describe("App independent AI workflow", () => {
       expect(within(detail).getByRole("img")).toHaveAttribute("src", replacement);
     });
 
-  test("submit remains disabled until all DSZ fields and five role images are ready", async () => {
+  test("submit ignores AI failures once required fields and one image are ready", async () => {
     const user = userEvent.setup();
     vi.stubGlobal("fetch", appFetch(async (url: RequestInfo | URL, init?: RequestInit) => {
       if (url === "/api/upload-images") return response({ imageUrls: ["https://cdn.example.com/source.png"] });
       if (url === "/api/generate-product-copy") return response({ title: "Title", description: "Description" });
       if (url === "/api/generate-product-image-role") {
         const role = roleFromRequest(init);
-        return response({ role, imageUrl: `https://cdn.example.com/${role}.png` });
+        return role === "main"
+          ? response({ role, imageUrl: `https://cdn.example.com/${role}.png` })
+          : response({ error: `${role} failed` }, 502);
       }
       throw new Error(`Unexpected request: ${url}`);
     }));
@@ -1570,8 +1612,8 @@ describe("App independent AI workflow", () => {
     await fillSubmissionFields(user);
     expect(submit).toBeDisabled();
     await user.click(screen.getByRole("button", { name: "开始 AI 生成" }));
-    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(5));
-    expect(submit).toBeEnabled();
+    await waitFor(() => expect(screen.getAllByRole("img", { hidden: true })).toHaveLength(1));
+    await waitFor(() => expect(submit).toBeEnabled());
   });
 
   test("inactive status 0 can become ready and is preserved in the upload payload", async () => {
