@@ -155,6 +155,12 @@ button:disabled { cursor: not-allowed; opacity: 0.48; }
 .folder-import-button input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
 .new-product-button:hover { background: #49304d; }
 .folder-import-button:hover { background: var(--violet-wash); }
+.folder-import-button.is-disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+.new-product-button:disabled:hover { background: var(--violet); }
+.folder-import-button.is-disabled:hover { background: #fff; }
 .batch-import-message { margin: -3px 0 10px; color: var(--muted); font-size: 11px; }
 
 .product-job-tabs {

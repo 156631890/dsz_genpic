@@ -1857,6 +1857,28 @@ describe("persistent product operations", () => {
       .toBeVisible();
   });
 
+  test("keeps at most ten products in the queue and reopens capacity after deletion", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const addProduct = screen.getByRole("button", { name: "新建商品" });
+
+    for (let index = 0; index < 9; index += 1) {
+      await user.click(addProduct);
+    }
+
+    expect(screen.getByRole("region", { name: /10 \/ 10 个商品/ })).toBeVisible();
+    expect(within(screen.getByRole("tablist", { name: "Product jobs" })).getAllByRole("tab"))
+      .toHaveLength(10);
+    expect(addProduct).toBeDisabled();
+    expect(screen.getByLabelText("批量导入商品文件夹")).toBeDisabled();
+
+    await user.click(screen.getByRole("button", { name: "删除 商品 10" }));
+
+    expect(screen.getByRole("region", { name: /9 \/ 10 个商品/ })).toBeVisible();
+    expect(addProduct).toBeEnabled();
+    expect(screen.getByLabelText("批量导入商品文件夹")).toBeEnabled();
+  });
+
   test("deletes a product and keeps the remaining queue", async () => {
     const user = userEvent.setup();
     render(<App />);
@@ -1886,6 +1908,26 @@ describe("persistent product operations", () => {
     const productA = screen.getByTestId("product-job-product-2");
     expect(await within(productA).findByText("front.png")).toBeVisible();
     expect(within(productA).getByText("side.png")).toBeVisible();
+  });
+
+  test("batch import fills only the remaining queue capacity", async () => {
+    const user = userEvent.setup();
+    render(<App />);
+    const addProduct = screen.getByRole("button", { name: "新建商品" });
+    for (let index = 0; index < 8; index += 1) {
+      await user.click(addProduct);
+    }
+
+    await user.upload(screen.getByLabelText("批量导入商品文件夹"), [
+      directoryFile("batch/Product A/front.png"),
+      directoryFile("batch/Product B/front.png")
+    ]);
+
+    expect(await screen.findByRole("tab", { name: /^Product A/ })).toBeVisible();
+    expect(screen.queryByRole("tab", { name: /^Product B/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /10 \/ 10 个商品/ })).toBeVisible();
+    expect(screen.getByRole("status", { name: "" }))
+      .toHaveTextContent("已导入 1 个商品，队列已满，跳过 1 个商品");
   });
 
   test("cancels active and queued work, then retries only unfinished tasks", async () => {

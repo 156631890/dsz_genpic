@@ -97,6 +97,7 @@ interface ProductWorkspaceProps {
 
 const idleTask: TaskState = { status: "idle", error: "" };
 const IMAGE_ROLE_CONCURRENCY = 3;
+const MAX_PRODUCT_JOBS = 10;
 const initialJobSummary: ProductJobSummary = {
   phase: "idle",
   completedImages: 0,
@@ -540,6 +541,7 @@ export default function App() {
     createImageTaskScheduler(IMAGE_ROLE_CONCURRENCY)
   );
   const nextJobNumberRef = useRef(initialStudio?.nextJobNumber || 2);
+  const queueAtCapacity = jobs.length >= MAX_PRODUCT_JOBS;
 
   useEffect(() => {
     saveProductStudioState({
@@ -577,6 +579,10 @@ export default function App() {
   }, []);
 
   function addProductJob() {
+    if (queueAtCapacity) {
+      setBatchMessage(`队列已满，最多同时处理 ${MAX_PRODUCT_JOBS} 个商品`);
+      return;
+    }
     const number = nextJobNumberRef.current;
     nextJobNumberRef.current += 1;
     const job = { id: `product-${number}`, number };
@@ -586,6 +592,7 @@ export default function App() {
       [job.id]: initialJobSummary
     }));
     setActiveJobId(job.id);
+    setBatchMessage("");
   }
 
   function deleteProductJob(jobId: string) {
@@ -618,9 +625,16 @@ export default function App() {
       return;
     }
 
+    const availableSlots = Math.max(0, MAX_PRODUCT_JOBS - jobs.length);
+    if (availableSlots === 0) {
+      setBatchMessage(`队列已满，最多同时处理 ${MAX_PRODUCT_JOBS} 个商品`);
+      return;
+    }
+    const acceptedProducts = result.products.slice(0, availableSlots);
+    const capacitySkipped = result.products.length - acceptedProducts.length;
     const importedJobs: ProductJobDefinition[] = [];
     const importedFiles: Record<string, File[]> = {};
-    for (const product of result.products) {
+    for (const product of acceptedProducts) {
       const number = nextJobNumberRef.current;
       nextJobNumberRef.current += 1;
       const job = { id: `product-${number}`, number, name: product.name };
@@ -634,10 +648,14 @@ export default function App() {
     }));
     setPendingImports((current) => ({ ...current, ...importedFiles }));
     setActiveJobId(importedJobs[0].id);
-    setBatchMessage(
-      `已导入 ${importedJobs.length} 个商品` +
-      (result.rejected.length ? `，跳过 ${result.rejected.length} 个文件夹` : "")
-    );
+    const messageParts = [`已导入 ${importedJobs.length} 个商品`];
+    if (capacitySkipped > 0) {
+      messageParts.push(`队列已满，跳过 ${capacitySkipped} 个商品`);
+    }
+    if (result.rejected.length > 0) {
+      messageParts.push(`另有 ${result.rejected.length} 个文件夹不符合要求`);
+    }
+    setBatchMessage(messageParts.join("，"));
   }
 
   const consumeImport = useCallback((jobId: string) => {
@@ -696,20 +714,26 @@ export default function App() {
           <div className="product-queue-heading">
             <div>
               <span>PRODUCT QUEUE</span>
-              <strong id="product-queue-heading">{jobs.length} 个商品 · 全局图片并发 {IMAGE_ROLE_CONCURRENCY}</strong>
+              <strong id="product-queue-heading">
+                {jobs.length} / {MAX_PRODUCT_JOBS} 个商品 · 全局图片并发 {IMAGE_ROLE_CONCURRENCY}
+              </strong>
             </div>
             <div className="queue-actions">
-              <label className="folder-import-button">
+              <label className={`folder-import-button${queueAtCapacity ? " is-disabled" : ""}`}
+                aria-disabled={queueAtCapacity}>
                 <FolderOpen size={16} aria-hidden="true" /> 批量导入文件夹
                 <input type="file" accept="image/png,image/jpeg,image/webp" multiple
                   aria-label="批量导入商品文件夹"
+                  disabled={queueAtCapacity}
                   ref={(node) => node?.setAttribute("webkitdirectory", "")}
                   onChange={(event) => {
                     importProductFolders(Array.from(event.target.files || []));
                     event.currentTarget.value = "";
                   }} />
               </label>
-              <button type="button" className="new-product-button" onClick={addProductJob}>
+              <button type="button" className="new-product-button" onClick={addProductJob}
+                disabled={queueAtCapacity}
+                title={queueAtCapacity ? `队列最多 ${MAX_PRODUCT_JOBS} 个商品` : undefined}>
                 新建商品
               </button>
             </div>
