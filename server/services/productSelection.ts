@@ -12,7 +12,8 @@ const AMAZON_AU_SITE_ID = "12";
 const DEFAULT_TIKTOK_REGION = "美国";
 const MCP_TIMEOUT_MS = 25_000;
 const MAX_RESULTS_PER_SOURCE = 6;
-const MAX_NEWTON_CANDIDATES = 12;
+const TIKTOK_CANDIDATE_POOL_SIZE = 30;
+const MAX_NEWTON_CANDIDATES = 5;
 
 type Fetcher = typeof fetch;
 
@@ -65,10 +66,15 @@ export async function selectProductsByCategory(input: {
 
   const tiktokRegion = env.PROBOOST_TIKTOK_COUNTRY_REGION?.trim() ||
     DEFAULT_TIKTOK_REGION;
+  const amazonSearchCategory = toAmazonSearchCategory(category);
   const notes: string[] = [];
   const [amazonOutcome, tiktokOutcome] = await Promise.allSettled([
     amazonConfig
-      ? loadAmazonCandidates({ category, config: amazonConfig, fetcher })
+      ? loadAmazonCandidates({
+          category: amazonSearchCategory,
+          config: amazonConfig,
+          fetcher
+        })
       : Promise.resolve([]),
     tiktokConfig
       ? loadTiktokCandidates({
@@ -100,7 +106,8 @@ export async function selectProductsByCategory(input: {
     );
   }
 
-  const candidates = [...amazon, ...tiktok].slice(0, MAX_NEWTON_CANDIDATES);
+  const candidates = interleaveCandidates(amazon, tiktok)
+    .slice(0, MAX_NEWTON_CANDIDATES);
   let sourcingTaskId = "";
   let sourcingStatus: ProductSelectionResult["sourcingStatus"] = "unavailable";
   if (candidates.length === 0) {
@@ -113,8 +120,13 @@ export async function selectProductsByCategory(input: {
       sourcingTaskId = task.taskId;
       sourcingStatus = "pending";
     } catch (error) {
-      if (error instanceof NewtonCloudError && error.status === 503) {
-        notes.push("牛顿 Agent 尚未配置，因此没有生成 1688 链接。");
+      if (error instanceof NewtonCloudError) {
+        if (error.status === 503) {
+          notes.push("牛顿 Agent 尚未配置，因此没有生成 1688 链接。");
+        } else {
+          sourcingStatus = "error";
+          notes.push(error.safeMessage);
+        }
       } else {
         sourcingStatus = "error";
         notes.push("牛顿 Agent 货源推荐暂时不可用。");
@@ -159,7 +171,7 @@ async function loadAmazonCandidates(input: {
       const listData = await callMcpTool({
         config: input.config,
         fetcher: input.fetcher,
-        name: "amz_hot_amz_hot_list_v2",
+        name: "amz_hot_amz_hot_list",
         arguments: {
           catId: categoryNode.catId,
           currentPage: 1,
@@ -214,7 +226,7 @@ async function loadTiktokCandidates(input: {
         : { commodityCategory: input.category }),
       countryRegion: input.countryRegion,
       current: 1,
-      size: MAX_RESULTS_PER_SOURCE,
+      size: TIKTOK_CANDIDATE_POOL_SIZE,
       dataPeriod: "last30d",
       orderType: "totalSalesNumberDesc"
     }
@@ -381,9 +393,13 @@ function bestCategoryNode(
       const overlap = queryTokens.filter((token) =>
         nodeTokens.includes(token)
       ).length;
+      const chineseSimilarity = chineseCategorySimilarity(query, names);
+      const baseScore = exact + substring + overlap * 12 + chineseSimilarity;
       return {
         node,
-        score: exact + substring + overlap * 12 + Math.min(node.depth, 5)
+        score: baseScore > 0
+          ? baseScore - Math.min(node.depth, 5)
+          : 0
       };
     })
     .filter((entry) => entry.score > 0)
@@ -397,6 +413,19 @@ function listRecords(value: unknown): Record<string, unknown>[] {
     if (Array.isArray(value[key])) return value[key].filter(isRecord);
   }
   return [];
+}
+
+function interleaveCandidates(
+  amazon: ProductSelectionCandidate[],
+  tiktok: ProductSelectionCandidate[]
+): ProductSelectionCandidate[] {
+  const candidates: ProductSelectionCandidate[] = [];
+  const length = Math.max(amazon.length, tiktok.length);
+  for (let index = 0; index < length; index += 1) {
+    if (amazon[index]) candidates.push(amazon[index]);
+    if (tiktok[index]) candidates.push(tiktok[index]);
+  }
+  return candidates;
 }
 
 function toAmazonCandidates(
@@ -464,7 +493,10 @@ function toTiktokCandidates(
   records: Record<string, unknown>[],
   fallbackCategory: string
 ): ProductSelectionCandidate[] {
-  return records
+  return [...records]
+    .sort((left, right) =>
+      tiktokRecentSales(right) - tiktokRecentSales(left)
+    )
     .map<ProductSelectionCandidate | null>((record, index) => {
       const sourceId = firstString(record, [
         "commodityId",
@@ -473,6 +505,7 @@ function toTiktokCandidates(
         "id"
       ]);
       const title = firstString(record, [
+        "commodityTitle",
         "commodityName",
         "commodity_name",
         "productName",
@@ -491,6 +524,7 @@ function toTiktokCandidates(
           "url"
         ])) || `https://www.tiktok.com/shop/pdp/${encodeURIComponent(sourceId)}`,
         imageUrl: httpsUrl(firstString(record, [
+          "commodityThumbnailUrl",
           "commodityImageUrl",
           "mainImageUrl",
           "imageUrl",
@@ -503,23 +537,19 @@ function toTiktokCandidates(
           "catName"
         ]) || fallbackCategory,
         price: nullableNumber(firstValue(record, [
+          "commodityPriceMin",
+          "commodityPrice",
           "price",
-          "sellingPrice",
-          "commodityPrice"
+          "sellingPrice"
         ])),
         currency: firstString(record, ["currency", "currencyCode"]) || "USD",
         rank: nullableInteger(firstValue(record, [
           "rank",
           "ranking"
         ])) || index + 1,
-        recentSales: nullableInteger(firstValue(record, [
-          "salesLast30d",
-          "soldLast30d",
-          "sales",
-          "totalSalesNumber",
-          "saleAmount"
-        ])),
+        recentSales: nullableInteger(tiktokRecentSales(record)),
         rating: nullableNumber(firstValue(record, [
+          "commodityStarRate",
           "score",
           "rating",
           "reviewsStars"
@@ -530,6 +560,19 @@ function toTiktokCandidates(
       candidate !== null
     )
     .slice(0, MAX_RESULTS_PER_SOURCE);
+}
+
+function tiktokRecentSales(record: Record<string, unknown>): number {
+  const value = firstValue(record, [
+    "salesLst30d",
+    "salesLast30d",
+    "soldLast30d",
+    "sales",
+    "totalSalesNumber",
+    "saleAmount"
+  ]);
+  const number = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
 function normalizeCategory(value: string): string {
@@ -547,6 +590,61 @@ function searchTokens(value: string): string[] {
   return Array.from(new Set(
     normalizedSearchText(value).split(/\s+/).filter(Boolean)
   ));
+}
+
+function chineseCategorySimilarity(query: string, names: string[]): number {
+  const queryChinese = query.replace(/[^\u3400-\u9fff]/g, "");
+  if (queryChinese.length < 2) return 0;
+  const suffix = queryChinese.slice(-2);
+  const prefix = queryChinese.slice(0, 2);
+  const queryCharacters = Array.from(new Set(queryChinese));
+  let best = 0;
+  for (const name of names) {
+    const nameChinese = name.replace(/[^\u3400-\u9fff]/g, "");
+    if (!nameChinese) continue;
+    const suffixScore = nameChinese.includes(suffix) ? 50 : 0;
+    const prefixScore = nameChinese.includes(prefix) ? 30 : 0;
+    const overlap = queryCharacters.filter((character) =>
+      nameChinese.includes(character)
+    ).length;
+    best = Math.max(best, suffixScore + prefixScore + overlap * 4);
+  }
+  return best;
+}
+
+function toAmazonSearchCategory(category: string): string {
+  if (!/[\u3400-\u9fff]/.test(category)) return category;
+  const terms: Array<[RegExp, string]> = [
+    [/厨房/g, " kitchen "],
+    [/收纳|储物|置物/g, " storage "],
+    [/家居|家庭/g, " home "],
+    [/汽车|车载/g, " car "],
+    [/宠物/g, " pet "],
+    [/婴儿|母婴/g, " baby "],
+    [/玩具/g, " toy "],
+    [/美妆|美容/g, " beauty "],
+    [/女装/g, " women clothing "],
+    [/男装/g, " men clothing "],
+    [/服装|衣服/g, " clothing "],
+    [/鞋/g, " shoes "],
+    [/箱包|包袋|背包/g, " bags "],
+    [/户外/g, " outdoor "],
+    [/花园|园艺/g, " garden "],
+    [/工具/g, " tools "],
+    [/手机/g, " phone "],
+    [/电脑/g, " computer "],
+    [/电子/g, " electronics "],
+    [/运动|健身/g, " sports "]
+  ];
+  let translated = category;
+  for (const [pattern, replacement] of terms) {
+    translated = translated.replace(pattern, replacement);
+  }
+  const english = translated
+    .replace(/[\u3400-\u9fff]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return english || category;
 }
 
 function firstString(

@@ -227,7 +227,7 @@ export async function createNewtonSourcingTask(options: NewtonServiceOptions & {
   candidates: ProductSelectionCandidate[];
 }): Promise<{ taskId: string }> {
   const category = options.category.trim().replace(/\s+/g, " ");
-  const candidates = options.candidates.slice(0, 12);
+  const candidates = options.candidates.slice(0, 5);
   if (!category || category.length > 120 || candidates.length === 0) {
     throw new NewtonCloudError(400, "牛顿选品参数无效");
   }
@@ -548,15 +548,36 @@ async function invokeNewtonApi(options: NewtonServiceOptions & {
     throw new NewtonCloudError(502, "牛顿云端连接失败");
   }
 
-  if (!response.ok) {
-    throw new NewtonCloudError(502, "牛顿云端连接失败");
-  }
-
+  let payload: unknown;
   try {
-    return await response.json();
+    payload = JSON.parse(await response.text());
   } catch {
     throw new NewtonCloudError(502, "牛顿云端响应无效");
   }
+  const upstreamErrorCode = getNewtonUpstreamErrorCode(payload);
+  if (!response.ok || upstreamErrorCode) {
+    throw new NewtonCloudError(
+      502,
+      upstreamErrorCode
+        ? `牛顿云端请求失败（${upstreamErrorCode}）`
+        : "牛顿云端连接失败"
+    );
+  }
+  return payload;
+}
+
+function getNewtonUpstreamErrorCode(value: unknown): string {
+  if (!isRecord(value)) return "";
+  for (const key of ["error_code", "errorCode", "code"]) {
+    const code = value[key];
+    if (
+      typeof code === "string" &&
+      /^[A-Za-z0-9._-]{1,80}$/.test(code)
+    ) {
+      return code;
+    }
+  }
+  return "";
 }
 
 function resolveNewtonConfig(
@@ -579,10 +600,8 @@ function buildNewtonSourcingPrompt(
 ): string {
   const candidateJson = JSON.stringify(candidates.map((candidate) => ({
     candidateId: candidate.id,
-    source: candidate.source,
-    title: candidate.title,
-    sourceUrl: candidate.url,
-    imageUrl: candidate.imageUrl
+    title: candidate.title.slice(0, 100),
+    sourceUrl: candidate.url
   })));
   return [
     `为品类“${category}”中的下列 Amazon Australia 与 TikTok 热卖款，在 1688.com 搜索相同或高度相似的在售货源。`,

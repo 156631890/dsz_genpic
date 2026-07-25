@@ -347,6 +347,25 @@ describe("Newton cloud integration", () => {
       safeMessage: "牛顿云端尚未配置"
     });
   });
+
+  test("reports only the upstream error code when Newton rejects a request", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error_code: "gw.InvalidSignature",
+      error_message: "request rejected"
+    }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" }
+    })) as unknown as typeof fetch;
+
+    await expect(createNewtonImportTask({
+      sourceUrl,
+      env,
+      fetchImpl
+    })).rejects.toMatchObject({
+      status: 502,
+      safeMessage: "牛顿云端请求失败（gw.InvalidSignature）"
+    });
+  });
 });
 
 function jsonResponse(body: unknown): Response {

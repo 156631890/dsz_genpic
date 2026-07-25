@@ -22,7 +22,7 @@ describe("product selection", () => {
           catName: "Kitchen Storage"
         }]);
       }
-      if (params.name === "amz_hot_amz_hot_list_v2") {
+      if (params.name === "amz_hot_amz_hot_list") {
         return mcpResponse({
           records: [{
             sku_id: "A100",
@@ -51,14 +51,14 @@ describe("product selection", () => {
         return mcpResponse({
           records: [{
             commodityId: "T200",
-            commodityName: "Stackable Kitchen Storage Box",
+            commodityTitle: "Stackable Kitchen Storage Box",
             commodityUrl: "https://www.tiktok.com/shop/pdp/T200",
-            commodityImageUrl: "https://images.example.com/tiktok.jpg",
+            commodityThumbnailUrl: "https://images.example.com/tiktok.jpg",
             commodityCategory: "Kitchen Storage",
-            price: "19.99",
+            commodityPriceMin: "19.99",
             currency: "USD",
-            totalSalesNumber: "720",
-            score: "4.8"
+            salesLst30d: "720",
+            commodityStarRate: "4.8"
           }]
         });
       }
@@ -107,7 +107,7 @@ describe("product selection", () => {
     });
 
     const amazonList = requests.find((body) =>
-      (body.params as { name?: string })?.name === "amz_hot_amz_hot_list_v2"
+      (body.params as { name?: string })?.name === "amz_hot_amz_hot_list"
     );
     expect((amazonList?.params as {
       arguments: Record<string, unknown>;
@@ -125,7 +125,8 @@ describe("product selection", () => {
       commodityCatId: "tt-kitchen",
       countryRegion: "美国",
       dataPeriod: "last30d",
-      orderType: "totalSalesNumberDesc"
+      orderType: "totalSalesNumberDesc",
+      size: 30
     });
   });
 
@@ -164,6 +165,81 @@ describe("product selection", () => {
       "TikTok ProBoost MCP 尚未配置。",
       "牛顿 Agent 尚未配置，因此没有生成 1688 链接。"
     ]));
+  });
+
+  test("maps a Chinese category without falling through to an unrelated deep node", async () => {
+    const requests: Array<{
+      name: string;
+      arguments: Record<string, unknown>;
+    }> = [];
+    const fetcher = vi.fn<typeof fetch>(async (_url, init) => {
+      const body = JSON.parse(String(init?.body));
+      const params = body.params as {
+        name: string;
+        arguments: Record<string, unknown>;
+      };
+      requests.push(params);
+      if (params.name === "amz_hot_amz_hot_cat_tree") {
+        return mcpResponse([]);
+      }
+      if (params.name === "amz_product_competitor") {
+        return mcpResponse({
+          records: [{
+            sku_id: "A300",
+            item_title: "Kitchen Storage Container"
+          }]
+        });
+      }
+      if (params.name === "tt_commodity_get_commodity_cat_tree") {
+        return mcpResponse([
+          {
+            catId: "automotive",
+            catName: "Automotive",
+            children: [{
+              catId: "battery",
+              catName: "Batteries",
+              catCnName: "汽车电池"
+            }]
+          },
+          {
+            catId: "home-organizers",
+            catName: "Home Organizers",
+            catCnName: "家居收纳"
+          }
+        ]);
+      }
+      if (params.name === "tt_commodity_info_list") {
+        return mcpResponse({
+          records: [{
+            commodityId: "T300",
+            commodityTitle: "Space Saving Storage Box",
+            salesLst30d: 300
+          }]
+        });
+      }
+      throw new Error(`Unexpected request: ${params.name}`);
+    });
+
+    const result = await selectProductsByCategory({
+      selection: { category: "厨房收纳" },
+      env: {
+        PROBOOST_AMAZON_MCP_URL: "https://mcp.example.com/amazon",
+        PROBOOST_AMAZON_MCP_SECRET_KEY: "amazon-secret",
+        PROBOOST_TIKTOK_MCP_URL: "https://mcp.example.com/tiktok-cn",
+        PROBOOST_TIKTOK_MCP_SECRET_KEY: "tiktok-secret"
+      },
+      fetcher,
+      createSourcingTask: vi.fn(async () => ({ taskId: "task-cn" }))
+    });
+
+    expect(result.amazon).toHaveLength(1);
+    expect(result.tiktok).toHaveLength(1);
+    expect(requests.find((request) =>
+      request.name === "amz_product_competitor"
+    )?.arguments.keyword).toBe("kitchen storage");
+    expect(requests.find((request) =>
+      request.name === "tt_commodity_info_list"
+    )?.arguments.commodityCatId).toBe("home-organizers");
   });
 
   test("fails safely when ProBoost product selection is unconfigured", async () => {
