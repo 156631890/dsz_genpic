@@ -15,6 +15,7 @@ import {
   type GeneratedProductCopy,
   type GeneratedProductImage,
   type ProductInput,
+  type ProductSelectionResult,
   type ProductResearchEvidence
 } from "../../shared/product";
 import { formatSegmentedDescriptionHtml } from "../../shared/description";
@@ -197,6 +198,9 @@ describe("API app", () => {
       imageQuality: "high",
       imageUploadConfigured: true,
       githubImageStorageConfigured: true,
+      productSelectionConfigured: false,
+      tiktokSelectionConfigured: false,
+      newtonAgentConfigured: false,
       adminBaseUrl: "https://services.dropshipzone.com.au/admin/api/supplier/v1",
       adminMockMode: true
     });
@@ -253,6 +257,46 @@ describe("API app", () => {
       .post("/api/analyze-amazon-market")
       .send({ input: { productName: "Wireless earbuds", currentRrpAud: 29.95 } })
       .expect(503, { error: "ProBoost Amazon market analysis is not configured" });
+  });
+
+  test("normalizes a category and returns product-selection results", async () => {
+    const selectionResult: ProductSelectionResult = {
+      category: "Kitchen Storage",
+      generatedAt: "2026-07-25T08:00:00.000Z",
+      amazonMarketplace: "Amazon Australia",
+      tiktokMarketplace: "TikTok 美国",
+      amazon: [],
+      tiktok: [],
+      sourcingTaskId: "sourcing_123",
+      sourcingStatus: "pending",
+      notes: []
+    };
+    const selectProducts = vi.fn(async () => selectionResult);
+    const response = await request(createApp({ selectProducts }))
+      .post("/api/select-products")
+      .send({ input: { category: "  Kitchen   Storage  " } })
+      .expect(200);
+
+    expect(selectProducts).toHaveBeenCalledWith({ category: "Kitchen Storage" });
+    expect(response.body).toEqual({ result: selectionResult });
+  });
+
+  test("validates selection input and reports missing ProBoost configuration safely", async () => {
+    const selectProducts = vi.fn();
+    await request(createApp({ selectProducts }))
+      .post("/api/select-products")
+      .send({ input: { category: "   " } })
+      .expect(400, { error: "选品品类无效" });
+    await request(createApp({ selectProducts }))
+      .post("/api/select-products")
+      .send({ input: { category: "x".repeat(121) } })
+      .expect(400, { error: "选品品类无效" });
+    expect(selectProducts).not.toHaveBeenCalled();
+
+    await request(createApp({ env: {} }))
+      .post("/api/select-products")
+      .send({ input: { category: "Kitchen Storage" } })
+      .expect(503, { error: "ProBoost 选品服务尚未配置" });
   });
 
   test.each([
@@ -1325,6 +1369,73 @@ describe("API app", () => {
 
     expect(response.body).toEqual({ status: "complete", product });
     expect(getNewtonImportTask).toHaveBeenCalledWith("task_123");
+  });
+
+  test("returns verified Newton sourcing recommendations", async () => {
+    const recommendations = [{
+      candidateId: "amazon:A100",
+      matches: [{
+        title: "密封食品收纳盒",
+        url: "https://detail.1688.com/offer/972942337202.html",
+        imageUrl: "https://cbu01.alicdn.com/img/ibank/example.jpg",
+        priceCny: 18.6,
+        confidence: "high" as const,
+        reason: "外形与功能一致"
+      }]
+    }];
+    const getNewtonSourcingTask = vi.fn(async () => ({
+      status: "complete" as const,
+      recommendations
+    }));
+    const response = await request(createApp({ getNewtonSourcingTask }))
+      .get("/api/newton/sourcing-tasks/sourcing_123")
+      .expect(200);
+
+    expect(response.body).toEqual({ status: "complete", recommendations });
+    expect(getNewtonSourcingTask).toHaveBeenCalledWith("sourcing_123");
+  });
+
+  test("creates and reads a Newton task that traces an ecommerce link to 1688", async () => {
+    const sourceUrl = "https://www.amazon.com.au/dp/B012345678?ref=source";
+    const createNewtonTraceTask = vi.fn(async () => ({ taskId: "trace_123" }));
+    const created = await request(createApp({ createNewtonTraceTask }))
+      .post("/api/newton/trace-tasks")
+      .send({ sourceUrl })
+      .expect(202);
+    expect(created.body).toEqual({ taskId: "trace_123" });
+    expect(createNewtonTraceTask).toHaveBeenCalledWith(sourceUrl);
+
+    const matches = [{
+      title: "同款商品",
+      url: "https://detail.1688.com/offer/972942337202.html",
+      imageUrl: "",
+      priceCny: 16.8,
+      confidence: "high" as const,
+      reason: "结构与外观一致"
+    }];
+    const getNewtonTraceTask = vi.fn(async () => ({
+      status: "complete" as const,
+      matches
+    }));
+    const completed = await request(createApp({ getNewtonTraceTask }))
+      .get("/api/newton/trace-tasks/trace_123")
+      .expect(200);
+    expect(completed.body).toEqual({ status: "complete", matches });
+    expect(getNewtonTraceTask).toHaveBeenCalledWith("trace_123");
+  });
+
+  test.each([
+    "http://www.ebay.com.au/itm/123",
+    "https://localhost/product/123",
+    "https://127.0.0.1/product/123",
+    "https://user:password@shop.example.com/product/123"
+  ])("rejects unsafe ecommerce trace URL %j", async (sourceUrl) => {
+    const createNewtonTraceTask = vi.fn();
+    await request(createApp({ createNewtonTraceTask }))
+      .post("/api/newton/trace-tasks")
+      .send({ sourceUrl })
+      .expect(400, { error: "请输入有效的公开电商商品链接" });
+    expect(createNewtonTraceTask).not.toHaveBeenCalled();
   });
 
   test("proxies only allowlisted Newton product images", async () => {

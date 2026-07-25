@@ -53,6 +53,66 @@ export type NewtonImportTaskStatus =
   | { status: "complete"; product: NewtonImportedProduct }
   | { status: "failed"; error: string };
 
+export type ProductSelectionSource = "amazon" | "tiktok";
+
+export interface ProductSelectionCandidate {
+  id: string;
+  source: ProductSelectionSource;
+  sourceId: string;
+  title: string;
+  url: string;
+  imageUrl: string;
+  categoryName: string;
+  price: number | null;
+  currency: string;
+  rank: number | null;
+  recentSales: number | null;
+  rating: number | null;
+}
+
+export interface SourcingMatch {
+  title: string;
+  url: string;
+  imageUrl: string;
+  priceCny: number | null;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+}
+
+export interface ProductSourcingRecommendation {
+  candidateId: string;
+  matches: SourcingMatch[];
+}
+
+export interface ProductSelectionResult {
+  category: string;
+  generatedAt: string;
+  amazonMarketplace: "Amazon Australia";
+  tiktokMarketplace: string;
+  amazon: ProductSelectionCandidate[];
+  tiktok: ProductSelectionCandidate[];
+  sourcingTaskId: string;
+  sourcingStatus: "pending" | "unavailable" | "error";
+  notes: string[];
+}
+
+export interface ProductSelectionInput {
+  category: string;
+}
+
+export type ProductSourcingTaskStatus =
+  | { status: "pending" }
+  | {
+      status: "complete";
+      recommendations: ProductSourcingRecommendation[];
+    }
+  | { status: "failed"; error: string };
+
+export type CommerceTraceTaskStatus =
+  | { status: "pending" }
+  | { status: "complete"; matches: SourcingMatch[] }
+  | { status: "failed"; error: string };
+
 export interface GeneratedProductCopy {
   title: string;
   description: string;

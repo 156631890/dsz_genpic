@@ -553,6 +553,176 @@ describe("browser product workflow helpers", () => {
 });
 
 describe("Newton product import workflow", () => {
+  test("selects hot products first, then imports a Newton-recommended 1688 match", async () => {
+    const user = userEvent.setup();
+    const sourceUrl = "https://detail.1688.com/offer/972942337202.html";
+    const product = {
+      offerId: "972942337202",
+      sourceUrl,
+      title: "密封食品收纳盒",
+      categoryHint: "Kitchen Storage",
+      sellingPoints: "密封防潮\n可叠放收纳",
+      purchasePriceCny: 18.6,
+      imageUrls: []
+    };
+    const fetchMock = appFetch(async (url, init) => {
+      if (url === "/api/select-products") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          input: { category: "Kitchen Storage" }
+        });
+        return response({
+          result: {
+            category: "Kitchen Storage",
+            generatedAt: "2026-07-25T08:00:00.000Z",
+            amazonMarketplace: "Amazon Australia",
+            tiktokMarketplace: "TikTok 美国",
+            amazon: [{
+              id: "amazon:A100",
+              source: "amazon",
+              sourceId: "A100",
+              title: "Airtight Food Storage Container",
+              url: "https://www.amazon.com.au/dp/A100",
+              imageUrl: "https://images.example.com/amazon.jpg",
+              categoryName: "Kitchen Storage",
+              price: 29.95,
+              currency: "AUD",
+              rank: 1,
+              recentSales: 450,
+              rating: 4.6
+            }],
+            tiktok: [{
+              id: "tiktok:T200",
+              source: "tiktok",
+              sourceId: "T200",
+              title: "Stackable Kitchen Storage Box",
+              url: "https://www.tiktok.com/shop/pdp/T200",
+              imageUrl: "",
+              categoryName: "Kitchen Storage",
+              price: 19.99,
+              currency: "USD",
+              rank: 1,
+              recentSales: 720,
+              rating: 4.8
+            }],
+            sourcingTaskId: "sourcing_123",
+            sourcingStatus: "pending",
+            notes: []
+          }
+        });
+      }
+      if (url === "/api/newton/sourcing-tasks/sourcing_123") {
+        return response({
+          status: "complete",
+          recommendations: [{
+            candidateId: "amazon:A100",
+            matches: [{
+              title: product.title,
+              url: sourceUrl,
+              imageUrl: "",
+              priceCny: 18.6,
+              confidence: "high",
+              reason: "外形与功能一致"
+            }]
+          }]
+        });
+      }
+      if (url === "/api/newton/import-tasks") {
+        return response({ taskId: "import_123" }, 202);
+      }
+      if (url === "/api/newton/import-tasks/import_123") {
+        return response({ status: "complete", product });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    const categoryInput = screen.getByLabelText("选品品类");
+    const sourceUrlInput = screen.getByLabelText("电商商品链接");
+    expect(categoryInput.compareDocumentPosition(sourceUrlInput) &
+      Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.type(categoryInput, "Kitchen Storage");
+    await user.click(screen.getByRole("button", { name: "查询" }));
+
+    expect(await screen.findByText("Airtight Food Storage Container")).toBeVisible();
+    expect(screen.getByText("Stackable Kitchen Storage Box")).toBeVisible();
+    await user.click(await screen.findByRole("button", {
+      name: /导入此1688货源/
+    }));
+
+    expect(sourceUrlInput).toHaveValue(sourceUrl);
+    expect(await screen.findByText(
+      "商品资料已导入；未取得有效原图，请手动上传"
+    )).toBeVisible();
+    expect(screen.getByLabelText("类目提示")).toHaveValue("Kitchen Storage");
+    expect(screen.getByLabelText("采购价 CNY")).toHaveValue("18.6");
+    expect(screen.getByLabelText("卖点")).toHaveValue(
+      `1688 商品标题：${product.title}\n${product.sellingPoints}`
+    );
+  });
+
+  test("traces an external ecommerce link to 1688 before importing it", async () => {
+    const user = userEvent.setup();
+    const ecommerceUrl = "https://www.ebay.com.au/itm/123456789";
+    const sourceUrl = "https://detail.1688.com/offer/972942337202.html";
+    const product = {
+      offerId: "972942337202",
+      sourceUrl,
+      title: "同款折叠收纳箱",
+      categoryHint: "Foldable Storage Box",
+      sellingPoints: "可折叠\n带盖防尘",
+      imageUrls: []
+    };
+    const fetchMock = appFetch(async (url, init) => {
+      if (url === "/api/newton/trace-tasks") {
+        expect(JSON.parse(String(init?.body))).toEqual({
+          sourceUrl: ecommerceUrl
+        });
+        return response({ taskId: "trace_123" }, 202);
+      }
+      if (url === "/api/newton/trace-tasks/trace_123") {
+        return response({
+          status: "complete",
+          matches: [{
+            title: product.title,
+            url: sourceUrl,
+            imageUrl: "",
+            priceCny: 16.8,
+            confidence: "high",
+            reason: "结构与外观一致"
+          }]
+        });
+      }
+      if (url === "/api/newton/import-tasks") {
+        expect(JSON.parse(String(init?.body))).toEqual({ sourceUrl });
+        return response({ taskId: "import_123" }, 202);
+      }
+      if (url === "/api/newton/import-tasks/import_123") {
+        return response({ status: "complete", product });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    const input = screen.getByLabelText("电商商品链接");
+    await user.type(input, ecommerceUrl);
+    await user.click(screen.getByRole("button", { name: "溯源到1688" }));
+
+    expect(await screen.findByText("已找到 1 个1688候选货源，请选择后导入"))
+      .toBeVisible();
+    await user.click(screen.getByRole("button", { name: "导入此1688货源" }));
+
+    expect(input).toHaveValue(sourceUrl);
+    expect(await screen.findByText(
+      "商品资料已导入；未取得有效原图，请手动上传"
+    )).toBeVisible();
+    expect(screen.getByLabelText("卖点")).toHaveValue(
+      `1688 商品标题：${product.title}\n${product.sellingPoints}`
+    );
+  });
+
   test("imports verified facts and source images into a clean product draft", async () => {
     const user = userEvent.setup();
     const product = {
@@ -589,8 +759,8 @@ describe("Newton product import workflow", () => {
     }));
 
     render(<App />);
-    await user.type(screen.getByLabelText("1688 商品链接"), product.sourceUrl);
-    await user.click(screen.getByRole("button", { name: "牛顿导入" }));
+    await user.type(screen.getByLabelText("电商商品链接"), product.sourceUrl);
+    await user.click(screen.getByRole("button", { name: "直接导入1688" }));
 
     expect(await screen.findByText("已导入商品资料和 1 张原图")).toBeVisible();
     expect(screen.getByLabelText("卖点")).toHaveValue(
@@ -620,10 +790,10 @@ describe("Newton product import workflow", () => {
 
     render(<App />);
     await user.type(
-      screen.getByLabelText("1688 商品链接"),
+      screen.getByLabelText("电商商品链接"),
       "https://detail.1688.com/offer/972942337202.html"
     );
-    await user.click(screen.getByRole("button", { name: "牛顿导入" }));
+    await user.click(screen.getByRole("button", { name: "直接导入1688" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "牛顿云端尚未配置"

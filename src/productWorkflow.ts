@@ -1,6 +1,7 @@
 import type {
   AmazonMarketAnalysis,
   AmazonMarketAnalysisInput,
+  CommerceTraceTaskStatus,
   GeneratedProductCopy,
   GeneratedProductImage,
   ProductImageRole,
@@ -10,13 +11,19 @@ import type {
   NewtonImportTaskStatus,
   ProductGenerationResult,
   ProductIdentity,
-  ProductResearchEvidence
+  ProductResearchEvidence,
+  ProductSelectionInput,
+  ProductSelectionResult,
+  ProductSourcingRecommendation,
+  ProductSourcingTaskStatus,
+  SourcingMatch
 } from "../shared/product";
 import { AU_ZONE_KEYS } from "../shared/shipping";
 
 const DSZ_ZONE_KEYS = [...AU_ZONE_KEYS, "nz"] as const;
 const NEWTON_IMPORT_POLL_INTERVAL_MS = 3_000;
 const NEWTON_IMPORT_MAX_POLLS = 120;
+const NEWTON_SOURCING_MAX_POLLS = 120;
 const MAX_IMPORTED_SOURCE_BYTES = 4_000_000;
 
 export interface ServiceHealth {
@@ -87,6 +94,41 @@ export async function requestAmazonMarketAnalysis(
     throw new Error("Amazon Australia market analysis failed");
   }
   return data.analysis;
+}
+
+export async function requestProductSelection(
+  input: ProductSelectionInput,
+  signal?: AbortSignal
+): Promise<ProductSelectionResult> {
+  const data = await requestJson("/api/select-products", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ input }),
+    signal
+  }, "选品查询失败");
+  if (!isRecord(data) || !isProductSelectionResult(data.result)) {
+    throw new Error("选品查询失败");
+  }
+  return data.result;
+}
+
+export async function requestProductSourcingRecommendations(
+  taskId: string,
+  signal?: AbortSignal
+): Promise<ProductSourcingRecommendation[]> {
+  if (!isSafeTaskId(taskId)) throw new Error("牛顿货源推荐失败");
+  for (let poll = 0; poll < NEWTON_SOURCING_MAX_POLLS; poll += 1) {
+    const data = await requestJson(
+      `/api/newton/sourcing-tasks/${encodeURIComponent(taskId)}`,
+      { method: "GET", signal },
+      "牛顿货源推荐失败"
+    );
+    const status = parseProductSourcingTaskStatus(data);
+    if (status.status === "complete") return status.recommendations;
+    if (status.status === "failed") throw new Error(status.error);
+    await abortableDelay(NEWTON_IMPORT_POLL_INTERVAL_MS, signal);
+  }
+  throw new Error("牛顿货源推荐超时，请重新查询");
 }
 
 export async function requestProductFields(input: {
@@ -176,6 +218,34 @@ export async function requestNewtonProductImport(
   }
 
   throw new Error("牛顿商品导入超时，请稍后重试");
+}
+
+export async function requestNewtonCommerceTrace(
+  sourceUrl: string,
+  signal?: AbortSignal
+): Promise<SourcingMatch[]> {
+  const created = await requestJson("/api/newton/trace-tasks", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sourceUrl }),
+    signal
+  }, "牛顿电商链接溯源失败");
+  if (!isRecord(created) || !isSafeTaskId(created.taskId)) {
+    throw new Error("牛顿电商链接溯源失败");
+  }
+
+  for (let poll = 0; poll < NEWTON_SOURCING_MAX_POLLS; poll += 1) {
+    const data = await requestJson(
+      `/api/newton/trace-tasks/${encodeURIComponent(created.taskId)}`,
+      { method: "GET", signal },
+      "牛顿电商链接溯源失败"
+    );
+    const status = parseCommerceTraceTaskStatus(data);
+    if (status.status === "complete") return status.matches;
+    if (status.status === "failed") throw new Error(status.error);
+    await abortableDelay(NEWTON_IMPORT_POLL_INTERVAL_MS, signal);
+  }
+  throw new Error("牛顿电商链接溯源超时，请重新提交");
 }
 
 export async function downloadNewtonProductImages(
@@ -281,6 +351,107 @@ function parseNewtonImportTaskStatus(value: unknown): NewtonImportTaskStatus {
     return { status: "complete", product: value.product };
   }
   throw new Error("牛顿商品导入失败");
+}
+
+function parseProductSourcingTaskStatus(
+  value: unknown
+): ProductSourcingTaskStatus {
+  if (!isRecord(value)) throw new Error("牛顿货源推荐失败");
+  if (value.status === "pending") return { status: "pending" };
+  if (
+    value.status === "failed" &&
+    isNonemptyString(value.error) &&
+    value.error.length <= 500
+  ) {
+    return { status: "failed", error: value.error };
+  }
+  if (
+    value.status === "complete" &&
+    Array.isArray(value.recommendations) &&
+    value.recommendations.every(isProductSourcingRecommendation)
+  ) {
+    return {
+      status: "complete",
+      recommendations: value.recommendations
+    };
+  }
+  throw new Error("牛顿货源推荐失败");
+}
+
+function parseCommerceTraceTaskStatus(value: unknown): CommerceTraceTaskStatus {
+  if (!isRecord(value)) throw new Error("牛顿电商链接溯源失败");
+  if (value.status === "pending") return { status: "pending" };
+  if (
+    value.status === "failed" &&
+    isNonemptyString(value.error) &&
+    value.error.length <= 500
+  ) {
+    return { status: "failed", error: value.error };
+  }
+  if (
+    value.status === "complete" &&
+    Array.isArray(value.matches) &&
+    value.matches.every(isSourcingMatch)
+  ) {
+    return { status: "complete", matches: value.matches };
+  }
+  throw new Error("牛顿电商链接溯源失败");
+}
+
+function isProductSelectionResult(value: unknown): value is ProductSelectionResult {
+  if (!isRecord(value) ||
+    !isNonemptyString(value.category) ||
+    !isNonemptyString(value.generatedAt) ||
+    value.amazonMarketplace !== "Amazon Australia" ||
+    !isNonemptyString(value.tiktokMarketplace) ||
+    !["pending", "unavailable", "error"].includes(String(value.sourcingStatus)) ||
+    typeof value.sourcingTaskId !== "string" ||
+    !Array.isArray(value.notes) ||
+    !value.notes.every((note) => typeof note === "string")) {
+    return false;
+  }
+  return Array.isArray(value.amazon) &&
+    value.amazon.every(isProductSelectionCandidate) &&
+    Array.isArray(value.tiktok) &&
+    value.tiktok.every(isProductSelectionCandidate) &&
+    (
+      value.sourcingStatus !== "pending" ||
+      isSafeTaskId(value.sourcingTaskId)
+    );
+}
+
+function isProductSelectionCandidate(value: unknown): boolean {
+  return isRecord(value) &&
+    ["amazon", "tiktok"].includes(String(value.source)) &&
+    ["id", "sourceId", "title", "url", "imageUrl", "categoryName", "currency"]
+      .every((key) => typeof value[key] === "string") &&
+    isHttpsUrl(String(value.url)) &&
+    (value.imageUrl === "" || isHttpsUrl(String(value.imageUrl))) &&
+    ["price", "rank", "recentSales", "rating"].every((key) =>
+      value[key] === null ||
+      (typeof value[key] === "number" && Number.isFinite(value[key]))
+    );
+}
+
+function isProductSourcingRecommendation(value: unknown): boolean {
+  return isRecord(value) &&
+    isNonemptyString(value.candidateId) &&
+    Array.isArray(value.matches) &&
+    value.matches.every(isSourcingMatch);
+}
+
+function isSourcingMatch(match: unknown): match is SourcingMatch {
+  return isRecord(match) &&
+    isNonemptyString(match.title) &&
+    isHttpsUrl(String(match.url)) &&
+    typeof match.imageUrl === "string" &&
+    (match.imageUrl === "" || isHttpsUrl(match.imageUrl)) &&
+    (
+      match.priceCny === null ||
+      (typeof match.priceCny === "number" && Number.isFinite(match.priceCny))
+    ) &&
+    ["high", "medium", "low"].includes(String(match.confidence)) &&
+    typeof match.reason === "string";
 }
 
 function isNewtonImportedProduct(value: unknown): value is NewtonImportedProduct {

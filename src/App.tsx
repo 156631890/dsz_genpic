@@ -4,8 +4,10 @@ import {
   ExternalLink,
   FolderOpen,
   History,
+  Link2,
   Loader2,
   RotateCcw,
+  Search,
   Send,
   Square,
   Sparkles,
@@ -22,14 +24,21 @@ import {
   type ProductImageRole,
   type ProductIdentity,
   type ProductInput,
-  type ProductResearchEvidence
+  type ProductResearchEvidence,
+  type ProductSelectionCandidate,
+  type ProductSelectionResult,
+  type ProductSourcingRecommendation,
+  type SourcingMatch
 } from "../shared/product";
 import { buildShippingZoneRates, calculateBillableWeightKg, calculatePackageCbm } from "../shared/shipping";
 import { calculateVendorPrice, calculateVendorRrp } from "../shared/pricing";
 import {
   downloadNewtonProductImages,
   requestAmazonMarketAnalysis,
+  requestNewtonCommerceTrace,
   requestNewtonProductImport,
+  requestProductSelection,
+  requestProductSourcingRecommendations,
   requestProductFields,
   requestProductImageRole,
   requestServiceHealth,
@@ -446,6 +455,152 @@ function MarketAnalysisPanel({
   );
 }
 
+function ProductSelectionPanel({
+  category,
+  idPrefix,
+  selectionTask,
+  sourcingTask,
+  result,
+  recommendations,
+  onCategoryChange,
+  onSearch,
+  onChooseMatch
+}: {
+  category: string;
+  idPrefix: string;
+  selectionTask: TaskState;
+  sourcingTask: TaskState;
+  result: ProductSelectionResult | null;
+  recommendations: ProductSourcingRecommendation[];
+  onCategoryChange: (value: string) => void;
+  onSearch: () => void;
+  onChooseMatch: (match: SourcingMatch) => void;
+}) {
+  const matchesByCandidate = new Map(
+    recommendations.map((recommendation) => [
+      recommendation.candidateId,
+      recommendation.matches
+    ])
+  );
+
+  function sourceGroup(
+    heading: string,
+    candidates: ProductSelectionCandidate[]
+  ) {
+    return (
+      <section className="selection-source-group" aria-label={heading}>
+        <h4>{heading}</h4>
+        {candidates.length === 0
+          ? <p className="selection-empty">暂无匹配热卖款</p>
+          : <div className="selection-candidate-list">
+              {candidates.map((candidate) => {
+                const matches = matchesByCandidate.get(candidate.id) || [];
+                return (
+                  <article className="selection-candidate" key={candidate.id}>
+                    {candidate.imageUrl
+                      ? <img src={candidate.imageUrl} alt="" loading="lazy" />
+                      : <span className="selection-image-placeholder" />}
+                    <div>
+                      <a href={candidate.url} target="_blank" rel="noreferrer">
+                        {candidate.title}
+                        <ExternalLink size={11} aria-hidden="true" />
+                      </a>
+                      <p>
+                        {candidate.rank ? `#${candidate.rank}` : "热卖款"}
+                        {candidate.recentSales !== null
+                          ? ` · 近30日 ${candidate.recentSales}`
+                          : ""}
+                        {candidate.price !== null
+                          ? ` · ${candidate.currency} ${candidate.price}`
+                          : ""}
+                      </p>
+                      {matches.map((match) => (
+                        <button type="button" key={match.url}
+                          onClick={() => onChooseMatch(match)}>
+                          <Link2 size={12} aria-hidden="true" />
+                          导入此1688货源
+                          {match.priceCny !== null ? ` · ¥${match.priceCny}` : ""}
+                        </button>
+                      ))}
+                    </div>
+                  </article>
+                );
+              })}
+            </div>}
+      </section>
+    );
+  }
+
+  return (
+    <section className="product-selection"
+      aria-labelledby={`${idPrefix}product-selection-heading`}>
+      <div className="product-selection-heading">
+        <Search size={16} aria-hidden="true" />
+        <div>
+          <h3 id={`${idPrefix}product-selection-heading`}>品类选品</h3>
+          <span>ProBoost 热卖款 · 牛顿匹配1688</span>
+        </div>
+      </div>
+      <label>
+        先填写品类
+        <div className="selection-search-row">
+          <input aria-label="选品品类" value={category}
+            placeholder="例如：Kitchen Storage"
+            onChange={(event) => onCategoryChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onSearch();
+              }
+            }} />
+          <button type="button" onClick={onSearch}
+            disabled={selectionTask.status === "loading" || !category.trim()}>
+            {selectionTask.status === "loading"
+              ? <Loader2 className="spin" size={14} />
+              : <Search size={14} />}
+            查询
+          </button>
+        </div>
+      </label>
+      <p className="selection-help">
+        Amazon 澳洲站热卖数据 + TikTok 近30日热卖数据；牛顿自动查找相同或高度相似的1688货源。
+      </p>
+      {selectionTask.error && (
+        <p className="newton-import-status status-error" role="alert">
+          {selectionTask.error}
+        </p>
+      )}
+      {result && (
+        <>
+          <div className="selection-results">
+            {sourceGroup(result.amazonMarketplace, result.amazon)}
+            {sourceGroup(result.tiktokMarketplace, result.tiktok)}
+          </div>
+          {sourcingTask.status === "loading" && (
+            <p className="selection-sourcing-status" role="status">
+              <Loader2 className="spin" size={12} />
+              牛顿正在匹配1688货源…
+            </p>
+          )}
+          {sourcingTask.status === "success" && recommendations.length === 0 && (
+            <p className="selection-sourcing-status">牛顿未找到可靠的相似1688货源。</p>
+          )}
+          {sourcingTask.error && (
+            <p className="newton-import-status status-error" role="alert">
+              {sourcingTask.error}
+            </p>
+          )}
+          {result.notes.length > 0 && (
+            <ul className="selection-notes">
+              {result.notes.map((note) => <li key={note}>{note}</li>)}
+            </ul>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function DetailsPanel({ fields, onUpdate }: { fields: DszProductFields; onUpdate: UpdateField }) {
   return (
     <div className="field-grid details-grid">
@@ -816,10 +971,18 @@ function ProductWorkspace({
   findDuplicate
 }: ProductWorkspaceProps) {
   const [restoredSnapshot] = useState(() => loadProductWorkspace(jobId));
+  const [selectionCategory, setSelectionCategory] = useState("");
+  const [selectionTask, setSelectionTask] = useState<TaskState>(idleTask);
+  const [sourcingTask, setSourcingTask] = useState<TaskState>(idleTask);
+  const [selectionResult, setSelectionResult] =
+    useState<ProductSelectionResult | null>(null);
+  const [sourcingRecommendations, setSourcingRecommendations] =
+    useState<ProductSourcingRecommendation[]>([]);
   const [newtonSourceUrl, setNewtonSourceUrl] = useState("");
   const [newtonTask, setNewtonTask] = useState<TaskState>(idleTask);
+  const [traceMatches, setTraceMatches] = useState<SourcingMatch[]>([]);
   const [newtonMessage, setNewtonMessage] = useState(
-    "粘贴 1688 商品链接，自动读取商品资料"
+    "粘贴任意公开电商商品链接；1688直接导入，其他平台自动溯源"
   );
   const [sourceFiles, setSourceFiles] = useState<File[]>([]);
   const [sourceFilesReady, setSourceFilesReady] = useState(
@@ -882,6 +1045,7 @@ function ProductWorkspace({
   const uploadAttemptRef = useRef(0);
   const uploadControllerRef = useRef<AbortController | null>(null);
   const sourceSelectionIdRef = useRef(0);
+  const selectionControllerRef = useRef<AbortController | null>(null);
   const newtonControllerRef = useRef<AbortController | null>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const initialImportAppliedRef = useRef(false);
@@ -985,6 +1149,7 @@ function ProductWorkspace({
     marketControllerRef.current = null;
     uploadAttemptRef.current += 1;
     uploadControllerRef.current?.abort();
+    selectionControllerRef.current?.abort();
     newtonControllerRef.current?.abort();
   }, []);
 
@@ -1259,11 +1424,92 @@ function ProductWorkspace({
     });
   }
 
-  async function importFromNewton() {
+  function updateSelectionCategory(value: string) {
+    selectionControllerRef.current?.abort();
+    selectionControllerRef.current = null;
+    setSelectionCategory(value);
+    setSelectionTask(idleTask);
+    setSourcingTask(idleTask);
+    setSelectionResult(null);
+    setSourcingRecommendations([]);
+  }
+
+  async function runProductSelection() {
+    const category = selectionCategory.trim();
+    if (!category) {
+      setSelectionTask({ status: "error", error: "请先填写选品品类" });
+      return;
+    }
+
+    selectionControllerRef.current?.abort();
+    const controller = new AbortController();
+    selectionControllerRef.current = controller;
+    setSelectionTask({ status: "loading", error: "" });
+    setSourcingTask(idleTask);
+    setSourcingRecommendations([]);
+
+    let result: ProductSelectionResult;
+    try {
+      result = await requestProductSelection({ category }, controller.signal);
+      if (controller.signal.aborted) return;
+      setSelectionResult(result);
+      setSelectionTask({ status: "success", error: "" });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setSelectionTask({
+        status: "error",
+        error: errorMessage(error, "选品查询失败")
+      });
+      if (selectionControllerRef.current === controller) {
+        selectionControllerRef.current = null;
+      }
+      return;
+    }
+
+    if (result.sourcingStatus !== "pending" || !result.sourcingTaskId) {
+      if (selectionControllerRef.current === controller) {
+        selectionControllerRef.current = null;
+      }
+      return;
+    }
+
+    setSourcingTask({ status: "loading", error: "" });
+    try {
+      const recommendations = await requestProductSourcingRecommendations(
+        result.sourcingTaskId,
+        controller.signal
+      );
+      if (controller.signal.aborted) return;
+      setSourcingRecommendations(recommendations);
+      setSourcingTask({ status: "success", error: "" });
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setSourcingTask({
+        status: "error",
+        error: errorMessage(error, "牛顿货源推荐失败")
+      });
+    } finally {
+      if (selectionControllerRef.current === controller) {
+        selectionControllerRef.current = null;
+      }
+    }
+  }
+
+  function chooseSourcingMatch(match: SourcingMatch) {
+    setNewtonSourceUrl(match.url);
+    void importFromNewton(match.url);
+  }
+
+  async function processCommerceLink() {
     const sourceUrl = newtonSourceUrl.trim();
     if (!sourceUrl) {
-      setNewtonTask({ status: "error", error: "请输入 1688 商品链接" });
-      setNewtonMessage("请输入 1688 商品链接");
+      setNewtonTask({ status: "error", error: "请输入电商商品链接" });
+      setNewtonMessage("请输入电商商品链接");
+      return;
+    }
+    if (isDirect1688ProductUrl(sourceUrl)) {
+      setTraceMatches([]);
+      await importFromNewton(sourceUrl);
       return;
     }
 
@@ -1271,6 +1517,45 @@ function ProductWorkspace({
     const controller = new AbortController();
     newtonControllerRef.current = controller;
     setNewtonTask({ status: "loading", error: "" });
+    setTraceMatches([]);
+    setNewtonMessage("牛顿正在识别来源商品并溯源1688货源");
+    try {
+      const matches = await requestNewtonCommerceTrace(
+        sourceUrl,
+        controller.signal
+      );
+      if (controller.signal.aborted) return;
+      setTraceMatches(matches);
+      setNewtonTask({ status: "success", error: "" });
+      setNewtonMessage(matches.length > 0
+        ? `已找到 ${matches.length} 个1688候选货源，请选择后导入`
+        : "未找到足够可靠的1688货源，可更换商品链接重试");
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      const safeMessage = errorMessage(error, "牛顿电商链接溯源失败");
+      setNewtonTask({ status: "error", error: safeMessage });
+      setNewtonMessage(safeMessage);
+    } finally {
+      if (newtonControllerRef.current === controller) {
+        newtonControllerRef.current = null;
+      }
+    }
+  }
+
+  async function importFromNewton(sourceUrlOverride?: string) {
+    const sourceUrl = (sourceUrlOverride ?? newtonSourceUrl).trim();
+    if (!sourceUrl) {
+      setNewtonTask({ status: "error", error: "请输入 1688 商品链接" });
+      setNewtonMessage("请输入 1688 商品链接");
+      return;
+    }
+    if (sourceUrlOverride !== undefined) setNewtonSourceUrl(sourceUrl);
+
+    newtonControllerRef.current?.abort();
+    const controller = new AbortController();
+    newtonControllerRef.current = controller;
+    setNewtonTask({ status: "loading", error: "" });
+    setTraceMatches([]);
     setNewtonMessage("牛顿正在读取 1688 商品详情");
 
     try {
@@ -1641,6 +1926,8 @@ function ProductWorkspace({
     marketOperationIdRef.current += 1;
     marketControllerRef.current?.abort();
     marketControllerRef.current = null;
+    selectionControllerRef.current?.abort();
+    selectionControllerRef.current = null;
     newtonControllerRef.current?.abort();
     newtonControllerRef.current = null;
     uploadAttemptRef.current += 1;
@@ -1654,6 +1941,12 @@ function ProductWorkspace({
       : current);
     setMarketTask((current) => current.status === "loading"
       ? { status: "error", error: "市场分析已取消" }
+      : current);
+    setSelectionTask((current) => current.status === "loading"
+      ? { status: "error", error: "选品查询已取消" }
+      : current);
+    setSourcingTask((current) => current.status === "loading"
+      ? { status: "error", error: "牛顿货源推荐已取消" }
       : current);
     setNewtonTask((current) => current.status === "loading"
       ? { status: "error", error: "任务已取消" }
@@ -1777,32 +2070,46 @@ function ProductWorkspace({
             <span className="section-index">01</span>
             <div><h2 id={`${domIdPrefix}source-heading`}>Source</h2><p>生成依据</p></div>
           </div>
+          <ProductSelectionPanel
+            category={selectionCategory}
+            idPrefix={domIdPrefix}
+            selectionTask={selectionTask}
+            sourcingTask={sourcingTask}
+            result={selectionResult}
+            recommendations={sourcingRecommendations}
+            onCategoryChange={updateSelectionCategory}
+            onSearch={() => void runProductSelection()}
+            onChooseMatch={chooseSourcingMatch}
+          />
           <section
             className="newton-import"
             aria-labelledby={`${domIdPrefix}newton-import-heading`}
           >
             <div className="newton-import-heading">
               <CloudDownload size={16} aria-hidden="true" />
-              <h3 id={`${domIdPrefix}newton-import-heading`}>牛顿云端导入</h3>
+              <h3 id={`${domIdPrefix}newton-import-heading`}>电商链接溯源与1688导入</h3>
             </div>
             <label>
-              1688 商品链接
+              电商商品链接
               <input
-                aria-label="1688 商品链接"
+                aria-label="电商商品链接"
                 type="url"
                 value={newtonSourceUrl}
-                placeholder="https://detail.1688.com/offer/..."
+                placeholder="Amazon / eBay / TikTok / Shopify / 1688"
                 onChange={(event) => {
+                  newtonControllerRef.current?.abort();
+                  newtonControllerRef.current = null;
                   setNewtonSourceUrl(event.target.value);
-                  if (newtonTask.status === "error") {
-                    setNewtonTask(idleTask);
-                    setNewtonMessage("粘贴 1688 商品链接，自动读取商品资料");
-                  }
+                  setTraceMatches([]);
+                  setNewtonTask(idleTask);
+                  setNewtonMessage(
+                    "粘贴任意公开电商商品链接；1688直接导入，其他平台自动溯源"
+                  );
                 }}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
                     event.preventDefault();
-                    void importFromNewton();
+                    void processCommerceLink();
                   }
                 }}
               />
@@ -1810,14 +2117,39 @@ function ProductWorkspace({
             <button
               className="newton-import-button"
               type="button"
-              onClick={() => void importFromNewton()}
+              onClick={() => void processCommerceLink()}
               disabled={newtonTask.status === "loading"}
             >
               {newtonTask.status === "loading"
                 ? <Loader2 className="spin" size={15} />
                 : <CloudDownload size={15} />}
-              {newtonTask.status === "loading" ? "正在导入" : "牛顿导入"}
+              {newtonTask.status === "loading"
+                ? "正在处理"
+                : isDirect1688ProductUrl(newtonSourceUrl)
+                  ? "直接导入1688"
+                  : "溯源到1688"}
             </button>
+            {traceMatches.length > 0 && (
+              <div className="newton-trace-matches" aria-label="1688溯源结果">
+                {traceMatches.map((match) => (
+                  <article key={match.url}>
+                    <div>
+                      <strong>{match.title}</strong>
+                      <span>
+                        {match.confidence === "high"
+                          ? "高匹配"
+                          : match.confidence === "medium" ? "中匹配" : "低匹配"}
+                        {match.priceCny !== null ? ` · ¥${match.priceCny}` : ""}
+                      </span>
+                    </div>
+                    <button type="button" onClick={() => chooseSourcingMatch(match)}>
+                      <Link2 size={12} aria-hidden="true" />
+                      导入此1688货源
+                    </button>
+                  </article>
+                ))}
+              </div>
+            )}
             <p
               className={`newton-import-status status-${newtonTask.status}`}
               role={newtonTask.status === "error"
@@ -2215,6 +2547,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isHttpsUrl(value: string): boolean {
   try {
     return new URL(value).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function isDirect1688ProductUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase();
+    return url.protocol === "https:" &&
+      (hostname === "1688.com" || hostname.endsWith(".1688.com")) &&
+      /\/offer\/\d{5,20}(?:\.html)?(?:\/|$)/i.test(url.pathname);
   } catch {
     return false;
   }

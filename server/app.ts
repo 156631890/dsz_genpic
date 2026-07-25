@@ -22,8 +22,12 @@ import { generateProductCopyWithPacky } from "./services/productCopy.js";
 import {
   NewtonCloudError,
   createNewtonImportTask,
+  createNewtonTraceTask,
   downloadNewtonImage,
   getNewtonImportTask,
+  getNewtonSourcingTask,
+  getNewtonTraceTask,
+  normalizeCommerceProductUrl,
   normalize1688ProductUrl,
   validateNewtonImageUrl
 } from "./services/newtonCloud.js";
@@ -33,9 +37,14 @@ import {
   ProboostMarketError
 } from "./services/proboostMarket.js";
 import {
+  ProductSelectionError,
+  selectProductsByCategory
+} from "./services/productSelection.js";
+import {
   PRODUCT_IMAGE_ROLES,
   type AmazonMarketAnalysis,
   type AmazonMarketAnalysisInput,
+  type CommerceTraceTaskStatus,
   type DszProductFields,
   type GeneratedProductCopy,
   type GeneratedProductImage,
@@ -43,7 +52,10 @@ import {
   type ProductGenerationResult,
   type ProductIdentity,
   type ProductInput,
-  type NewtonImportTaskStatus
+  type NewtonImportTaskStatus,
+  type ProductSelectionInput,
+  type ProductSelectionResult,
+  type ProductSourcingTaskStatus
 } from "../shared/product.js";
 
 export const MAX_SOURCE_IMAGES = 4;
@@ -86,7 +98,14 @@ interface SafeGenerationError {
 export interface AppDependencies {
   env?: Record<string, string | undefined>;
   createNewtonImportTask?: (sourceUrl: string) => Promise<{ taskId: string }>;
+  createNewtonTraceTask?: (sourceUrl: string) => Promise<{ taskId: string }>;
   getNewtonImportTask?: (taskId: string) => Promise<NewtonImportTaskStatus>;
+  getNewtonSourcingTask?: (
+    taskId: string
+  ) => Promise<ProductSourcingTaskStatus>;
+  getNewtonTraceTask?: (
+    taskId: string
+  ) => Promise<CommerceTraceTaskStatus>;
   downloadNewtonImage?: (
     imageUrl: string
   ) => Promise<{
@@ -105,6 +124,9 @@ export interface AppDependencies {
   analyzeAmazonMarket?: (
     input: AmazonMarketAnalysisInput
   ) => Promise<AmazonMarketAnalysis>;
+  selectProducts?: (
+    input: ProductSelectionInput
+  ) => Promise<ProductSelectionResult>;
   generateProductImageRole?: (input: {
     role: ProductImageRole;
     images: Express.Multer.File[];
@@ -180,6 +202,19 @@ export function createApp(dependencies: AppDependencies = {}) {
         env.GITHUB_IMAGE_REPOSITORY &&
         env.GITHUB_IMAGE_BRANCH
       ),
+      productSelectionConfigured: Boolean(
+        (env.PROBOOST_AMAZON_MCP_URL || env.PROBOOST_MCP_URL) &&
+        (env.PROBOOST_AMAZON_MCP_SECRET_KEY || env.PROBOOST_MCP_SECRET_KEY)
+      ),
+      tiktokSelectionConfigured: Boolean(
+        (env.PROBOOST_TIKTOK_MCP_URL || env.PROBOOST_MCP_URL) &&
+        (env.PROBOOST_TIKTOK_MCP_SECRET_KEY || env.PROBOOST_MCP_SECRET_KEY)
+      ),
+      newtonAgentConfigured: Boolean(
+        env.NEWTON_APP_KEY &&
+        env.NEWTON_APP_SECRET &&
+        env.NEWTON_ACCESS_TOKEN
+      ),
       adminBaseUrl: adminConfig.baseUrl,
       adminMockMode: adminConfig.mockMode
     });
@@ -211,6 +246,45 @@ export function createApp(dependencies: AppDependencies = {}) {
         ? await dependencies.getNewtonImportTask(taskId)
         : await getNewtonImportTask({ taskId, env });
 
+      res.json(result);
+    } catch (error) {
+      sendNewtonError(res, error);
+    }
+  });
+
+  app.get("/api/newton/sourcing-tasks/:taskId", async (req, res) => {
+    try {
+      const taskId = req.params.taskId;
+      const result = dependencies.getNewtonSourcingTask
+        ? await dependencies.getNewtonSourcingTask(taskId)
+        : await getNewtonSourcingTask({ taskId, env });
+      res.json(result);
+    } catch (error) {
+      sendNewtonError(res, error);
+    }
+  });
+
+  app.post("/api/newton/trace-tasks", async (req, res) => {
+    try {
+      const requestBody: unknown = req.body;
+      const sourceUrl = normalizeCommerceProductUrl(
+        isRecord(requestBody) ? requestBody.sourceUrl : undefined
+      );
+      const result = dependencies.createNewtonTraceTask
+        ? await dependencies.createNewtonTraceTask(sourceUrl)
+        : await createNewtonTraceTask({ sourceUrl, env });
+      res.status(202).json(result);
+    } catch (error) {
+      sendNewtonError(res, error);
+    }
+  });
+
+  app.get("/api/newton/trace-tasks/:taskId", async (req, res) => {
+    try {
+      const taskId = req.params.taskId;
+      const result = dependencies.getNewtonTraceTask
+        ? await dependencies.getNewtonTraceTask(taskId)
+        : await getNewtonTraceTask({ taskId, env });
       res.json(result);
     } catch (error) {
       sendNewtonError(res, error);
@@ -284,6 +358,28 @@ export function createApp(dependencies: AppDependencies = {}) {
         return;
       }
       res.status(500).json({ error: "Amazon market analysis failed" });
+    }
+  });
+
+  app.post("/api/select-products", async (req, res) => {
+    try {
+      const input = parseProductSelectionInput(
+        isRecord(req.body) ? req.body.input : undefined
+      );
+      if (!input) {
+        res.status(400).json({ error: "选品品类无效" });
+        return;
+      }
+      const result = dependencies.selectProducts
+        ? await dependencies.selectProducts(input)
+        : await selectProductsByCategory({ selection: input, env });
+      res.json({ result });
+    } catch (error) {
+      if (error instanceof ProductSelectionError) {
+        res.status(error.status).json({ error: error.message });
+        return;
+      }
+      res.status(500).json({ error: "选品查询失败" });
     }
   });
 
@@ -810,6 +906,12 @@ function parseAmazonMarketInput(value: unknown): AmazonMarketAnalysisInput | nul
       ? { sellingPoints: value.sellingPoints.trim() }
       : {})
   };
+}
+
+function parseProductSelectionInput(value: unknown): ProductSelectionInput | null {
+  if (!isRecord(value) || typeof value.category !== "string") return null;
+  const category = value.category.trim().replace(/\s+/g, " ");
+  return category && category.length <= 120 ? { category } : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

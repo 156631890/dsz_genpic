@@ -264,6 +264,131 @@ input:hover, textarea:hover, select:hover { border-color: #aaa5ad; }
 input:focus, textarea:focus, select:focus { border-color: var(--violet); box-shadow: 0 0 0 3px rgba(93, 63, 98, .1); outline: 0; }
 input[readonly] { background: #efefed; color: #625f66; cursor: default; }
 
+.product-selection {
+  margin-bottom: 18px;
+  border: 1px solid #c9d8d0;
+  border-radius: 8px 3px 8px 3px;
+  padding: 14px;
+  background: #f2f7f4;
+}
+.product-selection-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: var(--success);
+}
+.product-selection-heading h3 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 750;
+}
+.product-selection-heading span { color: var(--muted); font-size: 9px; font-weight: 550; }
+.product-selection label { margin-bottom: 8px; }
+.selection-search-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; }
+.selection-search-row input { border-radius: 5px 0 0 5px; background: #fff; font-size: 12px; }
+.selection-search-row button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 66px;
+  border: 1px solid var(--success);
+  border-left: 0;
+  border-radius: 0 5px 5px 0;
+  padding: 0 9px;
+  background: var(--success);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 750;
+}
+.selection-search-row button:disabled { opacity: .55; }
+.selection-help {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.5;
+}
+.selection-results {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+.selection-source-group h4 {
+  margin: 0 0 6px;
+  color: #4a6859;
+  font-size: 10px;
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+.selection-candidate-list {
+  display: grid;
+  gap: 5px;
+  max-height: 250px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.selection-candidate {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+  border: 1px solid #d9e3de;
+  border-radius: 5px;
+  padding: 6px;
+  background: rgba(255, 255, 255, .88);
+}
+.selection-candidate > img, .selection-image-placeholder {
+  width: 42px;
+  height: 42px;
+  border-radius: 3px;
+  background: #e8edea;
+  object-fit: contain;
+}
+.selection-candidate > div { min-width: 0; }
+.selection-candidate a {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-decoration: none;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.selection-candidate a svg { margin-left: 3px; vertical-align: -2px; }
+.selection-candidate p { margin: 3px 0 0; color: var(--muted); font-size: 9px; }
+.selection-candidate button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  border: 1px solid var(--violet);
+  border-radius: 4px;
+  padding: 4px 6px;
+  background: #fff;
+  color: var(--violet);
+  font-size: 9px;
+  font-weight: 750;
+}
+.selection-candidate button:hover { background: var(--violet); color: #fff; }
+.selection-empty { margin: 0; color: var(--muted); font-size: 9px; }
+.selection-sourcing-status {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+.selection-notes {
+  margin: 8px 0 0;
+  padding-left: 14px;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
 .newton-import {
   margin-bottom: 18px;
   border: 1px solid #d7cbd9;
@@ -290,6 +415,44 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
   font-weight: 750;
 }
 .newton-import-button:hover:not(:disabled) { background: var(--violet); color: #fff; }
+.newton-trace-matches {
+  display: grid;
+  gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  margin-top: 9px;
+}
+.newton-trace-matches article {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #d7cbd9;
+  border-radius: 5px;
+  padding: 8px;
+  background: rgba(255, 255, 255, .9);
+}
+.newton-trace-matches article > div { display: grid; gap: 2px; min-width: 0; }
+.newton-trace-matches strong {
+  overflow: hidden;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.newton-trace-matches span { color: var(--muted); font-size: 9px; }
+.newton-trace-matches button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 30px;
+  border: 1px solid var(--violet);
+  border-radius: 4px;
+  background: #fff;
+  color: var(--violet);
+  font-size: 9px;
+  font-weight: 750;
+}
+.newton-trace-matches button:hover { background: var(--violet); color: #fff; }
 .newton-import-status { min-height: 16px; margin: 9px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .newton-import-status.status-error { color: var(--error); }
 .newton-import-status.status-success { color: var(--success); }
@@ -506,7 +669,9 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
   .workspace { grid-template-columns: 1fr; gap: 30px; }
   .source-rail { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 29px; }
   .source-rail { display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; }
-  .source-rail .section-heading, .source-rail .generation-actions { grid-column: 1 / -1; }
+  .source-rail .section-heading, .source-rail .product-selection,
+  .source-rail .generation-actions { grid-column: 1 / -1; }
+  .product-selection .selection-results { grid-template-columns: 1fr 1fr; }
   .source-rail .generation-actions { max-width: 520px; }
   .field-grid { grid-template-columns: 1fr 1fr; }
   .description-field { grid-column: 1 / -1; }
@@ -530,6 +695,7 @@ input[readonly] { background: #efefed; color: #625f66; cursor: default; }
   .generation-actions .generate-button { grid-column: 1 / -1; }
   .workspace { padding-top: 25px; }
   .source-rail { display: block; }
+  .product-selection .selection-results { grid-template-columns: 1fr; }
   .editor-intro { align-items: flex-start; flex-direction: column; }
   .status { max-width: none; text-align: left; }
   .task-strip, .field-grid, .price-grid { grid-template-columns: 1fr; }
